@@ -765,8 +765,7 @@ function giveItemStack(id) { warehouse.push({ kind: 'item', id, count: ITEM_STAC
 /* =====================================================================
    ARCHETYPES — 我方待機個性（只看「看哪」一軸，by-the-book→chill 三型）。招募隨機抽一種。
    facing: HOLD(完全不轉頭·固守) | SWEEP(左右掃視·推進) | TRACK(東張西望/追威脅·戰場生存)
-   discipline/fireMode 為每型固定預設（不再是玩家變數；AUTO/TAP 的味道收進被動樹）。
-   tree = 對應的被動技能樹（PASSIVE_TREES）。每單位另有 tier(升階等級0~3)＝戰果結算累積。
+   discipline/fireMode 為每型固定預設（不再是玩家變數）。
    ===================================================================== */
 // aiPersonality＝**與敵人共用的那套性格**（CONFIG.ai）。scoreNode 已陣營中立化，
 // 加上指令層給的錨點/繩長，同一份性格在扈從身上就是「在騎士附近怎麼站」。
@@ -777,120 +776,19 @@ const ARCHETYPES = {
   ranger:    { name: '遊獵', facing: 'TRACK', discipline: 'TAP',  fireMode: 'DEFENSIVE',  tree: 'ranger', aiPersonality: 'flanker', desc: '斥候散兵 · 繞側翼' },
 };
 const ARCHETYPE_IDS = Object.keys(ARCHETYPES);
-const TIER_COLOR = ['#9fb3c8', '#e0b050', '#9fd0e0', '#7fffa8']; // 升階等級 0(白板)→3(★★★) 名稱色
 
 /* =====================================================================
-   PASSIVES — 被動技能（戰技/訓練取向、條件式、非超能）。每單位最多累積 3 條(戰果結算升一階、二選一)。
-   三樹各 3 階×二選一；各階節點獨立(無同樹前置)。效果在戰鬥 hook 套用(passive* 函式)；數值佔位、面板可調(CONFIG.passive)。
+   被動／升階系統已整個移除（使用者定案）。
+
+   原版的 PASSIVES 是三棵各 3 階的樹，每關打完在「戰果結算」二選一升階。
+   問題不在機制，在**內容全部是槍械時代的**：發散(bloom)、換彈時間、連射上限、
+   開火警覺半徑、壓制……這一版是近接為主、彈藥只剩弓弩，那些節點大半沒有意義，
+   留著只是讓每關結束多一個沒得選的畫面。
+
+   這一版的成長改由已經在運作的東西承擔：**四槽位配裝**（武器/盾/甲/術）、
+   **導師節點的習得**、以及**聖物 Hooks**。要重做角色成長時從那三個接口長出來，
+   不要復活 PASSIVES。
    ===================================================================== */
-const PASSIVES = {
-  // 磐石 anchor — 固守
-  dugin:     { name: '据守',     tree: 'anchor', tier: 1, desc: '貼掩體時 −受傷、+命中' },
-  steady:    { name: '沉著',     tree: 'anchor', tier: 1, desc: '靜止/望遠時散布更小、bloom 回更快' },
-  overwatch: { name: '警戒待命', tree: 'anchor', tier: 2, desc: '扈從待機時對進視錐的敵 +命中、反應更快' },
-  suppress:  { name: '壓制',     tree: 'anchor', tier: 2, desc: '持續射同一敵→其命中下降、更想找掩體' },
-  bulwark:   { name: '不動如山', tree: 'anchor', tier: 3, desc: '本段未移動→再 −受傷、免一次暴擊' },
-  laststand: { name: '死守',     tree: 'anchor', tier: 3, desc: '低血不退：+命中、−受傷' },
-  // 先鋒 spear — 推進
-  breacher:  { name: '破門手',   tree: 'spear',  tier: 1, desc: '近距 +傷/+操控、遠距略減' },
-  quickhands:{ name: '快手',     tree: 'spear',  tier: 1, desc: '移動中換彈不減速、換槍更快' },
-  momentum:  { name: '衝鋒',     tree: 'spear',  tier: 2, desc: '奔跑後首次開火 +傷/+命中' },
-  spray:     { name: '掃射',     tree: 'spear',  tier: 2, desc: 'AUTO 連射 bloom 上限略低、近距更密' },
-  execute:   { name: '斬首',     tree: 'spear',  tier: 3, desc: '擊殺後短時間 +移動+射速' },
-  adrenaline:{ name: '背水',     tree: 'spear',  tier: 3, desc: '低血時 +移動+射速' },
-  // 遊獵 ranger — 戰場生存
-  scout:     { name: '斥候',     tree: 'ranger', tier: 1, desc: '視錐略寬、偵測略遠、目標較久不丟失' },
-  lightstep: { name: '輕步',     tree: 'ranger', tier: 1, desc: '開火警覺半徑略小、移動更安靜' },
-  awareness: { name: '眼觀四面', tree: 'ranger', tier: 2, desc: '被繞背/側翼攻擊不吃暴擊加成' },
-  ambush:    { name: '伏擊',     tree: 'ranger', tier: 2, desc: '未被發現的第一槍 +傷' },
-  fielddress:{ name: '戰場急救', tree: 'ranger', tier: 3, desc: '擊殺後小幅自療 / 脫戰數秒緩回' },
-  slipaway:  { name: '金蟬脫殼', tree: 'ranger', tier: 3, desc: '低血時短暫 +移動 + 降被偵測' },
-};
-const PASSIVE_TREES = {
-  anchor: [['dugin', 'steady'], ['overwatch', 'suppress'], ['bulwark', 'laststand']],
-  spear:  [['breacher', 'quickhands'], ['momentum', 'spray'], ['execute', 'adrenaline']],
-  ranger: [['scout', 'lightstep'], ['awareness', 'ambush'], ['fielddress', 'slipaway']],
-};
-const hasPassive = (u, id) => !!(u && u.passives && u.passives.indexOf(id) >= 0);
-// 被動數值（佔位、面板可調）。多數效果在戰鬥 hook 依條件套用（passive* 函式）。
-CONFIG.passive = {
-  duginResist: 0.25, duginSpread: 0.7,                 // 据守：貼掩體 −25%受傷、發散×0.7
-  steadyMinStill: 0.25, steadySpread: 0.6,             // 沉著：靜止≥0.25s 或望遠 → 發散×0.6
-  overwatchReact: 0.6, overwatchSpread: 0.75,          // 警戒待命：待機反應×0.6、idle 發散×0.75
-  suppressDur: 1.2, suppressSpread: 2.0,               // 壓制：被射的敵 1.2s 內發散×2
-  bulwarkMinStill: 0.4, bulwarkResist: 0.3,            // 不動如山：靜止≥0.4s −30%受傷 + 免暴擊
-  laststandHp: 0.35, laststandResist: 0.3, laststandSpread: 0.8,   // 死守：HP≤35% −30%受傷、發散×0.8
-  breacherNear: 200, breacherClose: 1.4, breacherFar: 0.8, breacherTurn: 1.3,   // 破門手：≤200px ×1.4、遠 ×0.8、轉向×1.3
-  quickReload: 0.7,                                    // 快手：換彈時間×0.7
-  momentumDur: 1.5, momentumDmg: 1.25,                 // 衝鋒：奔跑後 1.5s 內傷害×1.25
-  sprayMaxMul: 0.7,                                    // 掃射：連射 bloom 上限×0.7
-  executeDur: 2.0, executeMove: 1.25, executeFire: 1.3,   // 斬首：擊殺後 2s +移動+射速
-  adrenalineHp: 0.35, adrenalineMove: 1.2, adrenalineFire: 1.2,   // 背水：HP≤35% +移動+射速
-  scoutCone: 1.4, scoutRange: 1.3,                     // 斥候：視錐×1.4、近身感知×1.3
-  lightstepHear: 0.5,                                  // 輕步：開火警覺半徑×0.5
-  ambushDmg: 1.5,                                       // 伏擊：未被偵測開火 ×1.5
-  fielddressKillHeal: 12, fielddressRegen: 3, fielddressRegenDelay: 4,   // 戰場急救：擊殺回12、脫戰4s後 3/s 緩回
-  slipawayHp: 0.35, slipawayMove: 1.3,                 // 金蟬脫殼：HP≤35% +移動
-};
-const pLowHp = (u, frac) => u.hp <= u.maxHp * frac;
-const onCover = (u) => onLowWall(u.pos, u.radius + CONFIG.lowWall.touchR);   // 貼掩體（低矮牆/矮掩體/可破壞矮形態）
-const pStill = (u, t) => (u.stillT || 0) >= t;
-// 本發發散倍率（越小越準）：据守/沉著/死守
-function passiveSpreadMul(u) {
-  const P = CONFIG.passive; let m = 1;
-  if (hasPassive(u, 'dugin') && onCover(u)) m *= P.duginSpread;
-  if (hasPassive(u, 'steady') && (pStill(u, P.steadyMinStill) || (u.id === controlledId && isScoping()))) m *= P.steadySpread;
-  if (hasPassive(u, 'laststand') && pLowHp(u, P.laststandHp)) m *= P.laststandSpread;
-  return m;
-}
-// 射速倍率（>1 更快）：斬首(passBuff)/背水(低血)
-function passiveFireMul(u) {
-  const P = CONFIG.passive; let m = (u.passBuffT > 0 ? (u.passBuffFire || 1) : 1);
-  if (hasPassive(u, 'adrenaline') && pLowHp(u, P.adrenalineHp)) m *= P.adrenalineFire;
-  return m;
-}
-// 移動倍率：斬首(passBuff)/背水/金蟬脫殼（皆低血）
-function passiveMoveMul(u) {
-  const P = CONFIG.passive; let m = (u.passBuffT > 0 ? (u.passBuffMove || 1) : 1);
-  if (hasPassive(u, 'adrenaline') && pLowHp(u, P.adrenalineHp)) m *= P.adrenalineMove;
-  if (hasPassive(u, 'slipaway') && pLowHp(u, P.slipawayHp)) m *= P.slipawayMove;
-  return m;
-}
-// 受傷倍率（<1 減傷）：据守(掩體)/不動如山(靜止)/死守(低血)
-function passiveDmgTakenMul(u) {
-  const P = CONFIG.passive; let m = 1;
-  if (hasPassive(u, 'dugin') && onCover(u)) m *= (1 - P.duginResist);
-  if (hasPassive(u, 'bulwark') && pStill(u, P.bulwarkMinStill)) m *= (1 - P.bulwarkResist);
-  if (hasPassive(u, 'laststand') && pLowHp(u, P.laststandHp)) m *= (1 - P.laststandResist);
-  return m;
-}
-// 開火當下決定的傷害倍率：衝鋒(奔跑窗)/伏擊(未被偵測)
-function passiveFireDmgMul(u) {
-  const P = CONFIG.passive; let m = 1;
-  if (hasPassive(u, 'momentum') && (u.momentumT || 0) > 0) m *= P.momentumDmg;
-  if (hasPassive(u, 'ambush') && u.faction === 'player' && !u._seenNow) m *= P.ambushDmg;
-  return m;
-}
-const breacherMul = (d) => (d <= CONFIG.passive.breacherNear ? CONFIG.passive.breacherClose : CONFIG.passive.breacherFar);
-// 玩家免暴擊加成（眼觀四面 或 不動如山+靜止）
-const passiveNegateCrit = (u) => u.faction === 'player' && (hasPassive(u, 'awareness') || (hasPassive(u, 'bulwark') && pStill(u, CONFIG.passive.bulwarkMinStill)));
-// 擊殺者 on-kill：斬首(buff)/戰場急救(回血)
-function onKillPassive(killer) {
-  if (!killer || killer.faction !== 'player') return; const P = CONFIG.passive;
-  if (hasPassive(killer, 'execute')) { killer.passBuffT = P.executeDur; killer.passBuffMove = P.executeMove; killer.passBuffFire = P.executeFire; }
-  if (hasPassive(killer, 'fielddress')) { killer.hp = Math.min(killer.maxHp, killer.hp + P.fielddressKillHeal); spawnHeal(killer.pos); }
-}
-// 每幀更新被動時間態（靜止計時/衝鋒窗/斬首buff/戰場急救脫戰回血）
-function tickPassives(u, dt) {
-  if (u.faction !== 'player' || u.state === 'DEAD' || u.state === 'EXTRACTED') return;
-  const moved = u._lastPos ? dist(u.pos, u._lastPos) > 0.6 : false;
-  u.stillT = moved ? 0 : (u.stillT || 0) + dt;
-  u._lastPos = { x: u.pos.x, y: u.pos.y };
-  if (u.sprinting) u.momentumT = CONFIG.passive.momentumDur; else if (u.momentumT > 0) u.momentumT -= dt;
-  if (u.passBuffT > 0) { u.passBuffT -= dt; if (u.passBuffT <= 0) { u.passBuffMove = 1; u.passBuffFire = 1; } }
-  u.regenT = (u.regenT || 0) + dt;   // 脫戰計時（開火/受傷會清零）
-  if (hasPassive(u, 'fielddress') && u.regenT > CONFIG.passive.fielddressRegenDelay && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + CONFIG.passive.fielddressRegen * dt);
-}
 
 /* =====================================================================
    UNIT_CLASSES — **共用單位數值表**（Phase 2；使用者定案：扈從＝敵人，同一份身體）。
@@ -1054,7 +952,6 @@ function makeRecruit(used) {
     weaponId: rngPick(availPool('weapon', RECRUIT_WEAPON_IDS)), abilityId: 'mend', archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
     weaponId2: FLOOR_WEAPON, allocatedAmmo2: 0,   // 副武器（預設 pistol 底線後備；X 換槍）
     bonusMaxHp: 0, hp: classOf(classId).hp, allocatedAmmo: CONFIG.ammo.defaultAlloc, disciplineOverride: null,
-    tier: 0, passives: [],            // 升階等級(0~3)＋已學被動id；戰果結算二選一累積
     equipId: null, itemId: null, itemCount: 0 };   // 裝備（持續被動）/ 道具（消耗品，itemCount 充能 0~3）各 1 槽，預設空
 }
 
@@ -1987,13 +1884,7 @@ function makePlayer(i, cfg, pos) {
   // 彈藥備量＝休息關分配的量（底線武器無限）
   const reserve = isInfiniteAmmo(cfg.weaponId) ? 9999 : (cfg.allocatedAmmo != null ? cfg.allocatedAmmo : CONFIG.ammo.defaultAlloc);
   const magazine = Math.round(W.magazine * (fx.magMul || 1));   // 裝備可改彈夾容量
-  // 被動：靜態屬性類（其餘條件式在戰鬥 hook 動態套）。破門手＝轉向更快;快手＝換彈更快;斥候＝視錐寬+近身感知遠
-  const pv = cfg.passives || [], Pp = CONFIG.passive;
-  const pTurn = pv.includes('breacher') ? Pp.breacherTurn : 1;
-  const pReload = pv.includes('quickhands') ? Pp.quickReload : 1;
-  const pSense = pv.includes('scout') ? Pp.scoutRange : 1;
-  const pCone = pv.includes('scout') ? CONFIG.vision.coneHalfDeg * Pp.scoutCone : null;
-  const turnMul = (fx.turnMul || 1) * pTurn;
+  const turnMul = (fx.turnMul || 1);
   // 四槽位：1/2＝手部 set、3/4＝自由位（道具或技能）。相容舊 roster 欄位（weaponId/weaponId2/itemId/abilityId）。
   const mkSet = (mainId, offId, reserve) => {
     if (!mainId || !WEAPONS[mainId]) return null;
@@ -2022,7 +1913,6 @@ function makePlayer(i, cfg, pos) {
     hp: startHp, maxHp,
     state: i === 0 ? 'CONTROLLED' : 'IDLE',
     archetypeId: cfg.archetypeId, archetype: arch, disciplineOverride: cfg.disciplineOverride || null,
-    tier: cfg.tier || 0, passives: (cfg.passives || []).slice(),   // 升階等級 + 已學被動（戰鬥中讀 hasPassive）
     idleStrategy: { fireMode: arch.fireMode, targeting: 'NEAREST_IN_LOS', facing: arch.facing, discipline: disc },
     cmd: { mode: 'follow', pos: null, target: null },   // 指令層：預設跟隨騎士
     personality: CONFIG.ai[arch.aiPersonality || 'flanker'],   // **與敵人共用性格**（scoreNode 已陣營中立）
@@ -2034,17 +1924,16 @@ function makePlayer(i, cfg, pos) {
     swapT: 0, turnMul,   // 換手冷卻 + 轉向倍率(換手時重算 turnSpeed)
     abilityId: cfg.abilityId, ability: ab, abilityCd: 0,
     equipId: cfg.equipId || null, itemId: cfg.itemId || null, itemCount: cfg.itemId ? (cfg.itemCount || 1) : 0,   // 裝備槽 / 道具槽(itemCount 充能)
-    dmgResist: (fx.dmgResist || 0), reloadMul: (fx.reloadMul || 1) * pReload, spreadMul: fx.spreadMul || 1,
-    turnSpeed: mainSlot.weapon.turnSpeed * (fx.turnMul || 1) * pTurn, moveMul: (fx.moveMul || 1) * AR.moveMul * (offW ? offW.moveMul : 1),
+    dmgResist: (fx.dmgResist || 0), reloadMul: (fx.reloadMul || 1), spreadMul: fx.spreadMul || 1,
+    turnSpeed: mainSlot.weapon.turnSpeed * turnMul, moveMul: (fx.moveMul || 1) * AR.moveMul * (offW ? offW.moveMul : 1),
     // 身上的甲：與重裝敵人同一套機率擋格機制（代價＝移速/耐力回復）。
     // 取「兵種自帶」與「穿戴」的較大者——披甲士之所以叫披甲士就是因為他有甲，脫不掉。
     armorId: cfg.armorId || 'none', armor: Math.max(AR.armor, CLS.armor || 0), stamRegenMul: AR.stamRegenMul,
-    coneHalfDeg: pCone,                    // 斥候＝視錐更寬（null＝用全域）
+    coneHalfDeg: null,                     // 逐單位視錐覆寫（null＝用全域）
     buffT: 0, buffMove: 1, buffFire: 1,    // 道具（腎上腺素）短時 buff
-    passBuffT: 0, passBuffMove: 1, passBuffFire: 1, stillT: 0, momentumT: 0, regenT: 0, suppressedT: 0,   // 被動時間態
     hasFile: !!cfg.carriesFile,            // 是否身上帶著遺物（獨立攜帶格，跨關隨撤出者；CONFIG.relicEnabled 關閉時恆 false）
     caches: 0,                             // 運搬中的密封容器數（每場撿取，撤離開封；不跨關）
-    senseRadius: CONFIG.vision.senseRadius * (cfg.strength || 1) * (fx.senseMul || 1) * pSense,
+    senseRadius: CONFIG.vision.senseRadius * (cfg.strength || 1) * (fx.senseMul || 1),
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接：揮斬狀態機 / 盾格 / 硬直 / 擊退速度 / 招架特效
     aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（扈從也吃；騎士手動射擊不經此）
     cast: null,   // 施法前搖狀態 { slot, artId, t, dur }；卷軸即時＝不經過這裡
@@ -2112,7 +2001,7 @@ const rosterFromPlayer = (p) => {
   return { name: p.name, hue: p.hue, strength: p.strength, classId: p.classId || null,   // 兵種跨關保留（身體不會因為換關就變）
     weaponId: m0 ? m0.weaponId : p.weaponId, offId: s0 ? s0.off : null,
     weaponId2: w2 ? w2.weaponId : null, offId2: s1 ? s1.off : null,
-    abilityId: free3.id || p.abilityId, archetypeId: p.archetypeId, tier: p.tier || 0, passives: (p.passives || []).slice(),
+    abilityId: free3.id || p.abilityId, archetypeId: p.archetypeId,
     allocatedAmmo2: w2 ? (isInfiniteAmmo(w2.weaponId) ? 0 : w2.ammoReserve) : 0,
     bonusMaxHp: p.maxHp - classOf(p.classId).hp - eqAdd, hp: p.hp,   // 以**自己兵種**的基底回推加值，換兵種不會憑空長血
     allocatedAmmo: m0 ? (isInfiniteAmmo(m0.weaponId) ? CONFIG.ammo.defaultAlloc : m0.ammoReserve) : CONFIG.ammo.defaultAlloc,
@@ -2289,7 +2178,7 @@ function endMission() {
   const cacheReveal = [];   // 密封容器開封＝事後抽選（排除基本階、含未解鎖、run 限定進倉庫）：僅過關時開
   if (win) { const cachesOut = survivors.reduce((n, p) => n + (p.caches || 0), 0); for (let i = 0; i < cachesOut; i++) cacheReveal.push(rollMysteryLoot()); }
   lastSummary = { mission: missionIndex + 1, extracted: survivors.map(p => p.name), dead: players.filter(p => p.state === 'DEAD').map(p => p.name), fileSafe, cacheReveal };
-  if (win) { roster = survivors.map(rosterFromPlayer); missionIndex++; enterSettle(); return; }   // 勝利→戰果結算(挑人升階)→路線圖
+  if (win) { roster = survivors.map(rosterFromPlayer); missionIndex++; advanceNode(); return; }   // 勝利→**直接回路線圖**（戰果升階已移除）
   if (finaleActive) { resolveFinale(false); return; }   // 最終挑戰全滅＝Bad End（不走一般 RUNEND）
   scene = 'RUNEND'; result = 'LOSE'; loseReason = (kn && kn.state !== 'EXTRACTED' && !fileSafe) ? '遺物遺失' : '騎士陣亡'; metaOnRunEnd(false); releasePointer();   // 一般 run 失敗：局外結算
 }
@@ -2349,7 +2238,7 @@ const ARENA_OFF_IDS = [null, ...OFFHAND_IDS, 'dagger'];   // 空手 / 三種盾 
 const arenaMember = (name, hue, wid, arch) => ({
   name, hue, strength: 1, weaponId: wid, offId: ARENA_OFF_IDS[arenaOffIdx] || null,
   weaponId2: 'longbow', offId2: null, abilityId: 'mend', archetypeId: arch,
-  tier: 0, passives: [], bonusMaxHp: 0, allocatedAmmo: 999, allocatedAmmo2: 999,   // 試作場彈藥管夠（弓弩要備箭）
+  bonusMaxHp: 0, allocatedAmmo: 999, allocatedAmmo2: 999,   // 試作場彈藥管夠（弓弩要備箭）
   equipId: null, itemId: 'firepot', itemCount: 3, carriesFile: false, armorId: ARMOR_IDS[arenaArmorIdx] || 'none',
 });
 // 換副手（試作場）：雙手武器不能帶副手＝直接跳過
@@ -2495,27 +2384,12 @@ function arenaResetFight() {
   extractedCount = 0; deadCount = 0; simTime = 0;
 }
 
-/* =====================================================================
-   戰果結算（COMBAT 勝利 → 此 → 路線圖）：撤出/陣亡名單 + 挑一名存活者升一階(二選一)。
-   不要經驗值、不批次：每場一次、當場解決。第0關/沙盒/編輯不到此(endMission 已早退)。
-   ===================================================================== */
-let settlePhase = 'PICK', settleSel = -1, settleMsg = '', settleRects = [];
-const settleTree = (r) => PASSIVE_TREES[ARCHETYPES[r.archetypeId].tree];
-const settleEligible = (r) => (r.tier || 0) < 3 && !!(settleTree(r) && settleTree(r)[r.tier || 0]);   // 未滿階且有該階配對（回傳布林）
-const settlePair = (r) => settleTree(r)[r.tier || 0];
-function enterSettle() { settlePhase = 'PICK'; settleSel = -1; settleMsg = ''; scene = 'SETTLE'; releasePointer(); }
-function settlePromote(mi, pid) {
-  const r = roster[mi]; if (!r || !settleEligible(r) || settlePair(r).indexOf(pid) < 0) return;
-  r.passives = (r.passives || []).concat([pid]); r.tier = (r.tier || 0) + 1;
-  settleMsg = `${r.name} 習得「${PASSIVES[pid].name}」 — ${ARCHETYPES[r.archetypeId].name} ${'★'.repeat(r.tier)}`;
-  settlePhase = 'DONE';
-}
-function settleSkip() { settleMsg = '（本場未升階）'; settlePhase = 'DONE'; }
-function settleAdvance() { advanceNode(); }   // → 路線圖 / RUNWIN
+/* 戰果升階（SETTLE）已整個移除——見上面「被動／升階系統」的說明。
+   打完一關直接回路線圖。 */
 
 /* =====================================================================
    事件節點（scene EVENT）：風險/取捨/歪 build 集中地。資料驅動 EVENTS + applyEventOutcome。
-   準則：每事件都有安全選項、風險知情、下檔有上限不致命。outcome 只用現有資源(HP/彈/裝備/單位/被動)。
+   準則：每事件都有安全選項、風險知情、下檔有上限不致命。outcome 只用現有資源(HP/彈/裝備/單位/術)。
    ★combat hook：outcome {type:'combat',map} → forcedMap + startMission（接特製地圖；打完走一般結算→advanceNode）。
    ===================================================================== */
 let eventCur = null, eventPhase = 'CHOICE', eventPendingChoice = null, eventMsg = '', eventRects = [], eventSeen = [];
@@ -2525,11 +2399,17 @@ const flag = (k) => runFlags[k];
 const rmaxhp = (r) => rosterClass(r).hp + (r.bonusMaxHp || 0) + ((r.equipId && EQUIPMENT[r.equipId] && EQUIPMENT[r.equipId].fx.maxHpAdd) || 0);
 const hasGear = () => warehouse.some(it => it.kind === 'equip' || it.kind === 'item');
 function takeGear() { const i = warehouse.findIndex(it => it.kind === 'equip' || it.kind === 'item'); if (i >= 0) { const it = warehouse[i]; warehouse.splice(i, 1); return (it.kind === 'equip' ? EQUIPMENT : ITEMS)[it.id].name; } return null; }
-function relicPassive(mi) {   // 歪 build：給一員一條尚未擁有的「任意樹」被動（off-tier，不佔升階）
+// 拜師：路上遇到的隱士直接教一個術（**不用燒卷軸**，這是導師節點之外的另一條管道）。
+// 原本這裡給的是一條被動；被動系統移除後，成長全部收斂到「術」與「配裝」兩個接口。
+function teachArt(mi) {
   const r = roster[mi]; if (!r) return null;
-  const pool = Object.keys(PASSIVES).filter(id => (r.passives || []).indexOf(id) < 0);
+  const known = new Set(warehouse.filter(w => w.kind === 'ability').map(w => resolveArt(w.id)));
+  if (r.abilityId) known.add(resolveArt(r.abilityId));
+  const pool = ART_IDS.filter(id => ARTS[id].learnable && !known.has(id));
   if (!pool.length) return null;
-  const id = rngPick(pool); r.passives = (r.passives || []).concat([id]); return PASSIVES[id].name;
+  const id = rngPick(pool);
+  warehouse.push({ kind: 'ability', id });   // 進倉庫＝休息關可裝到任何一員的槽 4
+  return ARTS[id].name;
 }
 const EVENT_CFG = { armoryHurt: 12, armoryWinP: 0.75, deserterHp: 0.5 };
 // 事件目錄（種子；內容之後一個一個敲）。choice：label/hint?/outcome/need?('target')/req?('gear')
@@ -2616,7 +2496,7 @@ function applyEventOutcome(o, mi) {
     case 'damage': { for (const r of roster) r.hp = Math.max(1, (r.hp != null ? r.hp : rmaxhp(r)) - (o.amt || 10)); return `全隊 −${o.amt || 10}HP（未致命）`; }
     case 'maxhp': { if (mi != null && roster[mi]) { roster[mi].bonusMaxHp = (roster[mi].bonusMaxHp || 0) + (o.amt || 15); return `${roster[mi].name} +${o.amt || 15} maxHP`; } for (const r of roster) r.bonusMaxHp = (r.bonusMaxHp || 0) + (o.amt || 10); return `全隊 +${o.amt || 10} maxHP`; }
     case 'recruit': { if (typeof restDoAwaken === 'function') { /* 直接加一名 */ } const rec = makeRecruit(new Set(roster.map(r => r.name))); if (typeof autoEquipFromWarehouse === 'function') autoEquipFromWarehouse(rec); roster.push(rec); return `${rec.name} 加入隊伍`; }
-    case 'relic': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的拜師禮'; paid = `（付出 ${g}）`; } const nm = relicPassive(mi); return nm ? `${roster[mi].name} 習得「${nm}」${paid}` : `${roster[mi] ? roster[mi].name : '隊員'} 已無可學被動`; }
+    case 'relic': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的拜師禮'; paid = `（付出 ${g}）`; } const nm = teachArt(mi); return nm ? `隱士傳授「${nm}」${paid}（入倉庫，休息關可配裝）` : '隱士已無可傳授的術'; }
     case 'trade': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的代價'; paid = `付出 ${g}，`; } return paid + applyEventOutcome(o.gain, mi); }
     case 'gamble': { if (srand() < (o.p || 0.5)) return '成功！' + applyEventOutcome(o.win, mi); return '失手！' + applyEventOutcome(o.lose, mi); }
     case 'combat': { forcedMap = o.map || 'bravo'; eventCur = null; startMission(); return null; }   // ★hook：接特製地圖；打完走一般結算
@@ -3369,7 +3249,7 @@ function startSwing(u, fireRateMult) {
     return false;
   }
   if (cost > 0) spendStam(u, cost);
-  const rm = 1 / Math.max(0.05, (fireRateMult || 1) * (u.buffFire || 1) * passiveFireMul(u));   // 攻速 buff＝縮短全段
+  const rm = 1 / Math.max(0.05, (fireRateMult || 1) * (u.buffFire || 1));   // 攻速 buff＝縮短全段
   u.swingDir = -(u.swingDir || -1);   // 左右交替：連續揮擊會是 →、←、→…（不是每次都同一邊）
   u.swing = {
     t: 0, windup: W.windup * rm, active: W.activeT * rm, recover: W.recover * rm,
@@ -3379,7 +3259,6 @@ function startSwing(u, fireRateMult) {
     reachF: 1, prevReachF: 1, // 刀尖伸出比例（thrust 用）
   };
   u.blocking = false;   // 揮擊即放下盾
-  if (u.faction === 'player') u.regenT = 0;
   if (arenaMode && u.id === KNIGHT_ID && u.faction === 'player') { arenaStats.swings++; arenaStats.lastHits = 0; arenaStats.lastDmg = 0; }
   Hooks.fire('attackStart', { u, W, melee: true });
   Sfx.play('swing', u.pos);
@@ -3529,10 +3408,9 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
   if (u.reloadT > 0 || u.fireCooldown > 0 || u.swapT > 0) return false;   // 換槍期間不能開火
   if (u.ammoInMag <= 0) { startReload(u); return false; }
   const pellets = W.pellets || 1;   // 霰彈：單次擊發多顆彈丸，各自抽散布
-  const spreadF = (u.spreadMul || 1) * passiveSpreadMul(u);   // 裝備(穩定器) + 被動(据守/沉著/死守)
-  const dmgF = passiveFireDmgMul(u);                          // 被動(衝鋒/伏擊)：開火當下決定
+  const spreadF = (u.spreadMul || 1);
+  const dmgF = 1;
   const isPlayer = u.faction === 'player';
-  if (isPlayer) u.regenT = 0;                                 // 開火＝在戰鬥（清戰場急救脫戰計時）
   u.shotCount = (u.shotCount || 0) + 1;                       // 連射計數（曳光彈每 N 發一發用）
   const isTracer = !!W.tracer && (u.shotCount % CONFIG.juice.tracerEvery === 0);   // 只有帶曳光的槍、且輪到第 N 發才是曳光彈
   for (let p = 0; p < pellets; p++) {
@@ -3544,19 +3422,19 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
       pierce: W.pierce || 0,      // 穿甲：對裝甲敵人的擋格率衰減
       tracer: isTracer,           // 曳光彈：火光色亮拖尾（否則極細淡線/隱形）
-      breacher: hasPassive(u, 'breacher'), suppress: hasPassive(u, 'suppress'), shooterId: isPlayer ? u.id : -1, owner: u,   // 被動：命中時依距離/壓制套用、擊殺歸屬；owner＝射手本人（友軍誤傷判定用來排除自己）
+      shooterId: isPlayer ? u.id : -1, owner: u,   // 擊殺歸屬；owner＝射手本人（友軍誤傷判定用來排除自己）
     });
   }
   if (!W.infinite) u.ammoInMag--;   // infinite＝彈夾不消耗、永不換彈
-  u.fireCooldown = (1 / W.fireRate) / (fireRateMult * (u.buffFire || 1) * passiveFireMul(u));   // 道具(腎上腺素) + 被動(斬首/背水)可加射速
-  if (bloomAdd) u.bloom = Math.min(W.spreadMax * (hasPassive(u, 'spray') ? CONFIG.passive.sprayMaxMul : 1), u.bloom + bloomAdd);   // 掃射：連射 bloom 上限更低
+  u.fireCooldown = (1 / W.fireRate) / (fireRateMult * (u.buffFire || 1));   // 道具(烈酒)可加射速
+  if (bloomAdd) u.bloom = Math.min(W.spreadMax, u.bloom + bloomAdd);
   u.muzzle = W.silent ? 0.02 : 0.05;
   if (u.faction === 'enemy' && !W.silent) u.revealT = CONFIG.stealth.fireReveal;   // 敵人開火＝槍口火光暴露位置（對玩家現形，含草叢/霧中）
   u.recoil = CONFIG.juice.recoil;   // 開火後座（繪製時往後彈、快速回正）
   if (u.faction === 'player' && u.id === controlledId) { kickY += CONFIG.juice.camKick; addShakeAt(u.pos, CONFIG.juice.shakeFire); }   // 你的槍＝相機踢+微震
   Sfx.play(W.silent ? 'silshot' : (W.pellets ? 'shotgun' : 'shot'), u.pos);   // 射擊音效接縫（pos→邊框聲音提示）
   if (u.ammoInMag <= 0) startReload(u);
-  if (u.faction === 'player' && !W.silent) alertEnemiesNear(u.pos, W.loud ? 1e9 : (hasPassive(u, 'lightstep') ? CONFIG.enemyHearRadius * CONFIG.passive.lightstepHear : CONFIG.enemyHearRadius));   // 聲響驚動半徑；loud(喪鐘)=全場聽得見；輕步＝半徑更小
+  if (u.faction === 'player' && !W.silent) alertEnemiesNear(u.pos, W.loud ? 1e9 : CONFIG.enemyHearRadius);   // 聲響驚動半徑；loud(喪鐘)=全場聽得見
   Hooks.fire('attackStart', { u, W, melee: false });
   return true;
 }
@@ -3711,7 +3589,7 @@ function setStance(u, s) { if (u && (s === 'engage' || s === 'defend')) { u.stan
 
 // 手動：基礎+連射 bloom（玩家扳機紀律＝技巧）。敵人：同手動會 bloom。
 const manualFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (isScoping() ? CONFIG.scope.spreadMul : 1), 1, u.weapon.spreadPerShot);   // 望遠＝降發散穩定
-const enemyFire  = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (u.suppressedT > 0 ? CONFIG.passive.suppressSpread : 1) * (1 + flashF(u) * CONFIG.flash.spreadAdd), 1, u.weapon.spreadPerShot);   // 被壓制/閃光暈眩＝發散變大
+const enemyFire  = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (1 + flashF(u) * CONFIG.flash.spreadAdd), 1, u.weapon.spreadPerShot);   // 被壓制/閃光暈眩＝發散變大
 /* AI 遠程的「瞄準」閘門：原版是看到就射，沒有前搖＝沒有東西可以預告。
    這裡給 AI（敵人與扈從皆同，對稱才公平）加一段瞄準期，期間 telegraphOf 會回傳長方形彈道預告，
    **填滿的瞬間就是放箭的瞬間**。玩家的手動射擊不經過這裡＝仍是即時。
@@ -3740,7 +3618,7 @@ function enemyAttack(e, ang, dt) {
   if (enemyFire(e, ang)) { e.burstLeft--; if (e.burstLeft <= 0) { e.burstLeft = e.weapon.burst.size; e.burstCd = e.weapon.burst.gap; } }
 }
 // 待機開火：基礎較差(spreadBase/精度倍率)＋連射 bloom；射速 ×idleFireRateMult。TAP 靠停頓讓 bloom 回復、AUTO 把 bloom 拉滿。
-const idleEngageFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase / CONFIG.idleAccuracyMult) * (hasPassive(u, 'overwatch') ? CONFIG.passive.overwatchSpread : 1) + u.bloom, CONFIG.idleFireRateMult, u.weapon.spreadPerShot);   // 警戒待命：待機 overwatch 更準
+const idleEngageFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase / CONFIG.idleAccuracyMult) + u.bloom, CONFIG.idleFireRateMult, u.weapon.spreadPerShot);
 
 // fromAng＝攻擊來向（目標→發射原點的角度）。落在目標視野錐外＝flank（側後）。
 // opts（近接用，選填）：{ melee, attacker, knock, stagger, poiseDmg }。回傳 true＝本次被盾格擋下。
@@ -3798,7 +3676,6 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const coneHalf = (u.coneHalfDeg || CONFIG.vision.coneHalfDeg) * Math.PI / 180;
   let flanked = (fromAng != null) && Math.abs(angDiff(fromAng, u.facing)) > coneHalf;   // 錐外＝繞背
   if (blocked) flanked = false;                                                            // 擋下來的那一擊不算繞背
-  if (flanked && passiveNegateCrit(u)) flanked = false;                                    // 眼觀四面/不動如山(靜止)：玩家不吃暴擊加成（仍有正面減傷）
   const surprise = (u.faction !== 'player' && u.state === 'IDLE');                          // 閒置 AI 被突襲（任一 AI 陣營）
   const mult = flanked ? CONFIG.flank.flankMult : (surprise ? CONFIG.flank.surpriseMult : 1);  // 取較高、不相乘
   if (u.faction !== 'player') {   // 任一 AI 陣營被打（不論後續有沒有被甲彈開）
@@ -3837,7 +3714,7 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (armorBlocked) return blocked;   // 被甲彈開：不流血（體幹/擊退已在上面結算過了）
   if (u.staggerT > 0 && !blocked) dmg *= M.poiseBreakDmgMul;   // 處決窗：硬直中的人挨打特別痛
   const resist = flanked ? 0 : (u.dmgResist || 0);   // 繞背無視所有裝甲（含玩家固定減傷＝甲只罩正面）
-  const raw = dmg * mult * (1 - resist) * (u.faction === 'player' ? passiveDmgTakenMul(u) : 1);   // 被動減傷：据守/不動如山/死守
+  const raw = dmg * mult * (1 - resist);
   // **溢出傷害不計**：對 1 HP 的目標打 999，實際只造成 1 點。
   // 若照全額往下傳，吃「每點傷害」的效果（士氣、吸血、統計）會被overkill 灌爆。
   const dealt = Math.min(raw, Math.max(0, u.hp));
@@ -3845,7 +3722,7 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   Hooks.fire('hurt', { u, from: (opts && opts.attacker) || null, dealt, raw, melee: !!(opts && opts.melee), blocked });
   // hpLow：跌破門檻觸發一次（回到門檻上由 tickResources 重新武裝）
   if (u.maxHp && !u._hpLowFired && u.hp > 0 && u.hp / u.maxHp < CONFIG.hooks.hpLowFrac) { u._hpLowFired = true; Hooks.fire('hpLow', { u, frac: u.hp / u.maxHp }); }
-  if (u.faction === 'player') { u.alertTimer = CONFIG.ghostAlertTime; u.regenT = 0; }   // 受傷＝在戰鬥（清戰場急救脫戰計時）
+  if (u.faction === 'player') u.alertTimer = CONFIG.ghostAlertTime;   // 受傷＝在戰鬥
   if (flanked || surprise) spawnCrit(u.pos); else spawnHit(u.pos);   // 繞背/突襲命中＝不同火花
   addShakeAt(u.pos, (flanked || surprise) ? CONFIG.juice.shakeHit * 1.6 : CONFIG.juice.shakeHit);   // 命中震動（依離相機衰減）
   u.hitFlash = CONFIG.juice.hitFlash;                                 // 受擊閃白（單位本體，0.12s）
@@ -4033,15 +3910,12 @@ function updateBullets(dt) {
       for (const t of targets) if (segCircle(old, b, t.pos, t.radius)) {
         if (b.flash) { t.flash = Math.min(CONFIG.flash.max, (t.flash || 0) + b.flash); gone = true; break; }   // 閃光彈丸：累積暈眩、不造成傷害（中越多顆越暈）
         let dmg = b.dmg;
-        if (b.breacher) dmg *= breacherMul(b.traveled);                                  // 破門手：命中時依距離
         if (isFriendlyHit(b.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;              // 誤傷倍率
         const wasAlive = !t.dead && t.hp > 0;
         const hpB0 = t.hp;
         const bBlocked = damageUnit(t, dmg, b.pierce || 0, angTo(t.pos, { x: b.ox, y: b.oy }), { attacker: b.owner || null });   // attacker＝擊殺歸屬/Hooks（無 melee 旗標＝不觸發近戰限定效果）
         if (b.owner) Hooks.fire('attackHit', { u: b.owner, t, dealt: Math.max(0, hpB0 - t.hp), melee: false, blocked: bBlocked, backstab: false, armorDeflect: (hpB0 === t.hp && !bBlocked) });
         if (arenaMode && b.owner === knight()) arenaStats.lastShotDist = Math.round(b.traveled);   // 射擊試作場：顯示這發打了多遠
-        if (b.suppress && t.faction === 'enemy' && !t.dead) t.suppressedT = CONFIG.passive.suppressDur;   // 壓制：被射的敵發散變大
-        if (wasAlive && (t.dead || t.hp <= 0) && b.faction === 'player' && b.shooterId >= 0) onKillPassive(players[b.shooterId]);   // 斬首/戰場急救
         gone = true; break;
       }
     }
@@ -4360,7 +4234,7 @@ function idleTick(u, dt, lockFacing) {
   else if (st.fireMode === 'DEFENSIVE') mayFire = !!target && (u.alertTimer > 0 || (nearest && nd < CONFIG.ghostCloseRange));
 
   u.engageTimer = mayFire ? u.engageTimer + dt : 0;
-  const reactDelay = CONFIG.idleReactionDelay * (hasPassive(u, 'overwatch') ? CONFIG.passive.overwatchReact : 1);   // 警戒待命：待機反應更快
+  const reactDelay = CONFIG.idleReactionDelay;
   if (mayFire && u.engageTimer >= reactDelay) {
     const ang = angTo(u.pos, target.pos);
     // 友軍誤傷：扈從的自動攻擊要避開自己人——遠程看射線、近戰看揮擊扇形（別把騎士砍了）
@@ -4843,7 +4717,6 @@ cv.addEventListener('click', () => {
     const id = roadNodeAt(mouse.mx, mouse.my); if (id != null) selectNode(id);
   }
   else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR' || scene === 'ORIGIN') restClick(mouse.mx, mouse.my);
-  else if (scene === 'SETTLE') settleClick(mouse.mx, mouse.my);
   else if (scene === 'EVENT') eventClick(mouse.mx, mouse.my);
   else if (scene === 'RUNEND' || scene === 'RUNWIN') goMenu();
   else if (scene === 'MENU') menuClick(mouse.mx, mouse.my);
@@ -4953,7 +4826,6 @@ window.addEventListener('keydown', e => {
     else if (k.length === 1 && /[a-z0-9]/.test(k) && finaleSeedBuf.length < 16) finaleSeedBuf += k;
     e.preventDefault(); return;
   }
-  if (scene === 'SETTLE') { if (k === 'enter' || k === ' ') { if (settlePhase === 'PICK') settleSkip(); else if (settlePhase === 'DONE') settleAdvance(); } return; }   // 結算以滑鼠點選；Enter 略過/前進
   if (scene === 'EVENT') { if ((k === 'enter' || k === ' ') && eventPhase === 'DONE') eventAdvance(); return; }   // 事件以滑鼠點選；Enter 前進
   if (scene === 'SANDBOX') return;   // 設定畫面以 DOM 表單操作，不接遊戲鍵
   if (scene === 'ARENASEL') {        // 試作場入口：數字鍵直選、Esc 回主選單
@@ -5051,8 +4923,8 @@ function update(dt) {
 
   const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.cardHitT > 0) u.cardHitT -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
   const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
-  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickReactiveBlock(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
-  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickReactiveBlock(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
+  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickMelee(p, dt); tickReactiveBlock(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
+  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickReactiveBlock(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
   tickFactionMorale(dt); pruneMomentum();   // 陣營士氣的恢復 + 氣勢衰退
   pruneAttackTokens();   // 攻擊權：過期的釋放出來給別隻
   if (cmdFlashT > 0) cmdFlashT -= dt;
@@ -5096,7 +4968,7 @@ function update(dt) {
           const rx = Math.cos(u.facing + Math.PI / 2), ry = Math.sin(u.facing + Math.PI / 2);
           let mx = fx * fwd + rx * strafe, my = fy * fwd + ry * strafe;
           const l = Math.hypot(mx, my) || 1;
-          const spd = spdOf(u) * (u.sprinting ? sprintMult(u) : 1) * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * (u.buffMove || 1) * passiveMoveMul(u) * swingMoveMul(u);  // 低矮牆減速 + 裝備/道具 + 被動 + 揮擊/舉盾
+          const spd = spdOf(u) * (u.sprinting ? sprintMult(u) : 1) * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * (u.buffMove || 1) * swingMoveMul(u);  // 低矮牆減速 + 裝備/道具 + 被動 + 揮擊/舉盾
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
@@ -5191,7 +5063,6 @@ function draw() {
   if (scene === 'MAP') { drawRoadmap(); return; }
   if (scene === 'EDITOR') { drawEditor(); return; }
   if (scene === 'REST') { drawRest(); return; }
-  if (scene === 'SETTLE') { drawSettle(); return; }
   if (scene === 'EVENT') { drawEvent(); return; }
   if (scene === 'ARMORY') { drawArmory(); return; }
   if (scene === 'TUTOR') { drawTutor(); return; }
@@ -6362,8 +6233,8 @@ function drawCard(p, x, y, w, h, i) {
   // 個性 archetype（名稱色＝升階等級）
   const arch = p.archetype;
   ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas';
-  ctx.fillStyle = inactive ? '#6a727c' : TIER_COLOR[p.tier || 0];
-  ctx.fillText(arch.name + (p.tier ? ' ' + '★'.repeat(p.tier) : ''), bx, y + 29);
+  ctx.fillStyle = inactive ? '#6a727c' : '#9fd0e0';
+  ctx.fillText(arch.name, bx, y + 29);
 
   // 生命
   const hpFrac = clamp(p.hp / p.maxHp, 0, 1), low = hpFrac <= CONFIG.lowHpFrac && !inactive;
@@ -6430,8 +6301,8 @@ function drawRosterCard(r, x, y, w, h, i) {
   ctx.fillStyle = '#9fb3c8'; ctx.font = '11px Consolas';
   ctx.fillText(`${rosterClass(r).name}  HP ${rmaxhp(r)}   感知x${r.strength.toFixed(1)}`, x + pad, y + 58);
   const arch = ARCHETYPES[r.archetypeId];
-  ctx.fillStyle = TIER_COLOR[r.tier || 0]; ctx.font = 'bold 11px Consolas';
-  ctx.fillText(arch.name + (r.tier ? ' ' + '★'.repeat(r.tier) : ''), x + pad, y + 72);
+  ctx.fillStyle = '#9fd0e0'; ctx.font = 'bold 11px Consolas';
+  ctx.fillText(arch.name, x + pad, y + 72);
   ctx.textAlign = 'left';
 }
 /* ---- 休息關：clickable rect 小工具 ---- */
@@ -6464,14 +6335,12 @@ function drawLoadoutCard(mi, x, y, w, h) {
   ctx.fillText(`${rosterClass(r).name} HP ${rmaxhp(r)}`, x + w - pad, y + 18);
   // 個性 archetype：管理階段點名稱＝轉職(pivot 換樹、保留已學被動)。次行＝已學被動 / 性格描述
   const canSwap = manage && restPhase !== 'TARGET';
-  ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas'; ctx.fillStyle = TIER_COLOR[r.tier || 0];
-  const archLabel = (canSwap ? '↻ ' : '') + arch.name + (r.tier ? ' ' + '★'.repeat(r.tier) : '');
+  ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas'; ctx.fillStyle = '#9fd0e0';
+  const archLabel = (canSwap ? '↻ ' : '') + arch.name;
   ctx.fillText(archLabel, x + pad, y + 36);
   if (canSwap) pushRect(x + pad, y + 26, ctx.measureText(archLabel).width + 6, 13, () => cycleArchetype(mi));
   ctx.font = '10px Consolas';
-  const pvNames = (r.passives || []).map(pid => PASSIVES[pid] ? PASSIVES[pid].name : pid);
-  if (pvNames.length) { ctx.fillStyle = '#9fd0e0'; ctx.fillText('[' + pvNames.join('/') + ']', x + pad + 4 + ctx.measureText(archLabel).width + 8, y + 36); }
-  else { ctx.fillStyle = '#8b97a5'; ctx.fillText(arch.desc, x + pad + 4 + ctx.measureText(archLabel).width + 8, y + 36); }
+  ctx.fillStyle = '#8b97a5'; ctx.fillText(arch.desc, x + pad + 4 + ctx.measureText(archLabel).width + 8, y + 36);
   // 遺物攜帶者：右上角徽章（攜帶者＝金色實心；其餘在可管理階段＝可點指派）。獨立攜帶格、單選。
   // Phase 0：CONFIG.relicEnabled 關閉＝整塊不畫（Phase 4 復活時開回來即可）
   const bw2 = 80, bx2 = x + w - bw2 - 6, by2 = y + 24;
@@ -6854,69 +6723,8 @@ function sBtn(x, y, w, h, label, on, fn) {
   ctx.lineWidth = 1.4; ctx.strokeStyle = on ? 'rgba(160,180,200,0.8)' : 'rgba(90,100,110,0.5)'; ctx.strokeRect(x, y, w, h);
   ctx.fillStyle = on ? '#dbe8f5' : '#6a727c'; ctx.font = 'bold 15px Consolas'; ctx.textAlign = 'center';
   ctx.fillText(label, x + w / 2, y + h / 2 + 5);
-  if (on && fn) settleRects.push({ x, y, w, h, fn });
+  if (on && fn) eventRects.push({ x, y, w, h, fn });
 }
-function drawSettleUnitCard(x, y, w, h, r, elig) {
-  ctx.fillStyle = elig ? 'rgba(28,40,30,0.92)' : 'rgba(30,34,40,0.7)'; ctx.fillRect(x, y, w, h);
-  ctx.lineWidth = 1.5; ctx.strokeStyle = elig ? 'rgba(95,208,107,0.75)' : 'rgba(80,90,100,0.5)'; ctx.strokeRect(x, y, w, h);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = elig ? '#dbe8f5' : '#8b97a5'; ctx.font = 'bold 14px Consolas'; ctx.fillText(r.name, x + 12, y + 24);
-  const arch = ARCHETYPES[r.archetypeId];
-  ctx.fillStyle = TIER_COLOR[r.tier || 0]; ctx.font = '12px Consolas';
-  ctx.fillText(arch.name + ' ' + '★'.repeat(r.tier || 0) + (elig ? '' : ' (滿階)'), x + 12, y + 44);
-  ctx.fillStyle = '#8b97a5'; ctx.font = '10px Consolas'; ctx.fillText(arch.desc, x + 12, y + 60);
-  ctx.fillStyle = '#9fd0e0'; ctx.font = '11px Consolas';
-  (r.passives || []).forEach((pid, j) => ctx.fillText('· ' + (PASSIVES[pid] ? PASSIVES[pid].name : pid), x + 14, y + 80 + j * 15));
-  if (elig) { ctx.fillStyle = '#5fd06b'; ctx.font = 'bold 11px Consolas'; ctx.fillText('▶ 點此升階', x + 12, y + h - 12); }
-}
-function drawSettleOptionCard(x, y, w, h, P) {
-  ctx.fillStyle = 'rgba(40,46,58,0.95)'; ctx.fillRect(x, y, w, h);
-  ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(127,227,255,0.7)'; ctx.strokeRect(x, y, w, h);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#bfe6ff'; ctx.font = 'bold 19px Consolas'; ctx.fillText(P.name, x + 16, y + 36);
-  ctx.fillStyle = '#aebcc9'; ctx.font = '12px Consolas'; ctx.fillText(P.desc, x + 16, y + 64);
-  ctx.fillStyle = '#5fd06b'; ctx.font = 'bold 11px Consolas'; ctx.fillText('▶ 選此', x + 16, y + h - 14);
-}
-function drawSettle() {
-  settleRects = [];
-  ctx.fillStyle = 'rgba(10,14,20,0.97)'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 30px Consolas'; ctx.fillText('戰果結算 · 第 ' + missionIndex + ' 場', cv.width / 2, 50);
-  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '13px Consolas';
-  ctx.fillText('挑一名撤出的隊員，升一階（二選一）。Enter＝略過 / 前進。', cv.width / 2, 74);
-  const sum = lastSummary || { extracted: [], dead: [] };
-  ctx.textAlign = 'left'; ctx.font = '13px Consolas';
-  ctx.fillStyle = '#5fd06b'; ctx.fillText('撤出: ' + (sum.extracted.join('、') || '—'), 90, 104);
-  ctx.fillStyle = '#8a6a6a'; ctx.fillText('陣亡: ' + (sum.dead.join('、') || '—'), 90, 124);
-  if (CONFIG.relicEnabled && sum.fileSafe) { ctx.fillStyle = '#ffd27a'; ctx.fillText('📁 遺物已帶出', cv.width - 260, 104); }
-  if (sum.cacheReveal && sum.cacheReveal.length) {   // 密封容器開封結果（已進倉庫，本 run 可用）
-    ctx.fillStyle = '#7fdce8'; ctx.fillText('📦 密封容器開啟：' + sum.cacheReveal.join('、') + '（已入倉庫）', 90, 144);
-  }
-
-  if (settlePhase === 'PASS') {
-    const r = roster[settleSel];
-    if (!r || !settleEligible(r)) { settlePhase = 'PICK'; settleSel = -1; }
-    else {
-      ctx.textAlign = 'center'; ctx.fillStyle = '#cdd6e0'; ctx.font = 'bold 16px Consolas';
-      ctx.fillText(r.name + ' · ' + ARCHETYPES[r.archetypeId].name + ' → ★' + ((r.tier || 0) + 1) + '：二選一', cv.width / 2, 196);
-      const pair = settlePair(r), cw = 330, gap = 30, x0 = (cv.width - (2 * cw + gap)) / 2, y = 230, ch = 170;
-      pair.forEach((pid, k) => { const x = x0 + k * (cw + gap); drawSettleOptionCard(x, y, cw, ch, PASSIVES[pid]); settleRects.push({ x, y, w: cw, h: ch, fn: () => settlePromote(settleSel, pid) }); });
-      sBtn(cv.width / 2 - 70, y + ch + 26, 140, 36, '← 返回', true, () => { settlePhase = 'PICK'; settleSel = -1; });
-    }
-  }
-  if (settlePhase === 'PICK') {
-    ctx.textAlign = 'center'; ctx.fillStyle = '#cdd6e0'; ctx.font = 'bold 16px Consolas'; ctx.fillText('▾ 選一名升階', cv.width / 2, 184);
-    const n = roster.length, cw = 230, gap = 18, totalW = n * cw + (n - 1) * gap, x0 = (cv.width - totalW) / 2, y = 208, ch = 152;
-    roster.forEach((r, i) => { const x = x0 + i * (cw + gap), elig = settleEligible(r); drawSettleUnitCard(x, y, cw, ch, r, elig); if (elig) settleRects.push({ x, y, w: cw, h: ch, fn: () => { settleSel = i; settlePhase = 'PASS'; } }); });
-    const anyElig = roster.some(settleEligible);
-    sBtn(cv.width / 2 - 95, y + ch + 30, 190, 42, anyElig ? '略過升階 →' : '前進 →（無人可升）', true, () => (anyElig ? settleSkip() : settleAdvance()));
-  } else if (settlePhase === 'DONE') {
-    ctx.textAlign = 'center'; ctx.fillStyle = '#7fffa8'; ctx.font = 'bold 18px Consolas'; ctx.fillText(settleMsg, cv.width / 2, 220);
-    sBtn(cv.width / 2 - 100, 270, 200, 48, '前進 →', true, () => settleAdvance());
-  }
-  ctx.textAlign = 'left';
-}
-function settleClick(mx, my) { for (const r of settleRects) if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) { r.fn(); return; } }
 
 /* ---- 事件畫面 ---- */
 // 事件畫面按鈕（push 到 eventRects）。注意：編輯器另有同名 eBtn（push 到 editRects），
@@ -6955,8 +6763,7 @@ function drawEvent() {
       const x = x0 + i * (cw + gap);
       ctx.fillStyle = 'rgba(40,34,58,0.92)'; ctx.fillRect(x, y, cw, ch); ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(160,130,220,0.7)'; ctx.strokeRect(x, y, cw, ch);
       ctx.textAlign = 'left'; ctx.fillStyle = '#e6dcff'; ctx.font = 'bold 14px Consolas'; ctx.fillText(r.name, x + 12, y + 24);
-      ctx.fillStyle = TIER_COLOR[r.tier || 0]; ctx.font = '12px Consolas'; ctx.fillText(ARCHETYPES[r.archetypeId].name + ' ' + '★'.repeat(r.tier || 0), x + 12, y + 44);
-      ctx.fillStyle = '#9fd0e0'; ctx.font = '10px Consolas'; (r.passives || []).forEach((pid, j) => ctx.fillText('· ' + (PASSIVES[pid] ? PASSIVES[pid].name : pid), x + 14, y + 62 + j * 14));
+      ctx.fillStyle = '#9fd0e0'; ctx.font = '12px Consolas'; ctx.fillText(ARCHETYPES[r.archetypeId].name, x + 12, y + 44);
       eventRects.push({ x, y, w: cw, h: ch, fn: () => eventApplyTarget(i) });
     });
     ctx.textAlign = 'center'; evBtn(cv.width / 2 - 70, y + ch + 24, 140, 36, '← 返回', () => { eventPhase = 'CHOICE'; eventPendingChoice = null; });
@@ -7476,7 +7283,7 @@ function drawMenu() {
   ctx.fillText('情報點 ' + (meta.intel | 0) + '　·　通關 ' + (meta.stats.wins || 0) + '　·　清關 ' + (meta.stats.missions || 0) + '　·　解鎖 ' + unlocked + '/' + UNLOCKS.length, cv.width / 2, y);
   y += 26;
   ctx.fillStyle = 'rgba(150,170,190,0.7)'; ctx.font = '12px Consolas';
-  ctx.fillText('內容　武器 ' + Object.keys(WEAPONS).length + '・幹員 ' + ARCHETYPE_IDS.length + '・被動 ' + Object.keys(PASSIVES).length + '・技能 ' + ABILITY_IDS.length + '・裝備 ' + Object.keys(EQUIPMENT).length + '・道具 ' + Object.keys(ITEMS).length + '・事件 ' + EVENTS.length + '・敵型 ' + Object.keys(ENEMY_TYPES).length + '・地圖 ' + Object.keys(MAPS).length, cv.width / 2, y);
+  ctx.fillText('內容　武器 ' + Object.keys(WEAPONS).length + '・原型 ' + ARCHETYPE_IDS.length + '・術 ' + ART_IDS.length + '・副手 ' + OFFHAND_IDS.length + '・甲 ' + ARMOR_IDS.length + '・裝備 ' + Object.keys(EQUIPMENT).length + '・事件 ' + EVENTS.length + '・敵型 ' + Object.keys(ENEMY_TYPES).length + '・地圖 ' + Object.keys(MAPS).length, cv.width / 2, y);
   y += 24;
   ctx.fillStyle = 'rgba(95,208,107,0.6)'; ctx.font = '11px Consolas';
   ctx.fillText('已完成系統　✓ 單一英雄操作　✓ AI 扈從　✓ 潛行/警覺　✓ 地形/破壞/區域　✓ 成長弧/被動樹　✓ 雙武器　✓ 事件/旗標/演出　✓ 局外解鎖', cv.width / 2, y);

@@ -498,6 +498,32 @@ initRun → 路線圖(3 個起點) → COMBAT×5 → REST → BOSS → RUNWIN
 > 把陣營士氣打低，導致**後面**的盾兵測試裡那名盾兵處於動搖/潰逃狀態、量到的不是盾而是逃跑。
 > → `__mkShield` 改成每次先 `resetFactionMorale()`。**共用世界狀態的測試必須自己負責歸位。**
 
+### Phase 2.7 — 移除被動／戰果升階（完成，使用者定案）
+
+> 「每一關打完的戰果升階那段全部拿掉，裡面殘留太多與這版本無關的內容了。」
+
+問題不在機制而在**內容**：`PASSIVES` 三棵樹的節點幾乎全是槍械時代的——
+發散(bloom)、換彈時間、連射 bloom 上限、開火警覺半徑、壓制。這一版近接為主、
+彈藥只剩弓弩，那些節點大半沒有意義，留著只是讓每關結束多一個沒得選的畫面。
+
+**整套拔掉**（不是只藏起畫面）：
+- `PASSIVES` / `PASSIVE_TREES` / `CONFIG.passive` / 全部 `passive*` helper（約 112 行）
+- `SETTLE` 場景與 `enterSettle`/`settlePromote`/`settleSkip`/`settleAdvance`/`drawSettle*`/`settleClick`
+- roster 的 `tier` / `passives` 欄位、`TIER_COLOR`、名字後面的 ★
+- 單位上只被寫入從不被讀取的死欄位：`passBuffT/passBuffMove/passBuffFire/stillT/momentumT/regenT/suppressedT`
+- 過關 → `endMission` 直接 `advanceNode()` 回路線圖
+
+**成長改由已經在運作的三個接口承擔**：四槽位配裝（武器/盾/甲/術）、導師節點的習得、聖物 Hooks。
+「拜師」事件原本給一條被動，現在**教一個習得的術**進倉庫——正好接上術系統，也是導師節點之外的另一條管道。
+測試會斷言這些名字全都 `undefined`，避免它們哪天又長回來。
+
+**實測**：四種出身各跑一整條路線圖都到 RUNWIN，途中經過導師／事件／軍械庫／休息，沒有結算頁。
+
+> **同一類測試污染，這次是第四次**：新加的 `endMission` 測試把 `scene` 推離 `COMBAT`，
+> 而 `update()` 在非戰鬥場景是空轉的——結果**後面**所有「跑 N 幀」的測試都靜靜地什麼都沒發生
+> （盾永遠不放下、快慢節奏打出完全相同的傷害）。三條測試同時變紅才發現。
+> 教訓已經很清楚了：**任何動到 `scene` / `enemies` / `roster` / 陣營士氣的測試，都要自己收乾淨。**
+
 ### Phase 4 — 題材 / 敘事 / meta 重塑
 - [ ] 路線圖節點與場景敘事改寫（焚村/林道/渡口/關隘；野營/鍛冶/路上遭遇）。
 - [ ] 主選單 / 總部(HQ) / 結局改寫為歸鄉・贖罪主題（移除原間諜「沉睡者」敘事、The Patriot 致敬等）。
