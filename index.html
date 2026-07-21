@@ -124,7 +124,13 @@ const CONFIG = {
   wallThick: 8,
   // 重裝敵人裝甲：高機率「整發擋下」非穿甲攻擊；穿甲(pierce)越高越能無視。
   // 有效擋格率 = blockChance × (1 − weapon.pierce)。血量與一般敵人相同，靠這條形成質差。
-  armor: { blockChance: 0.85 },
+  armor: {
+    blockChance: 0.85,
+    // 第二層：穿過彈開判定的那一下也要吃減傷（見 damageUnit）。
+    //   實際減傷 = u.armor × flatResist × (1 − pierce × pierceBypass)
+    // flatResist 0.45＝板甲(0.75)正面約 −34%；pierceBypass 0.7＝戰鎚(0.95)只剩三分之一的減傷。
+    flatResist: 0.45, pierceBypass: 0.7, resistCap: 0.75,
+  },
   // 側翼/突襲（敵我皆適用）：依攻擊來向 vs 目標視野錐。flank＝錐外(側後)＝×flankMult 且無視所有裝甲；
   // surprise＝閒置敵人正面＝×surpriseMult（僅對敵）；兩者皆中取較高、不相乘。
   flank: { flankMult: 2.0, surpriseMult: 1.5 },
@@ -3713,7 +3719,15 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   }
   if (armorBlocked) return blocked;   // 被甲彈開：不流血（體幹/擊退已在上面結算過了）
   if (u.staggerT > 0 && !blocked) dmg *= M.poiseBreakDmgMul;   // 處決窗：硬直中的人挨打特別痛
-  const resist = flanked ? 0 : (u.dmgResist || 0);   // 繞背無視所有裝甲（含玩家固定減傷＝甲只罩正面）
+  /* 甲的第二層：**被彈開之外，穿過來的那一下也吃得少一點**（使用者定案）。
+     原本甲只有機率性的「整發彈開」，55% 全免 / 45% 全額——倍率其實已經是 2.3 倍，
+     但體感是「砍四刀什麼都沒發生，然後他三刀就死」，因為中間沒有東西。
+     這一層把變異數換成一致性：**穿甲部分繞過它**（pierceBypass），所以鎚仍然明顯最好，
+     但板甲對任何武器都還是有意義，不會回到「無敵或無關」的二元。
+     繞背一律無視（跟彈開同一條規則：甲只罩正面）。 */
+  const A = CONFIG.armor;
+  const armorResist = (u.armor || 0) * A.flatResist * (1 - (pierce || 0) * A.pierceBypass);
+  const resist = flanked ? 0 : clamp((u.dmgResist || 0) + armorResist, 0, A.resistCap);
   const raw = dmg * mult * (1 - resist);
   // **溢出傷害不計**：對 1 HP 的目標打 999，實際只造成 1 點。
   // 若照全額往下傳，吃「每點傷害」的效果（士氣、吸血、統計）會被overkill 灌爆。
