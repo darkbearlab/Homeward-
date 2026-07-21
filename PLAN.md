@@ -75,6 +75,21 @@
          擋格機制；代價＝移速、耐力回復、負重（奔跑）。穿越重越挨得住、但越快力竭＝安全 vs 續戰力。
       3. **盾格擋下的攻擊不再擲甲**（盾攔住的刀沒碰到甲，不做雙重防禦）。
       順帶修正：裝甲擲骰原本排在體幹**之後**（意外而非設計）；重排後彈開的擊退/體幹在同一處結算。
+- [x] **穿甲軸的武器分工（近戰+遠程）** — 原版 rifle(0.5)/DMR(0.9) 的位置由中世紀武器接手：
+      近戰＝鎚 0.95（近戰的 DMR）＞槍 0.55 ＞劍 0.35＞斧 0.30＞短劍 0.20；
+      遠程新增 **長弓 0.15（反人員）/十字弓 0.85（破甲）**，沿用既有射擊管線（magazine 1 + reload＝搭箭/絞弦）。
+      特定魔法（火矢等）Phase 2 一樣走此管線、給高 pierce 即可。
+- [x] **Hooks 事件匯流排（roguelite build 的地基，使用者要求）** — 之後的聖物/祝福/詛咒全部走
+      「訂閱事件 + 改 ctx」，引擎不再為每個效果開洞。已接線的事件（詳見 index.html 檔頂 Hooks 註解）：
+      `attackStart / attackHit / hurt / blockHit / parry / armorDeflect / interrupt /
+       poiseLow / poiseBroken / hpLow / stamEmpty / beforeDeath(可攔截＝復活通道) / death /
+       kill(含 elite/boss 旗標與近戰/遠程歸屬) / missionStart / missionEnd`
+      - 門檻類（hpLow/poiseLow）＝跌破觸發一次、回到門檻上重新武裝（`CONFIG.hooks`）。
+      - handler 全包 try/catch＝一個壞掉的內容不拖垮戰鬥。
+      - 「每場一次」狀態放 `Hooks.mission`（missionStart 自動清空）。
+      - **RELICS 目錄 + 示範聖物「不屈」**（每場一次：致死傷害改留 1 HP）＝復活通道已打通；
+        試作場 V 鍵切換。`knightRelics` run 中撿、`initRun` 清空。
+      - `ENEMY_TYPES` 新增 `elite`（heavy 系）/`boss`（Phase 4）標記供 kill 事件歸類。
 - [ ] **待你試玩後調數值**——這是本階段真正的工作，程式只是把旋鈕接出來。
 - [ ] 進階（後續）：突刺（拉近距離）、怯步、側步/迴避（先不做，若被圍毆時覺得沒有出口再加）。
 

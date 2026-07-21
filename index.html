@@ -242,6 +242,11 @@ const WEAPONS = {
   dagger:{ name: '短劍',  rarity: 'common',   weight: 0.4, damage: 13, fireRate: 9, range: 44, turnSpeed: 640, pierce: 0.20, melee: true, swingStyle: 'sweep',
            arcDeg: 60,  reach: 44, windup: 0.05, activeT: 0.06, recover: 0.16, cleave: 1, knock: 120, stagger: 0, backstabMul: 2.0, poiseDmg: 10, stamCost: 10,
            magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  // ===== HOMEWARD 中世紀遠程（Phase 2 的先遣；試作場 6/7 鍵可試）=====
+  // 穿甲軸的遠程擔當（原版 rifle 0.5 / DMR 0.9 的位置）：長弓＝反人員、十字弓＝破甲。
+  // magazine 1 + reloadTime＝每發搭箭/絞弦；特定魔法（火矢等）之後進 Phase 2 一樣走此管線。
+  longbow: { name: '長弓',   rarity: 'common',   weight: 1.2, damage: 26, fireRate: 1.4, range: 1200, projSpeed: 640, spreadBase: 1.6, spreadPerShot: 0.8, spreadMax: 6, spreadRecover: 9, magazine: 1, reloadTime: 1.0, turnSpeed: 520, pierce: 0.15 },
+  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85 },
   // 局外解鎖武器（情報點；解鎖後才進招募/loot 池，仍 RNG 取得）
   ar:      { name: 'Assault Rifle', rarity: 'uncommon', weight: 1.6, damage: 18, fireRate: 9, range: 1500, projSpeed: 820, spreadBase: 1.8, spreadPerShot: 1.8, spreadMax: 12, spreadRecover: 9, magazine: 30, reloadTime: 1.7, turnSpeed: 460, pierce: 0.6 },   // 穩定中距、過半穿甲
   revolver:{ name: 'Revolver',      rarity: 'uncommon', weight: 0.7, damage: 30, fireRate: 3, range: 1500,  projSpeed: 760, spreadBase: 1.6, spreadPerShot: 1.2, spreadMax: 8,  spreadRecover: 9, magazine: 6,  reloadTime: 1.6, turnSpeed: 540, pierce: 0.7 },   // 副武器級、單發高穿甲
@@ -333,6 +338,70 @@ CONFIG.melee = {
 };
 const RARITY_COLOR = { common: '#b8c2cc', uncommon: '#5fd06b', rare: '#5aa9ff', epic: '#c07bff', legendary: '#ffb454' };
 const rarityColor = (r) => RARITY_COLOR[r] || '#b8c2cc';
+
+/* =====================================================================
+   Hooks — 戰鬥事件匯流排（HOMEWARD roguelite build 的地基）
+   之後的聖物/祝福/詛咒/被動全部走這裡：內容＝「訂閱事件 + 改 ctx」，引擎不再為每個效果開洞。
+   引擎在下列時機 fire（ctx 內容標在各觸發點；u 恆為「事件主體」）：
+
+     attackStart   出手（近戰揮擊成立/遠程擊發）        { u, W, melee }
+     attackHit     打中別人                              { u, t, dealt, melee, blocked, backstab, armorDeflect }
+     hurt          被打中且實際扣血                      { u, from, dealt, melee, blocked }
+     blockHit      盾格擋下（非招架）                    { u, from }
+     parry         招架成功                              { u, from }
+     armorDeflect  身上的甲彈開一擊                      { u, from }
+     interrupt     前搖被打斷                            { u(被斷者), by }
+     poiseLow      體幹跌破門檻（每次跌破觸發一次）      { u, frac }
+     poiseBroken   體幹破（大硬直開始）                  { u, by }
+     hpLow         生命跌破門檻（每次跌破觸發一次）      { u, frac }
+     stamEmpty     耐力耗盡（想揮但揮不動）              { u }
+     beforeDeath   即將死亡（**可攔截**）                { u, killer, prevented, reviveHp }
+                     handler 設 ctx.prevented=true ＝免死，以 ctx.reviveHp（預設 1）復活
+     death         死亡定案                              { u, killer }
+     kill          擊殺別人                              { killer, victim, elite, boss }
+     missionStart  一場戰鬥開始                          { }
+     missionEnd    一場戰鬥結束                          { win }
+
+   慣例：handler 全部包 try/catch（一個壞掉的內容不能拖垮戰鬥）；
+   「每場一次」的狀態記在 Hooks.mission（missionStart 自動清空）。
+   ===================================================================== */
+const Hooks = {
+  _h: new Map(),          // event → Map(id → fn)
+  mission: {},            // 每場一次的旗標（missionStart 清空）
+  on(event, id, fn) { if (!this._h.has(event)) this._h.set(event, new Map()); this._h.get(event).set(id, fn); },
+  off(id) { for (const m of this._h.values()) m.delete(id); },
+  fire(event, ctx) {
+    const m = this._h.get(event); if (!m) return ctx;
+    for (const [id, fn] of m) { try { fn(ctx); } catch (e) { console.warn('hook', event, id, e); } }
+    return ctx;
+  },
+};
+CONFIG.hooks = { hpLowFrac: 0.35, poiseLowFrac: 0.35 };   // hpLow / poiseLow 的觸發門檻（跌破一次觸發一次，回到門檻上重新武裝）
+
+/* 聖物（RELICS）— 吃 Hooks 的內容目錄。先放一個把「復活」通道打通的示範；
+   之後的 build 內容（事件獎勵/商店/Boss 掉落）都照這個形狀加。 */
+const RELICS = {
+  secondwind: {
+    name: '不屈', rarity: 'rare', desc: '每場一次：致死傷害改為保留 1 HP',
+    hooks: {
+      beforeDeath(ctx) {
+        const k = knight();
+        if (!k || ctx.u !== k) return;                       // 只保騎士
+        if (Hooks.mission.secondwind) return;                // 每場一次
+        Hooks.mission.secondwind = true;
+        ctx.prevented = true; ctx.reviveHp = 1;
+      },
+    },
+  },
+};
+let knightRelics = new Set();   // 騎士持有的聖物 id（roguelite：run 中撿、run 結束清）
+function applyRelicHooks() {    // 重掛（撿到/失去聖物後呼叫）
+  for (const rid of Object.keys(RELICS)) Hooks.off('relic:' + rid);
+  for (const rid of knightRelics) {
+    const r = RELICS[rid]; if (!r) continue;
+    for (const [ev, fn] of Object.entries(r.hooks || {})) Hooks.on(ev, 'relic:' + rid, fn);
+  }
+}
 
 // 技能：目前全部佔位＝恢復生命，有 CD（僅手動可用）。多種＝倉庫換技能有取捨（量/CD 不同）。
 const ABILITIES = {
@@ -623,8 +692,9 @@ const ENEMY_TYPES = {
   grunt:       { name: '步兵(衝鋒)', weaponId: 'carbine', hp: CONFIG.enemy.hp, moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 0,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 衝鋒：直線壓上；IDLE 會巡邏
   grunt_flank: { name: '步兵(包抄)', weaponId: 'carbine', hp: CONFIG.enemy.hp, moveSpeed: CONFIG.enemy.moveSpeed, personality: 'flanker', hue: 18, radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 包抄：繞側後（佔 flank/vantage 點）；IDLE 會巡邏
   dog:        { name: '警犬',   weaponId: 'fangs',   hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
-  heavy_lmg:  { name: '重機槍兵', weaponId: 'lmg',   hp: CONFIG.enemy.hp, moveSpeed: 55,                     personality: 'holder',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, attack: 'burst', poise: 110 },  // 慢、帶甲、點放掃射
-  heavy_shot: { name: '霰彈兵', weaponId: 'shotgun', hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 200, radius: 14, armor: CONFIG.armor.blockChance, poise: 110 },                   // 中速、帶甲、推進貼臉
+  // elite/boss 標記＝Hooks 的 kill 事件歸類（聖物「殺菁英回耐力」之類吃這個；boss 型待 Phase 4 加）
+  heavy_lmg:  { name: '重機槍兵', weaponId: 'lmg',   hp: CONFIG.enemy.hp, moveSpeed: 55,                     personality: 'holder',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, attack: 'burst', poise: 110, elite: true },  // 慢、帶甲、點放掃射
+  heavy_shot: { name: '霰彈兵', weaponId: 'shotgun', hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 200, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },                   // 中速、帶甲、推進貼臉
   civ:        { name: '平民',   weaponId: 'pistol',  hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },                                  // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰。之後有 asset 換皮、邏輯不變
   // ---- HOMEWARD 近接測試用 ----
   footman:    { name: '徒步兵(劍)', weaponId: 'sword', hp: CONFIG.enemy.hp, moveSpeed: 105,                  personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },              // 近接敵：走同一條揮斬管線；體幹 45＝長劍兩擊打破
@@ -1696,6 +1766,7 @@ function releasePointer() { if (document.exitPointerLock) document.exitPointerLo
 // 開新的一輪 run（從基礎陣容起，先進路線圖）
 function initRun() {
   arenaMode = false;   // 離開近戰試作場
+  knightRelics = new Set(); applyRelicHooks();         // roguelite：聖物 run 中撿、開新 run 清空
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = [];    // 戰役旗標/事件佇列/已見事件重置
   runStats = { events: 0, kia: 0 };                     // 本局情報點累計（事件數/陣亡數）重置
@@ -1763,10 +1834,13 @@ function startMission() {
   scene = 'COMBAT';
   Input.aim = players[controlledId].facing;
   initCamera(players[controlledId]);
+  Hooks.mission = {};                    // 「每場一次」旗標歸零（不屈等聖物）
+  Hooks.fire('missionStart', {});
 }
 
 // 戰鬥結算：撤出者帶入後續（→回路線圖）；0 撤出則 run 結束
 function endMission() {
+  { const kn0 = knight(); Hooks.fire('missionEnd', { win: !!(kn0 && kn0.state === 'EXTRACTED') }); }
   if (fromSandbox) { fromSandbox = false; forcedMap = null; sandboxLast = { extracted: players.filter(p => p.state === 'EXTRACTED').length, dead: players.filter(p => p.state === 'DEAD').length, total: players.length }; if (playtestMode) { playtestMode = false; try { location.href = 'editor.html'; } catch (e) {} return; } enterSandbox(); return; }
   if (fromEditor) { fromEditor = false; forcedMap = null; scene = 'EDITOR'; editMsg = '試玩結束 — 回到編輯器'; releasePointer(); return; }
   if (introActive) { finishIntro(); return; }   // 第0關：撤離 → 序章休息（含教學），不走一般結算
@@ -1791,9 +1865,10 @@ function endMission() {
 let arenaMode = false;          // true＝試作場（update 跳過撤離/結算判定）
 let arenaNoFog = true;          // 試作場預設關迷霧（看得見扇形判定才調得動數值）
 let arenaAllies = false;        // 是否放兩名 AI 扈從（預設關＝孤騎，先感覺自己的手感）
-let arenaWIdx = 0;              // 目前近接武器在 MELEE_WEAPON_IDS 的索引
+let arenaWIdx = 0;              // 目前武器在 ARENA_WEAPON_IDS 的索引
 let arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0 };
-const arenaWeaponId = () => MELEE_WEAPON_IDS[((arenaWIdx % MELEE_WEAPON_IDS.length) + MELEE_WEAPON_IDS.length) % MELEE_WEAPON_IDS.length];
+const ARENA_WEAPON_IDS = [...MELEE_WEAPON_IDS, 'longbow', 'crossbow'];   // 近接 5 + 中世紀遠程 2（測穿甲軸/未來遠程 telegraph）
+const arenaWeaponId = () => ARENA_WEAPON_IDS[((arenaWIdx % ARENA_WEAPON_IDS.length) + ARENA_WEAPON_IDS.length) % ARENA_WEAPON_IDS.length];
 
 let arenaArmorIdx = 2;          // 試作場預設鎖子甲（C 鍵循環布衣→厚襖→鎖子甲→胸甲→板甲）
 const arenaMember = (name, hue, wid, arch) => ({
@@ -1852,7 +1927,7 @@ function enterArena() {
 }
 function arenaSetWeapon(i) {
   if (!arenaMode) return;
-  arenaWIdx = ((i % MELEE_WEAPON_IDS.length) + MELEE_WEAPON_IDS.length) % MELEE_WEAPON_IDS.length;
+  arenaWIdx = ((i % ARENA_WEAPON_IDS.length) + ARENA_WEAPON_IDS.length) % ARENA_WEAPON_IDS.length;
   const k = knight(); if (!k) return;
   const id = arenaWeaponId(), W = WEAPONS[id];
   k.weaponId = id; k.weapon = W; k.magazine = W.magazine; k.ammoInMag = W.magazine; k.ammoReserve = 9999;
@@ -1862,6 +1937,7 @@ function arenaSetWeapon(i) {
 }
 // 重來一場：測試對象全部重生、我方全員復活滿血並回到出生點（試作場不該有「輸掉」這件事）
 function arenaResetFight() {
+  Hooks.mission = {};   // 每場一次的旗標（不屈等）重置＝每次重來都是新的一場
   arenaSpawn();
   players.forEach((p, i) => {
     p.hp = p.maxHp; p.dead = false;
@@ -2449,35 +2525,42 @@ function swapWeapon(u) {
 const poiseMaxOf = (u) => (u.poiseMax || 1);
 const inSwingActive = (u) => !!(u.swing && u.swing.t >= u.swing.windup && u.swing.t < u.swing.windup + u.swing.active);
 const hasHyperArmor = (u) => !!(u.weapon && u.weapon.hyperArmor && inSwingActive(u));
-// 每幀回復體幹/耐力（受擊或消耗後有延遲；舉盾時耐力回得慢）
+// 每幀回復體幹/耐力（受擊或消耗後有延遲；舉盾時耐力回得慢）＋ hpLow/poiseLow 門檻重新武裝
 function tickResources(u, dt) {
   const M = CONFIG.melee;
   if (u.poiseMax) {
     if (simTime - (u.poiseHitT || -99) >= M.poiseRegenDelay && u.staggerT <= 0)
       u.poise = Math.min(u.poiseMax, (u.poise || 0) + M.poiseRegen * dt);
+    if (u._poiseLowFired && u.poise / u.poiseMax >= CONFIG.hooks.poiseLowFrac) u._poiseLowFired = false;
   }
   if (u.stamMax) {
     if (simTime - (u.stamT || -99) >= M.stamRegenDelay)
       u.stam = Math.min(u.stamMax, (u.stam || 0) + M.stamRegen * (u.blocking ? M.stamBlockRegenMul : 1) * (u.stamRegenMul || 1) * dt);   // 重甲＝耐力回得慢
   }
+  if (u._hpLowFired && u.maxHp && u.hp / u.maxHp >= CONFIG.hooks.hpLowFrac) u._hpLowFired = false;
 }
 function spendStam(u, n) { if (!u.stamMax) return true; u.stam = Math.max(0, (u.stam || 0) - n); u.stamT = simTime; return true; }
-// 體幹傷害 → 可能觸發體幹破（大硬直 + 處決窗 + 大幅擊退）。回傳是否破了。
-function applyPoise(t, amount, fromAng) {
+// 體幹傷害 → 可能觸發體幹破（大硬直 + 處決窗 + 大幅擊退）。回傳是否破了。by＝造成者（給 Hooks）。
+function applyPoise(t, amount, fromAng, by) {
   if (!t.poiseMax || amount <= 0) return false;
   t.poiseHitT = simTime;
   t.poise = (t.poise || 0) - amount;
-  if (t.poise > 0) return false;
-  breakPoise(t, fromAng);
+  if (t.poise > 0) {
+    // poiseLow：跌破門檻觸發一次（回到門檻上由 tickResources 重新武裝）
+    if (!t._poiseLowFired && t.poise / t.poiseMax < CONFIG.hooks.poiseLowFrac) { t._poiseLowFired = true; Hooks.fire('poiseLow', { u: t, frac: t.poise / t.poiseMax }); }
+    return false;
+  }
+  breakPoise(t, fromAng, by);
   return true;
 }
-function breakPoise(t, fromAng) {
+function breakPoise(t, fromAng, by) {
   const M = CONFIG.melee;
   t.poise = t.poiseMax;
   t.staggerT = Math.max(t.staggerT || 0, M.poiseBreakStagger);
   t.swing = null; t.blocking = false; t.blockT = null;   // 破了就是破了：揮到一半也中斷、盾也垮
   t.poiseBreakFxT = M.arcFadeT * 2;
   if (fromAng != null) applyKnock(t, fromAng + Math.PI, (t.lastKnock || 160) * M.poiseBreakKnockMul);
+  Hooks.fire('poiseBroken', { u: t, by: by || null });
   spawnCrit(t.pos);
   Sfx.play('block', t.pos);
 }
@@ -2502,6 +2585,7 @@ function startSwing(u, fireRateMult) {
   if (u.stamMax && cost > 0 && (u.stam || 0) < cost) {
     u.noStamFxT = 0.25;
     if (arenaMode && u.id === KNIGHT_ID && u.faction === 'player') arenaStats.noStam++;
+    Hooks.fire('stamEmpty', { u });
     return false;
   }
   if (cost > 0) spendStam(u, cost);
@@ -2517,6 +2601,7 @@ function startSwing(u, fireRateMult) {
   u.blocking = false;   // 揮擊即放下盾
   if (u.faction === 'player') u.regenT = 0;
   if (arenaMode && u.id === KNIGHT_ID && u.faction === 'player') { arenaStats.swings++; arenaStats.lastHits = 0; arenaStats.lastDmg = 0; }
+  Hooks.fire('attackStart', { u, W, melee: true });
   Sfx.play('swing', u.pos);
   return true;
 }
@@ -2579,6 +2664,7 @@ function meleeHitTest(u, s) {
     if (isFriendlyHit(u.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;                      // 誤傷倍率
     const hp0 = t.hp, stag0 = t.staggerT || 0, swing0 = !!t.swing;
     const blocked = damageUnit(t, dmg, W.pierce, fromAng, { melee: true, attacker: u, knock: W.knock || 0, stagger: W.stagger || 0, poiseDmg: W.poiseDmg || 0 });
+    Hooks.fire('attackHit', { u, t, dealt: Math.max(0, hp0 - t.hp), melee: true, blocked, backstab: back, armorDeflect: (hp0 === t.hp && !blocked) });
     if (arenaMode) {   // 試作場即時數據：本次揮擊打中幾隻、實際扣多少血（含裝甲/格擋後的真值）
       const dealt = Math.max(0, hp0 - t.hp);
       const broke = (t.staggerT || 0) > stag0;
@@ -2662,6 +2748,7 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
   Sfx.play(W.silent ? 'silshot' : (W.pellets ? 'shotgun' : 'shot'), u.pos);   // 開火音效接縫（pos→邊框聲音提示）
   if (u.ammoInMag <= 0) startReload(u);
   if (u.faction === 'player' && !W.silent) alertEnemiesNear(u.pos, W.loud ? 1e9 : (hasPassive(u, 'lightstep') ? CONFIG.enemyHearRadius * CONFIG.passive.lightstepHear : CONFIG.enemyHearRadius));   // 槍聲驚動半徑；Siren=全場聽得見；輕步＝半徑更小
+  Hooks.fire('attackStart', { u, W, melee: false });
   return true;
 }
 // 玩家開火的「槍聲」：半徑內 IDLE 敵人轉入 ENGAGED（latch）
@@ -2855,13 +2942,15 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
     spawnBlock(u.pos);
     if (parry) {
       const atk = opts && opts.attacker;
-      // 招架＝把衝擊整個反推回去：對方吃體幹傷害（常常直接體幹破）+ 固定硬直；自己退還耐力
-      if (atk) {
+      // 招架＝把衝擊整個反推回去：**近戰**攻擊者吃體幹傷害（常常直接體幹破）+ 固定硬直；自己退還耐力
+      // （招架到遠程箭矢＝只完全格擋，不會隔空震到射手）
+      if (atk && opts.melee) {
         atk.staggerT = Math.max(atk.staggerT || 0, M.parryStagger); atk.swing = null;
-        applyPoise(atk, poiseDmg, fromAng + Math.PI);
+        applyPoise(atk, poiseDmg, fromAng + Math.PI, u);
       }
       if (u.stamMax) { u.stam = Math.min(u.stamMax, (u.stam || 0) + M.stamParryRefund); }
       u.parryFxT = M.arcFadeT;   // 招架成功的視覺回饋
+      Hooks.fire('parry', { u, from: atk || null });
       Sfx.play('parry', u.pos);
       return true;                          // 完全格擋：不吃傷、不吃擊退/體幹
     }
@@ -2872,8 +2961,9 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
       const cost = M.stamBlockBase + poiseDmg * M.stamBlockPerPoise;
       const enough = (u.stam || 0) >= cost;
       spendStam(u, cost);
-      if (!enough) { u.guardBreakFxT = M.arcFadeT * 2; breakPoise(u, fromAng); poiseDmg = 0; }
+      if (!enough) { u.guardBreakFxT = M.arcFadeT * 2; breakPoise(u, fromAng, opts && opts.attacker); poiseDmg = 0; }
     }
+    Hooks.fire('blockHit', { u, from: (opts && opts.attacker) || null });
     if (opts) opts = Object.assign({}, opts, { knock: (opts.knock || 0) * 0.35, stagger: 0 });   // 擋下＝擊退大減
   }
   // ---- 繞背/突襲判定（裝甲擲骰與傷害倍率都要用）----
@@ -2894,14 +2984,14 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
      ※ 必須排在體幹之前，因為體幹傷害要看這一擊有沒有被甲彈開。 ---- */
   // ※ 盾格已擋下的攻擊不再擲甲（盾攔住的刀根本沒碰到甲＝不做雙重防禦）
   const armorBlocked = !blocked && !flanked && (u.armor > 0) && Math.random() < u.armor * (1 - pierce);
-  if (armorBlocked) { spawnBlock(u.pos); poiseDmg *= M.armorPoiseMul; }
+  if (armorBlocked) { spawnBlock(u.pos); poiseDmg *= M.armorPoiseMul; Hooks.fire('armorDeflect', { u, from: (opts && opts.attacker) || null }); }
   // ---- 體幹：扣光＝大硬直＋處決窗。hyperArmor（斧/鎚判定窗中）只吃一半 ----
   if (poiseDmg > 0 && u.poiseMax) {
     const wasSwinging = !!u.swing, inWindup = wasSwinging && u.swing.t < u.swing.windup;
     const hyper = hasHyperArmor(u);
-    const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng);
+    const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng, opts && opts.attacker);
     // 打斷：前搖中被命中＝這一刀直接被打斷（重武器 hyperArmor 免疫）＝搶到先手的人贏整次交鋒
-    if (!broke && inWindup && !hyper) { u.swing = null; u.flinchFxT = 0.18; }
+    if (!broke && inWindup && !hyper) { u.swing = null; u.flinchFxT = 0.18; Hooks.fire('interrupt', { u, by: (opts && opts.attacker) || null }); }
   }
   if (opts && (opts.knock || opts.stagger) && fromAng != null) {
     applyKnock(u, fromAng + Math.PI, opts.knock || 0);                                   // 往「背離攻擊者」的方向推
@@ -2910,7 +3000,11 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (armorBlocked) return blocked;   // 被甲彈開：不流血（體幹/擊退已在上面結算過了）
   if (u.staggerT > 0 && !blocked) dmg *= M.poiseBreakDmgMul;   // 處決窗：硬直中的人挨打特別痛
   const resist = flanked ? 0 : (u.dmgResist || 0);   // 繞背無視所有裝甲（含玩家固定減傷＝甲只罩正面）
-  u.hp -= dmg * mult * (1 - resist) * (u.faction === 'player' ? passiveDmgTakenMul(u) : 1);   // 被動減傷：据守/不動如山/死守
+  const dealt = dmg * mult * (1 - resist) * (u.faction === 'player' ? passiveDmgTakenMul(u) : 1);   // 被動減傷：据守/不動如山/死守
+  u.hp -= dealt;
+  Hooks.fire('hurt', { u, from: (opts && opts.attacker) || null, dealt, melee: !!(opts && opts.melee), blocked });
+  // hpLow：跌破門檻觸發一次（回到門檻上由 tickResources 重新武裝）
+  if (u.maxHp && !u._hpLowFired && u.hp > 0 && u.hp / u.maxHp < CONFIG.hooks.hpLowFrac) { u._hpLowFired = true; Hooks.fire('hpLow', { u, frac: u.hp / u.maxHp }); }
   if (u.faction === 'player') { u.alertTimer = CONFIG.ghostAlertTime; u.regenT = 0; }   // 受傷＝在戰鬥（清戰場急救脫戰計時）
   if (flanked || surprise) spawnCrit(u.pos); else spawnHit(u.pos);   // 繞背/突襲命中＝不同火花
   addShakeAt(u.pos, (flanked || surprise) ? CONFIG.juice.shakeHit * 1.6 : CONFIG.juice.shakeHit);   // 命中震動（依離相機衰減）
@@ -2918,10 +3012,20 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const pa = (fromAng != null) ? fromAng + Math.PI : u.facing;        // 子彈推進方向（背向射手）
   u.flinchX = Math.cos(pa) * CONFIG.juice.flinch; u.flinchY = Math.sin(pa) * CONFIG.juice.flinch;   // 後仰（繪製偏移）
   spawnBlood(u.pos, pa); pushDecal(u.pos.x, u.pos.y, 3 + Math.random() * 3, 'rgba(122,20,28,0.5)');  // 血霧 + 地上血漬
-  if (u.hp <= 0) killUnit(u);
+  if (u.hp <= 0) killUnit(u, (opts && opts.attacker) || null);
   return blocked;   // 近接判定用：true＝被盾格擋下（決定火花顏色/頓幀種類）
 }
-function killUnit(u) {
+function killUnit(u, killer) {
+  // beforeDeath＝可攔截的死亡（roguelite 復活通道）：handler 設 prevented=true → 以 reviveHp 保命
+  const bd = Hooks.fire('beforeDeath', { u, killer: killer || null, prevented: false, reviveHp: 1 });
+  if (bd.prevented) {
+    u.hp = Math.max(1, bd.reviveHp || 1);
+    u.staggerT = 0; u.swing = null; u.blocking = false; u.blockT = null;
+    spawnHeal(u.pos);
+    return;
+  }
+  Hooks.fire('death', { u, killer: killer || null });
+  if (killer) Hooks.fire('kill', { killer, victim: u, elite: !!(u.type && u.type.elite), boss: !!(u.type && u.type.boss) });
   spawnDeath(u.pos);
   hitstop(CONFIG.juice.hitstopKill); addShakeAt(u.pos, CONFIG.juice.shakeKill);   // 擊殺：頓幀 + 較大震動
   pushDecal(u.pos.x, u.pos.y, 8 + Math.random() * 3, 'rgba(92,15,22,0.5)');       // 死亡血池
@@ -3083,7 +3187,9 @@ function updateBullets(dt) {
         if (b.breacher) dmg *= breacherMul(b.traveled);                                  // 破門手：命中時依距離
         if (isFriendlyHit(b.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;              // 誤傷倍率
         const wasAlive = !t.dead && t.hp > 0;
-        damageUnit(t, dmg, b.pierce || 0, angTo(t.pos, { x: b.ox, y: b.oy }));
+        const hpB0 = t.hp;
+        const bBlocked = damageUnit(t, dmg, b.pierce || 0, angTo(t.pos, { x: b.ox, y: b.oy }), { attacker: b.owner || null });   // attacker＝擊殺歸屬/Hooks（無 melee 旗標＝不觸發近戰限定效果）
+        if (b.owner) Hooks.fire('attackHit', { u: b.owner, t, dealt: Math.max(0, hpB0 - t.hp), melee: false, blocked: bBlocked, backstab: false, armorDeflect: (hpB0 === t.hp && !bBlocked) });
         if (b.suppress && t.faction === 'enemy' && !t.dead) t.suppressedT = CONFIG.passive.suppressDur;   // 壓制：被射的敵發散變大
         if (wasAlive && (t.dead || t.hp <= 0) && b.faction === 'player' && b.shooterId >= 0) onKillPassive(players[b.shooterId]);   // 斬首/戰場急救
         gone = true; break;
@@ -3712,7 +3818,8 @@ window.addEventListener('keydown', e => {
   if (k === 'e' || k === 'q') { const s = (k === 'e') ? 'engage' : 'defend'; for (const p of players) if (p.id !== KNIGHT_ID) setStance(p, s); }
   // --- 近戰試作場專用熱鍵（只在 arenaMode 生效，不影響戰役）---
   if (arenaMode) {
-    if (k >= '1' && k <= '9') { const i = parseInt(k, 10) - 1; if (i < MELEE_WEAPON_IDS.length) arenaSetWeapon(i); }
+    if (k >= '1' && k <= '9') { const i = parseInt(k, 10) - 1; if (i < ARENA_WEAPON_IDS.length) arenaSetWeapon(i); }
+    if (k === 'v') { if (knightRelics.has('secondwind')) knightRelics.delete('secondwind'); else knightRelics.add('secondwind'); applyRelicHooks(); }   // V 切換示範聖物「不屈」
     if (k === 'tab') { arenaSetWeapon(arenaWIdx + (e.shiftKey ? -1 : 1)); e.preventDefault(); }   // Tab 循環近接武器
     if (k === 't') arenaResetFight();                                    // T 重來
     if (k === 'y') for (const e of enemies) if (!e.dead && !e.dummy) { e.state = 'ENGAGED'; e.detect = 1; }   // Y 叫敵人立刻開戰（不用走過去引怪）
@@ -3919,7 +4026,10 @@ function drawArenaHUD() {
     ['cleave', W.cleave], ['擊退距離', Math.round((W.knock || 0) / CONFIG.melee.knockDecay) + 'px'],
     ['背刺', '×' + (W.backstabMul || 1)],
     ['穿甲 vs 重裝(0.85)', Math.round(0.85 * (1 - W.pierce) * 100) + '% 被彈開'],
-  ] : [['（遠程武器）', W.name]];
+  ] : [
+    ['傷害', W.damage], ['穿甲', W.pierce], ['射速', W.fireRate + '/s'], ['裝填', W.reloadTime + 's'],
+    ['穿甲 vs 重裝(0.85)', Math.round(0.85 * (1 - W.pierce) * 100) + '% 被彈開'],
+  ];
   const AR = ARMORS[k.armorId] || ARMORS.none;
   rows.push(['—', '']);
   rows.push(['身上的甲', AR.name + '（C 換）']);
@@ -3962,7 +4072,7 @@ function drawArenaHUD() {
     ctx.fillStyle = '#cdd6e0'; ctx.textAlign = 'right'; ctx.fillText(String(r[1]), sx + sw - 9, y); ctx.textAlign = 'left';
   });
   // 底部：熱鍵
-  const keysLine = `1-${MELEE_WEAPON_IDS.length}/Tab 換武器（${MELEE_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 換甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板 · M 選單`;
+  const keysLine = `1-${ARENA_WEAPON_IDS.length}/Tab 換武器（${ARENA_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 換甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · V 聖物不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板 · M 選單`;
   ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(160,180,200,0.85)';
   ctx.fillText(keysLine, cv.width / 2, cv.height - 112);
   ctx.fillStyle = 'rgba(127,227,255,0.8)';
