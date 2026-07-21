@@ -1902,6 +1902,8 @@ const arenaWeaponId = () => ARENA_WEAPON_IDS[((arenaWIdx % ARENA_WEAPON_IDS.leng
 const ARENA_MODES = {
   melee: {
     label: '近戰試作場', map: 'arena', wIdx: 0,
+    desc: '揮斬 / 盾格 / 招架 / 體幹 / 擊退',
+    detail: '左列訓練假人（緊排測 cleave、紫色的披甲測穿甲）· 右側三名劍兵會反擊',
     // 左列訓練假人（緊排測 cleave）+ 披甲假人（測穿甲）+ 右側三名劍兵（會反擊）
     spawn: [
       { t: 'dummy', x: 470, y: 250, node: 6 }, { t: 'dummy', x: 470, y: 292, node: 6 },
@@ -1912,6 +1914,8 @@ const ARENA_MODES = {
   },
   ranged: {
     label: '射擊試作場', map: 'range', wIdx: 5,   // 預設長弓
+    desc: '弓弩彈道 / 射程 / 穿甲 / 掩體 / 盾擋箭',
+    detail: '上半標靶區：假人在 300–900 距離檔 · 下半對射區：弓手×2 弩手×1 會還擊',
     // 上半標靶區：假人列 300/500/700/900 距離檔（900 那格要隔著上側低矮牆射＝測機率擋彈）
     // 下半對射區：弓手×2 弩手×1（最下面那名弓手與你之間隔著下側低矮牆＝敵方掩體示範）
     spawn: [
@@ -1978,6 +1982,55 @@ function enterArena(modeKey) {
   arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0, lastShotDist: 0 };
 }
 const arenaNextMode = () => { const keys = Object.keys(ARENA_MODES); return keys[(keys.indexOf(arenaModeKey) + 1) % keys.length]; };
+
+/* 試作場入口選單（scene ARENASEL）＝開機的第一個畫面。
+   加新測試場只要往 ARENA_MODES 加一條，這裡自動列出來。 */
+let arenaSelRects = [];
+function enterArenaSelect() { arenaMode = false; scene = 'ARENASEL'; releasePointer(); }
+function arenaSelClick(x, y) { for (const r of arenaSelRects) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { r.fn(); return; } }
+function drawArenaSelect() {
+  arenaSelRects = [];
+  ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 44px Consolas'; ctx.fillText('HOMEWARD — 試作場', cv.width / 2, 92);
+  ctx.fillStyle = 'rgba(205,214,224,0.6)'; ctx.font = '14px Consolas';
+  ctx.fillText('Phase 1 手感開發中。選一個測試場（進場後按 U 可直接循環切換、Esc 回本畫面）', cv.width / 2, 120);
+
+  const keys = Object.keys(ARENA_MODES);
+  const bw = 620, bh = 78, gap = 14, x = cv.width / 2 - bw / 2;
+  let y = 160;
+  keys.forEach((key, i) => {
+    const M = ARENA_MODES[key];
+    const hover = mouse.mx >= x && mouse.mx <= x + bw && mouse.my >= y && mouse.my <= y + bh;
+    ctx.fillStyle = hover ? 'rgba(127,227,255,0.18)' : 'rgba(20,26,36,0.92)'; ctx.fillRect(x, y, bw, bh);
+    ctx.lineWidth = 2; ctx.strokeStyle = hover ? '#7fe3ff' : '#2a3442'; ctx.strokeRect(x, y, bw, bh);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[' + (i + 1) + ']', x + 18, y + 28);
+    ctx.fillStyle = '#e6edf3'; ctx.font = 'bold 21px Consolas'; ctx.fillText(M.label, x + 60, y + 28);
+    ctx.fillStyle = 'rgba(255,210,122,0.85)'; ctx.font = '13px Consolas'; ctx.fillText(M.desc || '', x + 60, y + 48);
+    ctx.fillStyle = 'rgba(205,214,224,0.55)'; ctx.font = '12px Consolas'; ctx.fillText(M.detail || '', x + 60, y + 66);
+    arenaSelRects.push({ x, y, w: bw, h: bh, fn: () => enterArena(key) });
+    y += bh + gap;
+  });
+
+  y += 10;
+  const sw = 300, sh = 42, sx = cv.width / 2 - sw / 2;
+  const sub = [
+    { label: '戰役（原有流程）', fn: () => initRun() },
+    { label: '主選單', fn: () => goMenu() },
+  ];
+  for (const it of sub) {
+    const hover = mouse.mx >= sx && mouse.mx <= sx + sw && mouse.my >= y && mouse.my <= y + sh;
+    ctx.fillStyle = hover ? 'rgba(127,227,255,0.14)' : 'rgba(16,22,30,0.9)'; ctx.fillRect(sx, y, sw, sh);
+    ctx.lineWidth = 1.2; ctx.strokeStyle = hover ? 'rgba(127,227,255,0.7)' : '#232c38'; ctx.strokeRect(sx, y, sw, sh);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#cdd6e0'; ctx.font = '15px Consolas'; ctx.fillText(it.label, sx + sw / 2, y + 27);
+    arenaSelRects.push({ x: sx, y, w: sw, h: sh, fn: it.fn });
+    y += sh + 10;
+  }
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(160,180,200,0.5)'; ctx.font = '12px Consolas';
+  ctx.fillText('也可用網址直達：?arena=' + keys.join(' / ?arena=') + '　·　?campaign 進主選單', cv.width / 2, cv.height - 28);
+  ctx.textAlign = 'left';
+}
 function arenaSetWeapon(i) {
   if (!arenaMode) return;
   arenaWIdx = ((i % ARENA_WEAPON_IDS.length) + ARENA_WEAPON_IDS.length) % ARENA_WEAPON_IDS.length;
@@ -3745,6 +3798,7 @@ cv.addEventListener('click', () => {
   else if (scene === 'EVENT') eventClick(mouse.mx, mouse.my);
   else if (scene === 'RUNEND' || scene === 'RUNWIN') goMenu();
   else if (scene === 'MENU') menuClick(mouse.mx, mouse.my);
+  else if (scene === 'ARENASEL') arenaSelClick(mouse.mx, mouse.my);
   else if (scene === 'HQ') hqClick(mouse.mx, mouse.my);
   else if (scene === 'FINALE') finaleClick(mouse.mx, mouse.my);
   else if (scene === 'ENDING') endingAdvance();
@@ -3851,6 +3905,13 @@ window.addEventListener('keydown', e => {
   if (scene === 'SETTLE') { if (k === 'enter' || k === ' ') { if (settlePhase === 'PICK') settleSkip(); else if (settlePhase === 'DONE') settleAdvance(); } return; }   // 結算以滑鼠點選；Enter 略過/前進
   if (scene === 'EVENT') { if ((k === 'enter' || k === ' ') && eventPhase === 'DONE') eventAdvance(); return; }   // 事件以滑鼠點選；Enter 前進
   if (scene === 'SANDBOX') return;   // 設定畫面以 DOM 表單操作，不接遊戲鍵
+  if (scene === 'ARENASEL') {        // 試作場入口：數字鍵直選、Esc 回主選單
+    const keys = Object.keys(ARENA_MODES);
+    const n = parseInt(k, 10);
+    if (n >= 1 && n <= keys.length) { enterArena(keys[n - 1]); e.preventDefault(); return; }
+    if (k === 'escape' || k === 'backspace') { goMenu(); e.preventDefault(); }
+    return;
+  }
 
   // --- COMBAT ---
   if (introActive && k === 'escape') { skipIntro(); e.preventDefault(); return; }   // 第0關：Esc 跳過演出（休息關仍進）
@@ -3881,6 +3942,7 @@ window.addEventListener('keydown', e => {
     if (k === 'c') { arenaSetArmor(arenaArmorIdx + 1); e.preventDefault(); return; }   // C 換身上的甲（蓋掉道具鍵；試作場用不到道具）
     if (k === 'n') arenaNoFog = !arenaNoFog;                             // N 迷霧開關
     if (k === 'b') { arenaAllies = !arenaAllies; enterArena(); }         // B 有無扈從（重建）
+    if (k === 'escape' || k === 'backspace') { enterArenaSelect(); e.preventDefault(); return; }   // Esc 回試作場入口（換場地）
     if (k === 'm') { arenaMode = false; goMenu(); e.preventDefault(); return; }   // M 回主選單（戰役等原有功能）
   }
   if (k === 'g') debugView = !debugView;
@@ -4022,6 +4084,7 @@ function draw() {
   ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.fillStyle = CONFIG.fog.color; ctx.fillRect(0, 0, cv.width, cv.height);
 
+  if (scene === 'ARENASEL') { drawArenaSelect(); return; }
   if (scene === 'MENU') { drawMenu(); return; }
   if (scene === 'HQ') { drawHQ(); return; }
   if (scene === 'FINALE') { drawFinaleSetup(); return; }
@@ -4128,11 +4191,14 @@ function drawArenaHUD() {
     ctx.fillStyle = '#cdd6e0'; ctx.textAlign = 'right'; ctx.fillText(String(r[1]), sx + sw - 9, y); ctx.textAlign = 'left';
   });
   // 底部：熱鍵
-  const keysLine = `U 切換場地[${(ARENA_MODES[arenaNextMode()] || {}).label}] · 1-${ARENA_WEAPON_IDS.length}/Tab 換武器（${ARENA_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 換甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · V 不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板 · M 選單`;
-  ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(160,180,200,0.85)';
-  ctx.fillText(keysLine, cv.width / 2, cv.height - 112);
+  // 熱鍵提示分兩行（單行會超出畫布寬度被切掉，之前 U 鍵就是這樣「消失」的）
+  const line1 = `Esc 換場地選單 · U 直接切到[${(ARENA_MODES[arenaNextMode()] || {}).label}] · M 主選單 · T 重來 · Y 敵人開戰`;
+  const line2 = `1-${ARENA_WEAPON_IDS.length}/Tab 武器（${ARENA_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · V 不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 數值面板`;
+  ctx.textAlign = 'center'; ctx.font = '11px Consolas';
+  ctx.fillStyle = 'rgba(255,210,122,0.9)'; ctx.fillText(line1, cv.width / 2, cv.height - 126);
+  ctx.fillStyle = 'rgba(160,180,200,0.85)'; ctx.fillText(line2, cv.width / 2, cv.height - 112);
   ctx.fillStyle = 'rgba(127,227,255,0.8)';
-  ctx.fillText('左鍵=揮斬 · 右鍵=舉盾（舉起瞬間 ' + CONFIG.melee.parryWindow.toFixed(2) + 's 內擋下＝招架，對方硬直）', cv.width / 2, cv.height - 126);
+  ctx.fillText('左鍵=攻擊 · 右鍵=舉盾（舉起瞬間 ' + CONFIG.melee.parryWindow.toFixed(2) + 's 內擋下＝招架，對方硬直）', cv.width / 2, cv.height - 140);
   ctx.textAlign = 'left';
 }
 
@@ -5921,7 +5987,7 @@ function drawMenu() {
   ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 54px Consolas'; ctx.fillText('HOMEWARD', cv.width / 2, 116);
   ctx.fillStyle = 'rgba(205,214,224,0.6)'; ctx.font = '15px Consolas'; ctx.fillText('戰敗騎士的歸鄉之路 — 單一英雄動作 roguelite', cv.width / 2, 148);
   const items = [
-    { label: '⚔ 近戰試作場', desc: 'Phase 1 手感開發（開機預設）', fn: () => enterArena() },
+    { label: '⚔ 試作場', desc: 'Phase 1 手感開發（近戰 / 射擊；開機預設）', fn: () => enterArenaSelect() },
     { label: '戰役', desc: '序章 → 路線圖 run', fn: () => initRun() },
     { label: '自由戰鬥', desc: '自選小隊 + 地圖，打一場', fn: () => enterSandbox() },
     { label: '總部', desc: '花情報點解鎖內容 · 看戰況進度', fn: () => enterHQ() },
@@ -6239,7 +6305,7 @@ let __q = ''; try { __q = (typeof location !== 'undefined' && location.search) |
 if (/[?&]playtest\b/.test(__q)) bootPlaytest();
 else if (/[?&]sandbox\b/.test(__q) && sandboxEl) enterSandbox();
 else if (/[?&]campaign\b/.test(__q) || /[?&]menu\b/.test(__q)) goMenu();
-else { const am = /[?&]arena=(\w+)/.exec(__q); enterArena(am && ARENA_MODES[am[1]] ? am[1] : 'melee'); }
+else { const am = /[?&]arena=(\w+)/.exec(__q); if (am && ARENA_MODES[am[1]]) enterArena(am[1]); else enterArenaSelect(); }
 requestAnimationFrame(frame);
 </script>
 </body>
