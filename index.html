@@ -962,22 +962,17 @@ const ENEMY_TYPES = {
   dummy_armor:  enemyType('dummy_armor', { weaponId: 'knife',    personality: 'holder',  hue: 285, dummy: true }),       // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
 };
 const ENEMY_TYPE_IDS = Object.keys(ENEMY_TYPES);   // 正規 key（編輯器/新內容只能從這裡選）
-/* ── 舊 key → 中世紀 key 的對照（phase out 用）─────────────────────────
-   原版遺留地圖的 enemySpawns.type 仍在用左邊那組；resolveEnemyType 會轉成右邊的正規 key，
-   **並且單位身上存的 typeId 一律是正規 key**（Hooks/統計/測試看到的都是新名字）。
-   新地圖不得使用左邊那組——`_check.js` 會對標了 `medieval:true` 的地圖驗證。
-   等所有舊地圖都改寫完（Phase 4 手刻中世紀地圖），這張表整個刪掉即可。 */
-const LEGACY_ENEMY_ALIAS = {
-  grunt: 'footman', grunt_flank: 'footman_flank', dog: 'wolf',
-  heavy_lmg: 'serjeant', heavy_shot: 'manatarms', civ: 'civilian',
-};
+/* ── 敵種 key 的解析 ────────────────────────────────────────────────────
+   **LEGACY_ENEMY_ALIAS 已刪除**：所有地圖都中世紀化完畢（legacyEnemyUsage() 回 {}），
+   對照表完成了它的任務。留下的只是保底——未知 key 回預設兵種而不是讓整張圖炸掉。
+   （敵種只出現在程式定義的地圖裡，不存在使用者存檔中，所以刪掉不會弄壞任何人的進度。
+   `LEGACY_ART_ALIAS` 不同：術會被寫進 roster/倉庫的 localStorage，那張表必須留著。） */
 const _legacyWarned = new Set();
 function resolveEnemyType(id) {
   if (ENEMY_TYPES[id]) return id;
-  const to = LEGACY_ENEMY_ALIAS[id];
-  if (to) {
-    if (!_legacyWarned.has(id)) { _legacyWarned.add(id); try { console.warn(`[HOMEWARD] 舊敵種 key「${id}」→「${to}」。新地圖請改用中世紀 key（見 ENEMY_TYPE_IDS）。`); } catch (e) {} }
-    return to;
+  if (id && !_legacyWarned.has(id)) {
+    _legacyWarned.add(id);
+    try { console.warn(`[HOMEWARD] 未知敵種 key「${id}」→ 退回 footman。可用的見 ENEMY_TYPE_IDS。`); } catch (e) {}
   }
   return 'footman';
 }
@@ -1274,7 +1269,7 @@ const MAP_ARCHETYPE_IDS = MAP_ARCHETYPES.map(a => a.id);
 const MAPS = {
   // alpha＝開闊庭院：無橫貫隔牆，散置掩體島＋草叢＋3×3 路網＝可上/下繞到哨兵側後（繞背）、可叢間潛行。
   alpha: {
-    label: '開闊庭院', category: 'open', roles: ['normal'], tier: 1,   // roadmap 抽選標籤：category=類型(避免連續同類)、roles=可進哪些池、tier 1~3=難度(依進度抽)
+    label: '荒庭', category: 'open', roles: ['normal'], tier: 1, medieval: true,   // roadmap 抽選標籤：category=類型(避免連續同類)、roles=可進哪些池、tier 1~3=難度(依進度抽)
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1323,16 +1318,17 @@ const MAPS = {
     ],
     entryPoints: [{ x: 110, y: 360 }],
     extractionPoints: [{ x: 1190, y: 360 }],
+    // 課題＝**開闊地要用掩體島**：弓手從上路壓制，逼你在三組掩體島之間換位而不是直線衝。
     enemySpawns: [
-      { nodeId: 5, personality: 'flanker', facing: Math.PI },   // 中左哨（面向進場側）
-      { nodeId: 8, personality: 'rusher',  facing: Math.PI },   // 中右哨
-      { nodeId: 7, personality: 'flanker', facing: Math.PI },   // 上路哨
-      { nodeId: 12, type: 'heavy_shot',    facing: Math.PI },   // 右下霰彈兵
+      { nodeId: 5, type: 'levy', personality: 'flanker', facing: Math.PI },   // 中左哨（面向進場側）
+      { nodeId: 8, type: 'levy', personality: 'rusher',  facing: Math.PI },   // 中右哨
+      { nodeId: 7, type: 'archer',                       facing: Math.PI },   // 上路弓手：開闊地的壓制點
+      { nodeId: 12, type: 'manatarms',                   facing: Math.PI },   // 右下披甲士：唯一需要正經對付的
     ],
   },
   // bravo：3 區（兩道隔牆，缺口各一扇門）。中段藏閒置敵人＋低矮牆掩體；按鈕 b1 遠端開 door2 通往撤離。
   bravo: {
-    label: '門禁設施', category: 'facility', roles: ['normal', 'boss'], tier: 2,
+    label: '關隘', category: 'gate', roles: ['normal', 'boss'], tier: 2, medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 },
       { x1: 1240, y1: 40, x2: 1240, y2: 680 },
@@ -1370,17 +1366,19 @@ const MAPS = {
     ],
     entryPoints: [{ x: 110, y: 360 }],
     extractionPoints: [{ x: 1190, y: 360 }],
+    // 課題＝**門是節奏**：開門那一刻戰狼就撲上來，而軍士的廣掃在門口最痛。
     enemySpawns: [
-      { nodeId: 2, personality: 'flanker' },        // 步兵：門後（閒置、面向 door1）
-      { nodeId: 3, type: 'dog' },                    // 警犬：中段（開門即撲）
-      { nodeId: 4, type: 'heavy_lmg' },             // 重機槍兵：守中段、點放掃射
-      { nodeId: 6, type: 'heavy_shot' },            // 霰彈兵：右區（door2 後）
+      { nodeId: 2, type: 'footman', personality: 'flanker' },   // 徒步兵：門後（閒置、面向 door1）
+      { nodeId: 3, type: 'wolf' },                              // 戰狼：中段（開門即撲）
+      { nodeId: 4, type: 'serjeant' },                          // 軍士：守中段、雙手斧廣掃
+      { nodeId: 6, type: 'shieldman' },                         // 盾兵：右區（door2 後）＝別在門口亂按
     ],
     prisoners: [{ x: 980, y: 480 }],           // 右區門後的俘虜（救出並撤離→入隊）
   },
   // finale：最終真相挑戰用地圖（沿用 bravo 的可走結構＝保證合法導航，但敵配更硬、無俘虜）。
   finale: {
-    label: '設施 · 最終潛入', category: 'facility', roles: ['boss'], tier: 3,
+    // **擱置中**（使用者定案）：roles 清空＝不進任何抽選池。資料保留，Phase 4 手刻終局時再啟用。
+    label: '（擱置）最終潛入', category: 'gate', roles: [], tier: 3, medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 },
       { x1: 1240, y1: 40, x2: 1240, y2: 680 },
@@ -1418,19 +1416,19 @@ const MAPS = {
     entryPoints: [{ x: 110, y: 360 }],
     extractionPoints: [{ x: 1190, y: 360 }],
     enemySpawns: [
-      { nodeId: 1, personality: 'rusher' },
-      { nodeId: 2, personality: 'flanker' },
-      { nodeId: 3, type: 'dog' },
-      { nodeId: 4, type: 'heavy_lmg' },
-      { nodeId: 5, type: 'heavy_shot' },
-      { nodeId: 6, type: 'heavy_lmg' },
-      { nodeId: 7, personality: 'flanker' },
+      { nodeId: 1, type: 'footman', personality: 'rusher' },
+      { nodeId: 2, type: 'footman', personality: 'flanker' },
+      { nodeId: 3, type: 'wolf' },
+      { nodeId: 4, type: 'serjeant' },
+      { nodeId: 5, type: 'shieldman' },
+      { nodeId: 6, type: 'serjeant' },
+      { nodeId: 7, type: 'footman_flank' },
     ],
     timeBudget: 200,
   },
   // riot：暴動街區（多陣營前置作業）。駐軍(東·守·面西) vs 暴民(北/中·推·面東) 開幕互毆；玩家從西南進、趁亂繞到東側撤離。
   riot: {
-    label: '暴動街區', category: 'urban', roles: ['normal'], tier: 2, eventMap: true,
+    label: '暴動村鎮', category: 'urban', roles: ['normal'], tier: 2, eventMap: true, medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1471,22 +1469,24 @@ const MAPS = {
     ],
     entryPoints: [{ x: 110, y: 560 }],
     extractionPoints: [{ x: 1190, y: 360 }],
+    // 課題＝**別當第三方的靶**：領主駐軍與民變已經在打，你走進去就是第三個陣營。
+    // 站在旁邊等他們互相消耗，士氣拉鋸會自己替你解決一半。
     enemySpawns: [
-      // 駐軍（faction enemy）：東側守、面西（朝暴民/玩家）
-      { nodeId: 10, type: 'heavy_lmg', faction: 'enemy', facing: Math.PI },
-      { nodeId: 11, type: 'heavy_shot', faction: 'enemy', facing: Math.PI },
-      { nodeId: 9, type: 'grunt', faction: 'enemy', facing: Math.PI },
-      // 暴民（faction rioter）：北/中推進、面東（朝駐軍）
-      { nodeId: 5, type: 'grunt', personality: 'rusher', faction: 'rioter', facing: 0 },
-      { nodeId: 8, type: 'grunt_flank', faction: 'rioter', facing: 0 },
-      { nodeId: 2, type: 'grunt', personality: 'rusher', faction: 'rioter', facing: 0 },
-      { nodeId: 4, type: 'grunt', personality: 'rusher', faction: 'rioter', facing: 0 },
+      // 領主駐軍（faction enemy）：東側守、面西（朝民變/玩家）
+      { nodeId: 10, type: 'serjeant',  faction: 'enemy', facing: Math.PI },
+      { nodeId: 11, type: 'shieldman', faction: 'enemy', facing: Math.PI },
+      { nodeId: 9,  type: 'archer',    faction: 'enemy', facing: Math.PI },
+      // 民變（faction rioter）：北/中推進、面東（朝駐軍）＝一群拿農具的農兵，人多但一崩就垮
+      { nodeId: 5, type: 'levy', personality: 'rusher', faction: 'rioter', facing: 0 },
+      { nodeId: 8, type: 'footman_flank',               faction: 'rioter', facing: 0 },
+      { nodeId: 2, type: 'levy', personality: 'rusher', faction: 'rioter', facing: 0 },
+      { nodeId: 4, type: 'levy', personality: 'rusher', faction: 'rioter', facing: 0 },
     ],
     prisoners: [],
   },
   // vault：金庫（密封容器驗證關）。雙開關(守備房A/B)→雙層門(airlock)→金庫內密封容器；撿走撤離才開封。
   vault: {
-    label: '金庫', category: 'vault', roles: ['normal'], tier: 2, eventMap: true,
+    label: '地窖寶庫', category: 'vault', roles: ['normal'], tier: 2, eventMap: true, medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1528,10 +1528,11 @@ const MAPS = {
     ],
     entryPoints: [{ x: 110, y: 360 }],
     extractionPoints: [{ x: 1150, y: 620 }],
+    // 課題＝**窄室裡的破甲**：兩間守備房都關著門，弩手在室內一發很重，門口的軍士退無可退。
     enemySpawns: [
-      { nodeId: 1, type: 'grunt', facing: 0 }, { nodeId: 1, type: 'grunt_flank' },        // 守備房A
-      { nodeId: 2, type: 'grunt', facing: 0 }, { nodeId: 2, type: 'heavy_shot' },          // 守備房B
-      { nodeId: 4, type: 'heavy_lmg', facing: Math.PI },                                   // 金庫入口前守衛
+      { nodeId: 1, type: 'footman', facing: 0 }, { nodeId: 1, type: 'footman_flank' },   // 守備房A
+      { nodeId: 2, type: 'footman', facing: 0 }, { nodeId: 2, type: 'arbalest' },         // 守備房B：弩手
+      { nodeId: 4, type: 'serjeant', facing: Math.PI },                                   // 寶庫入口前守衛
     ],
     caches: [{ x: 1080, y: 360 }],   // ★密封容器：金庫內、雙層門後
     prisoners: [],
@@ -1539,7 +1540,8 @@ const MAPS = {
   // intro：第0關（序章/教學）。管制室(左) → 控制台 → 出口門(x900) → 守衛廊道 → 撤離(右)。
   // 主角/同僚/守衛由 startIntro 以腳本放置，非 enemySpawns；timeBudget 由 startIntro 設超大（無追兵）。
   intro: {
-    label: '管制室',
+    label: '（擱置）序章',   // **擱置中**：initRun 直接進路線圖，不再播序章
+    medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 },
       { x1: 1240, y1: 40, x2: 1240, y2: 680 },
@@ -1621,7 +1623,7 @@ const MAPS = {
     prisoners: [],
   },
   meet: {   // 路上相遇：開闊小空地，男孩站右側面向玩家(在玩家視野內、和平談話)
-    label: '路上相遇', width: 880, height: 520, eventMap: true,
+    label: '路上相遇', width: 880, height: 520, eventMap: true, medieval: true,
     walls: [...rectWalls(40, 40, 840, 480)],
     doors: [], lowWalls: [], bushes: [], destructibles: [], areas: [], buttons: [],
     waypoints: [
@@ -1632,11 +1634,11 @@ const MAPS = {
     edges: [[0, 1], [1, 2]],
     entryPoints: [{ x: 120, y: 260 }],
     extractionPoints: [{ x: 810, y: 260 }],
-    enemySpawns: [{ nodeId: 2, type: 'civ', facing: Math.PI }],   // 男孩：右側、面向左(玩家進場方向)
+    enemySpawns: [{ nodeId: 2, type: 'civilian', facing: Math.PI }],   // 男孩：右側、面向左(玩家進場方向)
     prisoners: [],
   },
   ambush: {   // 巷弄伏擊：玩家從左進、撤在右；男孩躲在掩體後側翼(玩家進場視野外)＝解鎖即被攻擊
-    label: '巷弄伏擊', width: 820, height: 560, eventMap: true,
+    label: '林道伏擊', width: 820, height: 560, eventMap: true, medieval: true,
     walls: [...rectWalls(40, 40, 780, 520), ...rectWalls(360, 120, 460, 260)],   // 中上一塊掩體柱
     doors: [], lowWalls: [],
     bushes: [{ x: 520, y: 360, w: 150, h: 120 }],   // 男孩藏身的暗處
@@ -1650,12 +1652,12 @@ const MAPS = {
     edges: [[0, 1], [1, 2], [1, 3]],
     entryPoints: [{ x: 120, y: 300 }],
     extractionPoints: [{ x: 740, y: 200 }],
-    enemySpawns: [{ nodeId: 2, type: 'civ', facing: -Math.PI / 2 }],   // 男孩埋伏在側翼暗處、面向玩家動線
+    enemySpawns: [{ nodeId: 2, type: 'civilian', facing: -Math.PI / 2 }],   // 男孩埋伏在側翼暗處、面向玩家動線
     prisoners: [],
   },
   // outpost v2＝前哨站：兩處哨點改用「中央短牆＋上下繞道」(不再整道隔牆)，可繞過哨兵側後或叢間潛行。
   outpost: {
-    label: '前哨站', category: 'outpost', roles: ['normal', 'boss'], tier: 2,
+    label: '哨塔', category: 'outpost', roles: ['normal', 'boss'], tier: 2, medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1686,17 +1688,18 @@ const MAPS = {
     edges: [[0, 1], [1, 2], [1, 3], [2, 4], [3, 4], [4, 5], [5, 6], [5, 7], [6, 8], [7, 8], [8, 9]],
     entryPoints: [{ x: 110, y: 360 }],
     extractionPoints: [{ x: 1190, y: 360 }],
+    // 課題＝**兩道哨卡各有繞道**：CP2 的軍士帶甲，正面砍不動，繞背或用高穿甲才划算。
     enemySpawns: [
-      { nodeId: 4, personality: 'flanker', facing: Math.PI },   // CP1 哨兵（短牆後，面向進場側）
-      { nodeId: 3, personality: 'rusher',  facing: Math.PI },   // CP1 下繞道哨
-      { nodeId: 8, type: 'heavy_lmg',      facing: Math.PI },   // CP2 重哨（帶甲，逼繞背/消音）
-      { nodeId: 7, type: 'heavy_shot',     facing: Math.PI },   // CP2 下繞道守衛
+      { nodeId: 4, type: 'footman_flank',  facing: Math.PI },   // CP1 哨兵（短牆後，面向進場側）
+      { nodeId: 3, type: 'levy', personality: 'rusher', facing: Math.PI },   // CP1 下繞道哨
+      { nodeId: 8, type: 'serjeant',       facing: Math.PI },   // CP2 重哨（帶甲，逼繞背/破甲）
+      { nodeId: 7, type: 'shieldman',      facing: Math.PI },   // CP2 下繞道守衛
     ],
     prisoners: [],
   },
   // lanes＝雙線哨廊：兩道平行低矮牆(看得過去/可越)把場地分三道，缺口對齊連接點＝可換道繞到哨兵側後。
   lanes: {
-    label: '雙線哨廊', category: 'corridor', roles: ['normal'], tier: 1,
+    label: '雙線迴廊', category: 'corridor', roles: ['normal'], tier: 1, medieval: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1733,11 +1736,12 @@ const MAPS = {
     ],
     entryPoints: [{ x: 110, y: 360 }],
     extractionPoints: [{ x: 1190, y: 360 }],
+    // 課題＝**換道**：中道被槍兵的長 reach 封住，正面進不去；低矮牆看得過去，缺口才是路。
     enemySpawns: [
-      { nodeId: 2, personality: 'rusher',  facing: Math.PI },   // 中道左哨
-      { nodeId: 1, personality: 'flanker', facing: Math.PI },   // 上道哨
-      { nodeId: 8, type: 'heavy_lmg',      facing: Math.PI },   // 中道重機槍（換道繞背或穿甲）
-      { nodeId: 12, type: 'heavy_shot',    facing: Math.PI },   // 下道右守衛
+      { nodeId: 2, type: 'spearman',      facing: Math.PI },   // 中道左哨：長 reach 封住正面
+      { nodeId: 1, type: 'archer',        facing: Math.PI },   // 上道弓手：越過低矮牆射你
+      { nodeId: 8, type: 'serjeant',      facing: Math.PI },   // 中道重裝（換道繞背或破甲）
+      { nodeId: 12, type: 'footman_flank', facing: Math.PI },  // 下道右守衛
     ],
   },
 };
@@ -2151,7 +2155,12 @@ function initRun() {
   genRoadmap();   // 本局程序生成路線圖（吃種子）
   roadCompleted = new Set(); roadCurrent = null; roadAvailable = roadmap.start.slice();
   result = null; lastSummary = null; loseReason = ''; fileDrop = null;
-  startIntro();   // 第0關（序章/教學）：每局都播、可 Esc 跳過 → 之後進序章休息 → 路線圖
+  /* **序章擱置中**（使用者定案）：直接進路線圖。
+     原本是 startIntro() → 序章休息 → 路線圖，但那一關是原版的間諜題材（管制室/同僚/控制台），
+     中世紀化要整段重寫敘事，屬於 Phase 4。在那之前每局都播一段不合題材的教學只會擋路。
+     startIntro/intro 地圖都保留著，Phase 4 重寫開場時直接接回來即可。 */
+  introActive = false; cutscene = null;
+  scene = 'MAP'; releasePointer();
 }
 
 // 在路線圖選擇一個可前往的節點
@@ -2630,7 +2639,7 @@ function startIntro() {
   players = [makePlayer(0, introCast[0], { x: 390, y: 240 })];
   players[0].facing = Math.PI / 2; players[0].state = 'CONTROLLED'; controlledId = 0;
   // 同僚＝enemy 單位（讓玩家子彈打得到；IDLE 不交戰；被貼背＝繞背爆擊）
-  const victim = makeEnemy(0, 'rusher', false, Math.PI / 2, 'grunt');
+  const victim = makeEnemy(0, 'rusher', false, Math.PI / 2, 'footman');
   victim.pos = { x: 320, y: 240 }; victim.facing = Math.PI / 2; victim.hp = victim.maxHp = 30;
   enemies = [victim];
   introGuards = []; introConsole = null;
