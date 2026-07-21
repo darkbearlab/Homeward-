@@ -182,6 +182,10 @@ const CONFIG = {
     // AI 近接打在我方身上的傷害倍率。敵我共用同一份 WEAPONS，但這是「英雄 vs 群體」的遊戲：
     // 不下修的話，騎士 4 刀就會被砍死（100hp ÷ 30dmg），而清掉 3 隻雜兵要 9 刀＝數學上必輸。
     meleeDmgMul: 0.45,
+    // AI 遠程的「瞄準」時間：原版是看到就射（沒有蓄力期＝沒有東西可以預告）。
+    // 有了它，AI 射擊才有前搖可以畫預告長方形；填滿的瞬間＝放箭的瞬間。
+    // 玩家不受此限（手動射擊仍是即時）。個別武器可用 WEAPONS[id].aimTime 覆寫。
+    aimTime: 0.45,
     // 敵人武器＝WEAPONS.carbine（已入目錄、可掉落/撿取/裝備）；數值在 WEAPONS 調整
   },
 
@@ -245,8 +249,9 @@ const WEAPONS = {
   // ===== HOMEWARD 中世紀遠程（Phase 2 的先遣；試作場 6/7 鍵可試）=====
   // 穿甲軸的遠程擔當（原版 rifle 0.5 / DMR 0.9 的位置）：長弓＝反人員、十字弓＝破甲。
   // magazine 1 + reloadTime＝每發搭箭/絞弦；特定魔法（火矢等）之後進 Phase 2 一樣走此管線。
-  longbow: { name: '長弓',   rarity: 'common',   weight: 1.2, damage: 26, fireRate: 1.4, range: 1200, projSpeed: 640, spreadBase: 1.6, spreadPerShot: 0.8, spreadMax: 6, spreadRecover: 9, magazine: 1, reloadTime: 1.0, turnSpeed: 520, pierce: 0.15 },
-  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85 },
+  // aimTime＝AI 射這把武器前的瞄準時間（＝預告長方形填滿所需秒數）；玩家不受此限
+  longbow: { name: '長弓',   rarity: 'common',   weight: 1.2, damage: 26, fireRate: 1.4, range: 1200, projSpeed: 640, spreadBase: 1.6, spreadPerShot: 0.8, spreadMax: 6, spreadRecover: 9, magazine: 1, reloadTime: 1.0, turnSpeed: 520, pierce: 0.15, aimTime: 0.5 },
+  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85, aimTime: 0.75 },   // 重弩＝瞄得久、但一發很痛
   // 局外解鎖武器（情報點；解鎖後才進招募/loot 池，仍 RNG 取得）
   ar:      { name: 'Assault Rifle', rarity: 'uncommon', weight: 1.6, damage: 18, fireRate: 9, range: 1500, projSpeed: 820, spreadBase: 1.8, spreadPerShot: 1.8, spreadMax: 12, spreadRecover: 9, magazine: 30, reloadTime: 1.7, turnSpeed: 460, pierce: 0.6 },   // 穩定中距、過半穿甲
   revolver:{ name: 'Revolver',      rarity: 'uncommon', weight: 0.7, damage: 30, fireRate: 3, range: 1500,  projSpeed: 760, spreadBase: 1.6, spreadPerShot: 1.2, spreadMax: 8,  spreadRecover: 9, magazine: 6,  reloadTime: 1.6, turnSpeed: 540, pierce: 0.7 },   // 副武器級、單發高穿甲
@@ -331,6 +336,8 @@ CONFIG.melee = {
   tgEdge: 0.95,            // 推進中的前緣亮度
   tgEdgeWidth: 3.5,        // 前緣線寬
   tgFullFlash: 0.5,        // 填滿瞬間額外的閃白強度
+  tgBeamHalfW: 5,          // 遠程預告的長方形半寬（px）＝彈道走廊的視覺粗細
+  tgBeamMaxLen: 900,       // 遠程預告畫多長（會再被牆截斷；不畫滿整個射程免得洗版）
   hitstopBlocked: 0.05,    // 被格擋時的頓幀（金屬撞擊感）
   shakeHit: 5,             // 近接命中的螢幕震動
   arcFadeT: 0.22,          // 揮斬弧特效殘留秒數
@@ -1718,6 +1725,7 @@ function makePlayer(i, cfg, pos) {
     caches: 0,                             // 運搬中的密封容器數（每場撿取，撤離開封；不跨關）
     senseRadius: CONFIG.vision.senseRadius * (cfg.strength || 1) * (fx.senseMul || 1) * pSense,
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接：揮斬狀態機 / 盾格 / 硬直 / 擊退速度 / 招架特效
+    aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（扈從也吃；騎士手動射擊不經此）
     poiseMax: CONFIG.melee.poiseKnight, poise: CONFIG.melee.poiseKnight, poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗
     stamMax: CONFIG.melee.stamMax, stam: CONFIG.melee.stamMax, stamT: -99,                   // 耐力：揮擊/格擋/奔跑的成本
     poiseBreakFxT: 0, guardBreakFxT: 0, flinchFxT: 0, noStamFxT: 0,
@@ -1745,6 +1753,7 @@ function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.P
     burstLeft: (W.burst ? W.burst.size : 0), burstCd: 0,   // 重機槍點放節奏
     currentNode: nodeId, targetNode: nodeId, reservedNode: null,
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接（敵人拿近接武器時同樣走揮斬管線）
+    aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（＝預告長方形的填滿進度）
     poiseMax: TYPE.poise || CONFIG.melee.poiseDefault, poise: TYPE.poise || CONFIG.melee.poiseDefault, poiseHitT: -99,
     stamMax: 0, stam: 0, stamT: -99,   // 敵人不管理耐力（AI 不會用；壓力靠體幹 + 攻擊權）
     poiseBreakFxT: 0, guardBreakFxT: 0, flinchFxT: 0, noStamFxT: 0,
@@ -3023,10 +3032,28 @@ function setStance(u, s) { if (u && (s === 'engage' || s === 'defend')) { u.stan
 // 手動：基礎+連射 bloom（玩家扳機紀律＝技巧）。敵人：同手動會 bloom。
 const manualFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (isScoping() ? CONFIG.scope.spreadMul : 1), 1, u.weapon.spreadPerShot);   // 望遠＝降發散穩定
 const enemyFire  = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (u.suppressedT > 0 ? CONFIG.passive.suppressSpread : 1) * (1 + flashF(u) * CONFIG.flash.spreadAdd), 1, u.weapon.spreadPerShot);   // 被壓制/閃光暈眩＝發散變大
+/* AI 遠程的「瞄準」閘門：原版是看到就射，沒有前搖＝沒有東西可以預告。
+   這裡給 AI（敵人與扈從皆同，對稱才公平）加一段瞄準期，期間 telegraphOf 會回傳長方形彈道預告，
+   **填滿的瞬間就是放箭的瞬間**。玩家的手動射擊不經過這裡＝仍是即時。
+   回傳 true＝這一幀可以射。 */
+const aimTimeOf = (u) => (u.weapon.aimTime != null ? u.weapon.aimTime : CONFIG.enemy.aimTime);
+function aimGate(u, dt, midBurst) {
+  if (u.weapon.melee) return true;                       // 近接走揮斬的前搖，不經此
+  const need = midBurst ? 0 : aimTimeOf(u);
+  if (need <= 0) return true;
+  if (u.fireCooldown > 0 || u.reloadT > 0 || u.swapT > 0) { u.aimT = 0; return false; }   // 裝填/冷卻中不算瞄準（免得預告畫了卻射不出來）
+  u.aimDur = need;
+  u.aimT = (u.aimT || 0) + dt;
+  if (u.aimT < need) return false;
+  u.aimT = 0;
+  return true;
+}
 // 敵人攻擊分派：ranged＝持續射擊（霰彈靠武器 pellets 自動多發）；burst＝點放掃射（打 size 發→停 gap 秒）
 // 友軍誤傷：AI 的遠程攻擊在射線被自己人擋住時收火（近接是短距離掃擊，不套這條，否則 AI 會完全不敢動手）
 function enemyAttack(e, ang, dt) {
-  if (!e.weapon.melee && friendlyInLineOfFire(e, { x: e.pos.x + Math.cos(ang) * e.weapon.range, y: e.pos.y + Math.sin(ang) * e.weapon.range })) { e.holdFireT = 0.2; return; }
+  if (!e.weapon.melee && friendlyInLineOfFire(e, { x: e.pos.x + Math.cos(ang) * e.weapon.range, y: e.pos.y + Math.sin(ang) * e.weapon.range })) { e.holdFireT = 0.2; e.aimT = 0; return; }
+  const midBurst = (e.attack === 'burst' && e.weapon.burst && e.burstLeft < e.weapon.burst.size);   // 連射中段不重新瞄
+  if (!aimGate(e, dt, midBurst)) return;
   if (e.attack !== 'burst') { enemyFire(e, ang); return; }
   if (e.burstCd > 0) { e.burstCd -= dt; return; }   // 連發後停頓（讓 bloom 回復＝掃射節奏）
   if (enemyFire(e, ang)) { e.burstLeft--; if (e.burstLeft <= 0) { e.burstLeft = e.weapon.burst.size; e.burstCd = e.weapon.burst.gap; } }
@@ -3355,7 +3382,9 @@ function idleTick(u, dt, lockFacing) {
   if (mayFire && u.engageTimer >= reactDelay) {
     const ang = angTo(u.pos, target.pos);
     // 友軍誤傷：扈從的自動射擊也要看射線（別把騎士打死）。近接不套（短距離掃擊）
-    if (!u.weapon.melee && friendlyInLineOfFire(u, target.pos)) { u.holdFireT = 0.2; return; }
+    if (!u.weapon.melee && friendlyInLineOfFire(u, target.pos)) { u.holdFireT = 0.2; u.aimT = 0; return; }
+    // 瞄準閘門：扈從與敵人一樣要瞄（對稱），瞄準期間畫出彈道預告＝FF 開啟下你看得到別站進去
+    if (!aimGate(u, dt, st.discipline !== 'AUTO' && u.burstLeft < CONFIG.idleTap.size)) return;
     if (st.discipline === 'AUTO') {
       idleEngageFire(u, ang);                              // 扣到底：持續噴、bloom 拉滿、耗彈快
     } else {                                               // TAP 點放：短 burst + 停頓讓 bloom 回復
@@ -3638,9 +3667,9 @@ function enemyTick(e, dt) {
     const ang = angTo(e.pos, aimPos);
     e.facing = rotToward(e.facing, ang, turn * 2);
     if (inRange && !threatOnly && token) { e.engageTimer += dt; if (e.engageTimer >= CONFIG.enemy.reactionDelay) enemyAttack(e, ang, dt); }   // 只憑來向記憶＝先朝來向推進/回頭，不對空地開火；親眼看到真目標才射；近接還需攻擊權
-    else e.engageTimer = 0;
+    else { e.engageTimer = 0; e.aimT = 0; }   // 沒得射＝瞄準歸零（預告不能留在畫面上）
   } else {
-    e.engageTimer = 0;
+    e.engageTimer = 0; e.aimT = 0;
     e.facing = rotToward(e.facing, angTo(e.pos, watchPoint(e, fKnown)), turn);  // 朝已知位置那側推進
   }
   openDoorsNear(e, false);   // 交戰中只開不關（追擊破門）
@@ -4144,10 +4173,21 @@ function drawArenaHUD() {
     ['cleave', W.cleave], ['擊退距離', Math.round((W.knock || 0) / CONFIG.melee.knockDecay) + 'px'],
     ['背刺', '×' + (W.backstabMul || 1)],
     ['穿甲 vs 重裝(0.85)', Math.round(0.85 * (1 - W.pierce) * 100) + '% 被彈開'],
-  ] : [
-    ['傷害', W.damage], ['穿甲', W.pierce], ['射速', W.fireRate + '/s'], ['裝填', W.reloadTime + 's'],
-    ['穿甲 vs 重裝(0.85)', Math.round(0.85 * (1 - W.pierce) * 100) + '% 被彈開'],
-  ];
+  ] : (function () {
+    // 彈速：實際速度 = projSpeed × CONFIG.juice.bulletSpeedMul（原版設 4 讓槍戰接近 hitscan）
+    // 這裡把「實際速度」與「飛 500px 要多久」算出來，調慢彈道時有數字可依據。
+    const eff = W.projSpeed * CONFIG.juice.bulletSpeedMul;
+    return [
+      ['傷害', W.damage], ['穿甲', W.pierce], ['射速', W.fireRate + '/s'], ['裝填', W.reloadTime + 's'],
+      ['射程', W.range],
+      ['彈速(基礎)', W.projSpeed],
+      ['彈速倍率', '×' + CONFIG.juice.bulletSpeedMul],
+      ['實際彈速', Math.round(eff) + ' px/s'],
+      ['飛 500px', (500 / eff).toFixed(3) + 's'],
+      ['AI 瞄準時間', (W.aimTime != null ? W.aimTime : CONFIG.enemy.aimTime) + 's'],
+      ['穿甲 vs 重裝(0.85)', Math.round(0.85 * (1 - W.pierce) * 100) + '% 被彈開'],
+    ];
+  })();
   const AR = ARMORS[k.armorId] || ARMORS.none;
   rows.push(['—', '']);
   rows.push(['身上的甲', AR.name + '（C 換）']);
@@ -4508,36 +4548,59 @@ function drawParticles() {
    telegraphOf() 是通用接縫：現在只回近接（讀前搖進度），將來遠程加一個分支即可共用同一套視覺。 */
 function telegraphOf(u) {
   if (!CONFIG.melee.tgEnabled) return null;
-  if (u.faction === 'player') return null;            // 只預告 AI 的攻擊（玩家自己的刀不用預告）
-  const W = u.weapon, s = u.swing;
-  if (W && W.melee && s && s.t < s.windup) {          // 近接：前搖期間
+  if (u.id === KNIGHT_ID && u.faction === 'player') return null;   // 只跳過騎士本人；扈從照畫（FF 開著，你要看得到別站進他們的火線）
+  const W = u.weapon; if (!W) return null;
+  const s = u.swing;
+  if (W.melee && s && s.t < s.windup) {               // 近接：前搖期間＝扇形
     return {
+      kind: 'arc',
       p: clamp(s.t / Math.max(0.001, s.windup), 0, 1),
       reach: W.reach || W.range,
       half: (W.arcDeg || 90) * Math.PI / 360,
-      thrust: W.swingStyle === 'thrust',
     };
   }
-  // TODO(遠程)：瞄準/舉弓期間回 { p: 蓄力進度, reach: 射程, half: 散布半角, thrust: true }
+  if (!W.melee && u.aimT > 0 && u.aimDur > 0) {       // 遠程：瞄準期間＝長方形彈道走廊（被牆截斷）
+    const maxLen = Math.min(W.range, CONFIG.melee.tgBeamMaxLen);
+    return {
+      kind: 'beam',
+      p: clamp(u.aimT / u.aimDur, 0, 1),
+      len: dist(u.pos, rayHit(u.pos, u.facing, maxLen)),   // rayHit 回傳的是「落點座標」不是距離
+      halfW: CONFIG.melee.tgBeamHalfW,
+    };
+  }
   return null;
 }
 function drawTelegraph(u) {
   const T = telegraphOf(u); if (!T) return;
   const M = CONFIG.melee;
-  const a0 = u.facing - T.half, a1 = u.facing + T.half;
-  const r = T.reach * T.p;                              // 擴散半徑：填到末端＝攻擊落下
   const full = T.p > 0.92;
   const warn = full ? '255,238,190' : '255,110,90';     // 快打到時轉亮＝最後的警告
-  // ① 完整範圍的輪廓：一出手就看得到「最終會掃到哪」
+  const fill = `rgba(${warn},${M.tgFill + (full ? M.tgFullFlash * 0.3 : 0)})`;
+  const edge = `rgba(${warn},${M.tgEdge})`;
+  if (T.kind === 'beam') {
+    // 長方形彈道走廊：沿 facing 的長條，由射手往外填滿；填滿的瞬間＝放箭
+    ctx.save();
+    ctx.translate(u.pos.x, u.pos.y); ctx.rotate(u.facing);
+    const w = T.halfW * 2, L = T.len, fillLen = L * T.p;
+    ctx.strokeStyle = `rgba(255,110,90,${M.tgOutline})`; ctx.lineWidth = 1.2;   // ① 完整彈道輪廓
+    ctx.strokeRect(0, -T.halfW, L, w);
+    ctx.fillStyle = fill;                                                       // ② 由射手往外填滿
+    ctx.fillRect(0, -T.halfW, Math.max(1, fillLen), w);
+    ctx.strokeStyle = edge; ctx.lineWidth = M.tgEdgeWidth * (full ? 1.6 : 1);   // ③ 推進中的前緣
+    ctx.beginPath(); ctx.moveTo(fillLen, -T.halfW - 2); ctx.lineTo(fillLen, T.halfW + 2); ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  // 近接：扇形（由中心擴散）
+  const a0 = u.facing - T.half, a1 = u.facing + T.half;
+  const r = T.reach * T.p;
   ctx.strokeStyle = `rgba(255,110,90,${M.tgOutline})`; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y);
   ctx.arc(u.pos.x, u.pos.y, T.reach, a0, a1); ctx.closePath(); ctx.stroke();
-  // ② 由中心擴散的填滿
-  ctx.fillStyle = `rgba(${warn},${M.tgFill + (full ? M.tgFullFlash * 0.3 : 0)})`;
+  ctx.fillStyle = fill;
   ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y);
   ctx.arc(u.pos.x, u.pos.y, Math.max(1, r), a0, a1); ctx.closePath(); ctx.fill();
-  // ③ 推進中的前緣（就是「還有多久打到」的那條線）
-  ctx.strokeStyle = `rgba(${warn},${M.tgEdge})`; ctx.lineWidth = M.tgEdgeWidth * (full ? 1.6 : 1);
+  ctx.strokeStyle = edge; ctx.lineWidth = M.tgEdgeWidth * (full ? 1.6 : 1);
   ctx.beginPath(); ctx.arc(u.pos.x, u.pos.y, Math.max(1, r), a0, a1); ctx.stroke();
 }
 
@@ -4571,8 +4634,8 @@ function drawMeleeFx(list) {
       const edge = foe ? '255,140,120' : '255,246,215';
       const body = foe ? '255,90,80' : '255,228,170';
       const blade = (off, rf) => ({ a: u.facing + off, r: reach * rf });
-      // AI 的前搖已由 drawTelegraph 畫成「擴散填滿的預告」＝不再重複畫刀身預備動作
-      if (inWindup && foe) continue;
+      // 前搖已由 drawTelegraph 畫成「擴散填滿的預告」的單位（＝騎士以外全部）不再重複畫刀身預備動作
+      if (inWindup && !(u.id === KNIGHT_ID && u.faction === 'player')) continue;
       if (thrust) {
         // 突刺：一條沿正前方推出去的刀（前搖時縮著、判定窗內刺滿）
         const b = blade(0, inWindup ? CONFIG.melee.thrustMinReachF * 0.8 : s.reachF);
