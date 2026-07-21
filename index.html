@@ -832,6 +832,18 @@ const RECRUIT_CLASS_IDS = ['levy', 'footman', 'spearman', 'archer'];
 // 原型 → 預設兵種（身體與行為是兩件事，但預設要合理：斥候輕、陷陣與固守是正規步兵）。
 // 這只是預設，roster 的 classId 可覆寫（將來「招募到一名披甲士」就走這條）。
 const ARCH_DEFAULT_CLASS = { anchor: 'footman', spearhead: 'footman', ranger: 'archer' };
+/* ── 兵種班底（使用者定案：扈從裝備由兵種決定、不可自由編輯）──────────────
+   「扈從＝敵人」現在是完整的：**同兵種的扈從與敵人不只身體一致，連武器/盾/甲都一致**。
+   所以「這次招到的是弓手還是槍兵」是真的結果，撿到什麼都能重配的話這個結果就不存在了。
+   各兵種對到同名敵種的 weaponId＝敵我拿一樣的傢伙。armorId 由兵種給（正規步兵沒甲，
+   跟敵方的 footman/archer 一樣脆——他們的價值在數量與陣型，不在硬度）。 */
+const CLASS_LOADOUT = {
+  levy:     { weaponId: 'club',    offId: null,     armorId: 'none' },
+  footman:  { weaponId: 'sword',   offId: 'buckler', armorId: 'gambeson' },
+  spearman: { weaponId: 'spear',   offId: null,     armorId: 'gambeson' },   // 長槍雙手＝不能帶盾
+  archer:   { weaponId: 'longbow', offId: null,     armorId: 'none' },        // 長弓雙手＝不能帶盾
+};
+const classLoadout = (classId) => CLASS_LOADOUT[classId] || CLASS_LOADOUT.footman;
 // 我方單位的移速。騎士刻意仍讀 CONFIG.moveSpeed——那是數值面板要能**即時**調的旋鈕；
 // 扈從則吃自己兵種的值（敵人那邊本來就是讀 e.moveSpeed，於是兩邊終於是同一件事）。
 function spdOf(u) {
@@ -951,14 +963,17 @@ const rosterClass = (r) => classOf(r.classId || ARCH_DEFAULT_CLASS[r.archetypeId
 function makeRecruit(used) {
   let name = rngPick(UNIT_NAMES);
   if (used) { let g = 0; while (used.has(name) && g++ < 50) name = rngPick(UNIT_NAMES); used.add(name); }
-  // **兵種與原型各擲一次**：兵種是身體（hp/體幹/移速），原型是行為（磐石/先鋒/遊獵）。
-  // 兩者分開擲才會出現「體格像農兵但打法是先鋒」這種人——招募到誰因此真的有差別。
+  // **兵種與原型各擲一次**：兵種是身體＋裝備（hp/體幹/移速/武器/盾/甲），原型是行為（磐石/先鋒/遊獵）。
+  // 兩者分開擲才會出現「弓手打法卻是陷陣」這種人——招募到誰因此真的有差別。
   const classId = rngPick(RECRUIT_CLASS_IDS);
+  const kit = classLoadout(classId);
   return { name, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]), classId,
-    weaponId: rngPick(availPool('weapon', RECRUIT_WEAPON_IDS)), abilityId: 'mend', archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
-    weaponId2: FLOOR_WEAPON, allocatedAmmo2: 0,   // 副武器（預設 pistol 底線後備；X 換槍）
+    // **裝備由兵種決定，不可自由編輯**（使用者定案）。弓手就是帶弓、槍兵帶槍。
+    weaponId: kit.weaponId, offId: kit.offId, armorId: kit.armorId, abilityId: 'mend',
+    archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
+    weaponId2: FLOOR_WEAPON, allocatedAmmo2: 0,   // 副手武器：底線短刀（被貼上時的後備）
     bonusMaxHp: 0, hp: classOf(classId).hp, allocatedAmmo: CONFIG.ammo.defaultAlloc, disciplineOverride: null,
-    equipId: null, itemId: null, itemCount: 0 };   // 裝備（持續被動）/ 道具（消耗品，itemCount 充能 0~3）各 1 槽，預設空
+    equipId: null, itemId: null, itemCount: 0 };
 }
 
 /* =====================================================================
@@ -1954,7 +1969,6 @@ function makePlayer(i, cfg, pos) {
     fireCooldown: 0, engageTimer: 0, alertTimer: 0, muzzle: 0, sprinting: false,
     idleAnchor: 0, sweepPhase: 0, sweepDir: 1, extractNode: null,   // idleAnchor＝進入閒置時的正前方
     burstLeft: CONFIG.idleTap.size, burstCd: 0, wanderTarget: 0, wanderTimer: 0,
-    stance: 'defend',   // 交戰姿態：'defend'(預設＝只對已交戰敵 overwatch) / 'engage'(對視野內任何敵 overwatch)。僅影響 AI 扈從的自動開火
     lastSeenPos: null, lastSeenT: -Infinity, _seenNow: false,   // 敵人共享情報：此我方最後被任一敵人看到的位置/時間
   };
 }
@@ -2163,6 +2177,7 @@ function startMission() {
   searchFocusNode = null; searchSet = null; searchCleared = null; searchConsumedT = -Infinity;   // 重置交戰後搜索
   simTime = 0; reinforceTimer = 0;
   extractedCount = 0; deadCount = 0; result = null;
+  squadRevealed = false;   // 每場開局＝還沒有人知道我們在這（見 revealSquad）
   scene = 'COMBAT';
   Input.aim = players[controlledId].facing;
   initCamera(players[controlledId]);
@@ -2859,7 +2874,10 @@ function applyOffer(o, mi) {
   else if (o.type === 'item') { giveItemStack(o.id); restMsg = `搜刮：${ITEMS[o.id].name} ×${ITEM_STACK_MAX} 入倉庫`; }
 }
 // 休息轉職（pivot）：把某員 archetype 換成下一型，換樹但保留已學被動；後續升階抽新樹的對應階
+// 配裝只能動騎士（使用者定案）。UI 已把扈從的按鈕拿掉，這是第二道防線＝就算有別的路徑呼叫也擋住。
+const canEditLoadout = (mi) => mi === KNIGHT_ID;
 function cycleArchetype(mi) {
+  if (!canEditLoadout(mi)) return;
   const r = roster[mi]; if (!r) return;
   const i = ARCHETYPE_IDS.indexOf(r.archetypeId);
   r.archetypeId = ARCHETYPE_IDS[(i + 1) % ARCHETYPE_IDS.length];
@@ -2898,20 +2916,23 @@ function setMemberWeapon(mi, newId, slot = 1) {
   r[wf] = newId;
 }
 function equipWeaponFromWarehouse(whIdx, mi, slot = 1) {
+  if (!canEditLoadout(mi)) return;
   const it = warehouse[whIdx]; if (!it || it.kind !== 'weapon') return;
   const oldId = roster[mi][WF(slot)]; warehouse.splice(whIdx, 1); setMemberWeapon(mi, it.id, slot);
   if (oldId && !isInfiniteAmmo(oldId)) warehouse.push({ kind: 'weapon', id: oldId });   // 底線武器換下即消失
   restSel = null;
 }
-function unequipWeapon(mi, slot = 1) { const oldId = roster[mi][WF(slot)]; setMemberWeapon(mi, FLOOR_WEAPON, slot); if (oldId && !isInfiniteAmmo(oldId)) warehouse.push({ kind: 'weapon', id: oldId }); }   // 卸下→回倉、該槽回底線 pistol
+function unequipWeapon(mi, slot = 1) { if (!canEditLoadout(mi)) return; const oldId = roster[mi][WF(slot)]; setMemberWeapon(mi, FLOOR_WEAPON, slot); if (oldId && !isInfiniteAmmo(oldId)) warehouse.push({ kind: 'weapon', id: oldId }); }   // 卸下→回倉、該槽回底線 pistol
 function equipAbilityFromWarehouse(whIdx, mi) {
+  if (!canEditLoadout(mi)) return;
   const it = warehouse[whIdx]; if (!it || it.kind !== 'ability') return;
   const oldId = roster[mi].abilityId; warehouse.splice(whIdx, 1); roster[mi].abilityId = it.id;
   if (oldId) warehouse.push({ kind: 'ability', id: oldId }); restSel = null;
 }
-function unequipAbility(mi) { const oldId = roster[mi].abilityId; if (!oldId) return; roster[mi].abilityId = null; warehouse.push({ kind: 'ability', id: oldId }); }
+function unequipAbility(mi) { if (!canEditLoadout(mi)) return; const oldId = roster[mi].abilityId; if (!oldId) return; roster[mi].abilityId = null; warehouse.push({ kind: 'ability', id: oldId }); }
 // 通用裝備/道具槽（kind 'equip'→field 'equipId'；kind 'item'→field 'itemId'＋itemCount 充能堆疊上限 ITEM_STACK_MAX）
 function equipGearFromWarehouse(whIdx, mi, kind, field) {
+  if (!canEditLoadout(mi)) return;
   const it = warehouse[whIdx]; if (!it || it.kind !== kind) return;
   const r = roster[mi];
   if (kind === 'item') {   // 消耗品：同道具堆疊(上限3)、不同道具則整疊換出；超過上限的退回倉庫
@@ -2930,6 +2951,7 @@ function equipGearFromWarehouse(whIdx, mi, kind, field) {
   restSel = null;
 }
 function unequipGear(mi, kind, field) {
+  if (!canEditLoadout(mi)) return;
   const r = roster[mi]; const oldId = r[field]; if (!oldId) return;
   if (kind === 'item') { warehouse.push({ kind: 'item', id: oldId, count: r.itemCount || 0 }); r.itemId = null; r.itemCount = 0; return; }
   if (kind === 'armor') { if (oldId === 'none') return; r.armorId = 'none'; warehouse.push({ kind, id: oldId }); return; }   // 脫甲＝回到布衣，不是「沒有甲」
@@ -2937,6 +2959,7 @@ function unequipGear(mi, kind, field) {
 }
 function discardWarehouse(whIdx) { if (whIdx >= 0 && whIdx < warehouse.length) warehouse.splice(whIdx, 1); restSel = null; }
 function allocAmmo(mi, dir, slot = 1) {
+  if (!canEditLoadout(mi)) return;
   const r = roster[mi], wf = WF(slot), af = AF(slot), type = r[wf]; if (!type || isInfiniteAmmo(type)) return;
   const step = WEAPONS[type].magazine;
   if (dir > 0) { const take = Math.min(step, ammoStock[type] || 0); r[af] = (r[af] || 0) + take; ammoStock[type] -= take; }
@@ -3590,8 +3613,6 @@ function drawSmoke() {
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
   }
 }
-// 交戰姿態（E=engage 主動 / Q=defend 防守）：設在指定扈從，影響其待機時的 overwatch 開火條件（idleTick）
-function setStance(u, s) { if (u && (s === 'engage' || s === 'defend')) { u.stance = s; Sfx.play('stance'); } }
 
 // 手動：基礎+連射 bloom（玩家扳機紀律＝技巧）。敵人：同手動會 bloom。
 const manualFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (isScoping() ? CONFIG.scope.spreadMul : 1), 1, u.weapon.spreadPerShot);   // 望遠＝降發散穩定
@@ -3734,6 +3755,8 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const dealt = Math.min(raw, Math.max(0, u.hp));
   u.hp -= raw;
   Hooks.fire('hurt', { u, from: (opts && opts.attacker) || null, dealt, raw, melee: !!(opts && opts.melee), blocked });
+  // 見血＝全隊曝光：我方挨打，或我方打了任何人（第三方互毆不算——雙方都不是 player）
+  if (!squadRevealed && (u.faction === 'player' || (opts && opts.attacker && opts.attacker.faction === 'player'))) revealSquad();
   // hpLow：跌破門檻觸發一次（回到門檻上由 tickResources 重新武裝）
   if (u.maxHp && !u._hpLowFired && u.hp > 0 && u.hp / u.maxHp < CONFIG.hooks.hpLowFrac) { u._hpLowFired = true; Hooks.fire('hpLow', { u, frac: u.hp / u.maxHp }); }
   if (u.faction === 'player') u.alertTimer = CONFIG.ghostAlertTime;   // 受傷＝在戰鬥
@@ -4127,6 +4150,18 @@ Hooks.on('parry', 'momentum', (c) => { if (c.u) grantMomentum(c.u.faction, CONFI
 
 /* ── 指令：錨點解析 + 下令 ─────────────────────────────────────────────
    anchorOf(u) 回 { pos, leash } 或 null（null＝不受繩長約束，例如敵人）。 */
+/* ── 全隊靜默／曝光（使用者定案，取代舊的逐人 E/Q stance）─────────────────
+   維持靜默的條件很單純：**還沒有人知道我們在這**。所以扈從在「跟隨/守住」時只會
+   反擊已經在打的敵人（不主動破壞潛行），但**一旦見血或被敵人發現，靜默自動解除**、
+   之後就全力交戰，不需要玩家再下一次令。這是全隊一個開關，不是逐個單位——玩家想的是隊伍。
+
+   ★ 關鍵區分：「敵人 ENGAGED」不等於「敵人在打**我方**」。第三方互毆時敵人也是 ENGAGED，
+   但那不該解除我方靜默（你要能站在旁邊看他們拼）。所以只有兩個觸發：
+     1. 敵人**視覺識別到我方單位**（detect 滿）——見於 enemyTick 的識別路徑，不含 aiFoe 那條
+     2. 任何我方單位**造成或承受傷害**（見血）——見於 damageUnit 的 Hooks
+   「集中攻擊」指令永遠無視靜默（你明確指了目標＝當然打）。 */
+let squadRevealed = false;
+function revealSquad() { squadRevealed = true; }
 function anchorOf(u) {
   if (!u || u.faction !== 'player' || !u.cmd) return null;   // 目前只有扈從吃指令；敵人維持原本的自由行動
   const C = CONFIG.command, c = u.cmd;
@@ -4235,7 +4270,8 @@ function idleTick(u, dt, lockFacing) {
   } else {
     for (const e of enemies) {
       if (e.dead || st.targeting === 'NONE') continue;
-      if (u.stance !== 'engage' && e.state !== 'ENGAGED') continue;
+      // 靜默中（還沒被發現）＝只反擊已在交戰的敵人，不主動破壞潛行；曝光後＝視野內任何敵都打
+      if (!squadRevealed && e.state !== 'ENGAGED') continue;
       if (!canSee(u, e.pos)) continue;
       if (anc && dist(e.pos, anc.pos) > anc.leash * CONFIG.command.engageRangeMul) continue;   // 繩長外的敵人不理
       const d = dist(u.pos, e.pos);
@@ -4496,7 +4532,7 @@ function enemyTick(e, dt) {
       else rate *= clamp(1.4 - d / CONFIG.stealth.idleViewRange, 0.3, 1.4);                // 近快遠慢
       if (typeof inConceal === 'function' && inConceal(f.pos)) rate *= CONFIG.stealth.concealMul;  // (Stage 2) 遮蔽放慢
       e.detect += rate * dt;
-      if (e.detect >= 1) { e.detect = 1; e.state = 'ENGAGED'; }
+      if (e.detect >= 1) { e.detect = 1; e.state = 'ENGAGED'; if (f.faction === 'player') revealSquad(); }   // 敵人看清了我方＝全隊曝光
     } else {
       e.detect = Math.max(0, e.detect - CONFIG.stealth.decay * dt);   // 失去視線 → 識別衰退
     }
@@ -4867,8 +4903,6 @@ window.addEventListener('keydown', e => {
   if (k === 'x') { seizeIfEscorting(); if (controlledId != null) swapWeapon(players[controlledId]); }   // 換槍(主↔副)；護送中→奪回
   if (k === 'c') { seizeIfEscorting(); if (controlledId != null) useItem(players[controlledId]); }     // 道具(原 Q)；護送中→奪回
   if (k === 'f') { seizeIfEscorting(); tryInteract(); }                                                // 互動：開關門/按鈕(原 E)；護送中→奪回
-  // 扈從交戰姿態（騎士恆為手動、stance 對他無意義）：E＝主動清場 / Q＝防守。Phase 3 指令層的雛形。
-  if (k === 'e' || k === 'q') { const s = (k === 'e') ? 'engage' : 'defend'; for (const p of players) if (p.id !== KNIGHT_ID) setStance(p, s); }
   // --- 近戰試作場專用熱鍵（只在 arenaMode 生效，不影響戰役）---
   if (arenaMode) {
     // 試作場的主手輪盤讓位給 1-4 槽位 → 改用 Tab / Shift+Tab 循環（見下），數字鍵不再選武器
@@ -5723,13 +5757,13 @@ function drawPlayers() {
     if (low) { const a = 0.35 + 0.35 * Math.sin(simTime * 16); ctx.strokeStyle = `rgba(255,60,60,${a})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.pos.x, p.pos.y, p.radius + 8, 0, Math.PI * 2); ctx.stroke(); }
     if (controlled) { ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.pos.x, p.pos.y, p.radius + 5, 0, Math.PI * 2); ctx.stroke(); }
     drawUnitBody(p, hsl(p.hue, 55, controlled ? 62 : 48), controlled ? '#ffffff' : hsl(p.hue, 60, 75), controlled ? 3 : 2);
-    if (p.stance === 'engage') {   // 主動姿態標示（會主動對視野內任何敵開火）；防守＝預設不標
-      ctx.fillStyle = 'rgba(255,110,80,0.95)'; ctx.font = 'bold 12px Consolas'; ctx.textAlign = 'center';
-      ctx.fillText('⚔', p.pos.x, p.pos.y - p.radius - 5); ctx.textAlign = 'left';
+    if (!squadRevealed && !controlled && p.state !== 'DEAD') {   // 靜默中：扈從還在守勢、只反擊已交戰的敵
+      ctx.fillStyle = 'rgba(150,190,255,0.9)'; ctx.font = 'bold 11px Consolas'; ctx.textAlign = 'center';
+      ctx.fillText('🤫', p.pos.x, p.pos.y - p.radius - 5); ctx.textAlign = 'left';
     }
     if (p.hasFile) {   // 機密檔案攜帶者：頭頂金色資料夾標記（讓玩家隨時知道檔案在誰身上）
       ctx.fillStyle = 'rgba(255,210,90,0.97)'; ctx.font = 'bold 13px Consolas'; ctx.textAlign = 'center';
-      ctx.fillText('📁', p.pos.x, p.pos.y - p.radius - (p.stance === 'engage' ? 18 : 6)); ctx.textAlign = 'left';
+      ctx.fillText('📁', p.pos.x, p.pos.y - p.radius - (!squadRevealed ? 18 : 6)); ctx.textAlign = 'left';
     }
     if (inConceal(p.pos)) {   // 我方在草叢內＝隱蔽中（虛線綠圈）
       ctx.strokeStyle = 'rgba(120,220,140,0.8)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
@@ -6136,7 +6170,7 @@ function drawHUD() {
 
   // 控制提示（卡片帶上方）
   ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(205,214,224,0.55)';
-  ctx.fillText('滑鼠=轉向 · 左鍵攻擊 · 右鍵=望遠 · 空白=技能 · WASD · Shift 奔跑 · R 換彈 · F 互動 · C 道具 · E/Q 扈從姿態(主動/防守) · H 自走撤離 · Shift+H 扈從先撤', cv.width / 2, cv.height - 94);
+  ctx.fillText('滑鼠=轉向 · 左鍵攻擊 · 右鍵=望遠 · 空白=技能 · WASD · Shift 奔跑 · R 換彈 · F 互動 · C 道具 · G 指令 · H 自走撤離 · Shift+H 扈從先撤', cv.width / 2, cv.height - 94);
   if (debugView || !hysteresisOn) {
     ctx.fillStyle = hysteresisOn ? '#7fe3ff' : '#ff9b5a';
     ctx.fillText(`hysteresis: ${hysteresisOn ? 'ON' : 'OFF (觀察抖動)'}    debug(無迷霧): ${debugView ? 'ON' : 'OFF'}`, cv.width / 2, cv.height - 108);
@@ -6337,6 +6371,9 @@ const restSelItem = () => (restSel && restSel.type === 'wh' && restSel.idx < war
 /* ---- 休息關：單位配裝卡（含個性[§8]、武器、技能、彈藥分配）---- */
 function drawLoadoutCard(mi, x, y, w, h) {
   const r = roster[mi], pad = 10, manage = (restPhase === 'CHOICE' || restPhase === 'DONE');
+  // **只有騎士可以編輯配裝**（使用者定案）：扈從用他們兵種給的裝備，撿到的戰利品全歸騎士。
+  // 這讓「這次招到弓手還是槍兵」是真的結果——撿到什麼都能重配的話這個結果就不存在了。
+  const editable = manage && mi === KNIGHT_ID;
   const W = WEAPONS[r.weaponId], arch = ARCHETYPES[r.archetypeId];
   const sel = restSelItem();
   // 面板
@@ -6347,8 +6384,10 @@ function drawLoadoutCard(mi, x, y, w, h) {
   ctx.fillText(`[${mi + 1}] ${r.name}`, x + pad, y + 18);
   ctx.textAlign = 'right'; ctx.font = '11px Consolas'; ctx.fillStyle = '#9fb3c8';
   ctx.fillText(`${rosterClass(r).name} HP ${rmaxhp(r)}`, x + w - pad, y + 18);
+  // 扈從＝兵種固定，不可編輯（提示玩家為何點不動）
+  if (mi !== KNIGHT_ID) { ctx.textAlign = 'right'; ctx.font = '9px Consolas'; ctx.fillStyle = '#6f7e8c'; ctx.fillText('🔒 兵種固定', x + w - pad, y + 30); }
   // 個性 archetype：管理階段點名稱＝轉職(pivot 換樹、保留已學被動)。次行＝已學被動 / 性格描述
-  const canSwap = manage && restPhase !== 'TARGET';
+  const canSwap = editable && restPhase !== 'TARGET';
   ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas'; ctx.fillStyle = '#9fd0e0';
   const archLabel = (canSwap ? '↻ ' : '') + arch.name;
   ctx.fillText(archLabel, x + pad, y + 36);
@@ -6377,7 +6416,7 @@ function drawLoadoutCard(mi, x, y, w, h) {
   const row = (yt, hi, tint, label, targetable, equipFn, unequipFn, canUnequip) => {
     if (targetable) { ctx.fillStyle = tint; ctx.fillRect(x + 4, yt, w - 8, 20); }
     ctx.textAlign = 'left'; ctx.font = '11px Consolas'; ctx.fillStyle = '#cdd6e0'; ctx.fillText(label, x + pad, yt + 14);
-    if (manage) {
+    if (editable) {
       if (targetable) pushRect(x + 4, yt, w - 50, 20, equipFn);
       if (canUnequip) uiButton(x + w - 44, yt + 1, 36, 17, '▸倉', unequipFn, { font: '10px Consolas' });
     }
@@ -6391,14 +6430,14 @@ function drawLoadoutCard(mi, x, y, w, h) {
     const oid = r[offField], oo = oid ? OFFHANDS[oid] : null;
     const twoHand = wid && handsOf(wid) >= 2;
     const aAmmo = slot === 2 ? (r.allocatedAmmo2 || 0) : (r.allocatedAmmo || 0);
-    const selW = manage && sel && sel.kind === 'weapon';
-    const selO = manage && sel && sel.kind === 'off' && !twoHand;
+    const selW = editable && sel && sel.kind === 'weapon';
+    const selO = editable && sel && sel.kind === 'off' && !twoHand;
     // 主手
     if (selW) { ctx.fillStyle = 'rgba(95,208,107,0.12)'; ctx.fillRect(x + 4, yt, w - 8, 16); }
     ctx.textAlign = 'left'; ctx.font = 'bold 10px Consolas'; ctx.fillStyle = '#bfe6ff'; ctx.fillText('槽' + slot, x + pad, yt + 12);
     ctx.beginPath(); ctx.fillStyle = ww ? rarityColor(ww.rarity) : '#555'; ctx.arc(x + pad + 26, yt + 8, 3.3, 0, Math.PI * 2); ctx.fill();
     ctx.font = '11px Consolas'; ctx.fillStyle = ww ? '#cdd6e0' : '#7a828c'; ctx.fillText(ww ? `${ww.name} 重${ww.weight}` : '無', x + pad + 34, yt + 12);
-    if (manage) {
+    if (editable) {
       if (selW) pushRect(x + 4, yt, w - 50, 16, () => equipWeaponFromWarehouse(restSel.idx, mi, slot));
       if (wid && !isInfiniteAmmo(wid)) uiButton(x + w - 42, yt - 1, 34, 16, '▸倉', () => unequipWeapon(mi, slot), { font: '10px Consolas' });
     }
@@ -6411,7 +6450,7 @@ function drawLoadoutCard(mi, x, y, w, h) {
     else {
       ctx.fillStyle = oo ? '#cdd6e0' : '#7a828c';
       ctx.fillText(oo ? `${oo.name} 護弧${oo.blockArcDeg}° 減傷${(oo.blockResist * 100) | 0}%` : '空手（不能格擋）', x + pad + 34, oy + 12);
-      if (manage) {
+      if (editable) {
         if (selO) pushRect(x + 4, oy, w - 50, 16, () => equipGearFromWarehouse(restSel.idx, mi, 'off', offField));
         if (oid) uiButton(x + w - 42, oy - 1, 34, 16, '▸倉', () => unequipGear(mi, 'off', offField), { font: '10px Consolas' });
       }
@@ -6421,7 +6460,7 @@ function drawLoadoutCard(mi, x, y, w, h) {
     if (!wid || isInfiniteAmmo(wid)) ctx.fillText(`彈 ∞${wid ? '（底線/近戰）' : ''}`, x + pad + 14, oy + 27);
     else {
       ctx.fillText(`彈 ${aAmmo}  儲備 ${ammoStock[wid] | 0}`, x + pad + 14, oy + 27);
-      if (manage) {
+      if (editable) {
         uiButton(x + w - 74, oy + 17, 21, 15, '−', () => allocAmmo(mi, -1, slot), { font: 'bold 12px Consolas', enabled: aAmmo > 0 });
         uiButton(x + w - 30, oy + 17, 21, 15, '+', () => allocAmmo(mi, +1, slot), { font: 'bold 12px Consolas', enabled: (ammoStock[wid] | 0) > 0 });
       }
@@ -6433,19 +6472,19 @@ function drawLoadoutCard(mi, x, y, w, h) {
   const scroll = r.itemId ? artOf(r.itemId) : null, learned = r.abilityId ? artOf(r.abilityId) : null;
   row(y + 138, 20, 'rgba(255,210,125,0.16)',
     `槽3 卷軸 ${scroll ? scroll.name + ' ×' + (r.itemCount || 0) : '—'}`,
-    manage && sel && sel.kind === 'item',
+    editable && sel && sel.kind === 'item',
     () => equipGearFromWarehouse(restSel.idx, mi, 'item', 'itemId'), () => unequipGear(mi, 'item', 'itemId'), !!r.itemId);
   row(y + 160, 20, 'rgba(192,160,255,0.14)',
     `槽4 習得 ${learned ? learned.name + '（CD ' + learned.cooldown + 's）' : '—'}`,
-    manage && sel && sel.kind === 'ability',
+    editable && sel && sel.kind === 'ability',
     () => equipAbilityFromWarehouse(restSel.idx, mi), () => unequipAbility(mi), !!r.abilityId);
   // 甲：獨立槽位（不佔手，但吃移速與耐力回復）
   const AR = ARMORS[r.armorId] || ARMORS.none;
   row(y + 182, 20, 'rgba(224,194,74,0.16)',
     `甲 ${AR.name}　擋${(AR.armor * 100) | 0}% 速${(AR.moveMul * 100) | 0}% 耐回${(AR.stamRegenMul * 100) | 0}%`,
-    manage && sel && sel.kind === 'armor',
+    editable && sel && sel.kind === 'armor',
     () => equipGearFromWarehouse(restSel.idx, mi, 'armor', 'armorId'), () => unequipGear(mi, 'armor', 'armorId'), !!r.armorId && r.armorId !== 'none');
-  row(y + 204, 20, 'rgba(159,208,224,0.16)', `裝備 ${r.equipId ? EQUIPMENT[r.equipId].name : '—'}`, manage && sel && sel.kind === 'equip',
+  row(y + 204, 20, 'rgba(159,208,224,0.16)', `裝備 ${r.equipId ? EQUIPMENT[r.equipId].name : '—'}`, editable && sel && sel.kind === 'equip',
     () => equipGearFromWarehouse(restSel.idx, mi, 'equip', 'equipId'), () => unequipGear(mi, 'equip', 'equipId'), !!r.equipId);
   // TARGET 階段：整卡＝指派目標
   if (restPhase === 'TARGET') {
