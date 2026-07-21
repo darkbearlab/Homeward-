@@ -202,7 +202,8 @@ const CONFIG = {
     shaken:  { tags: { cover: 45, vantage: 15, patrol: 0 },            wRush: -260, wFlank: 0, wExpose: 130, wSight: 8 },
     exposeCheckRange: 700,   // 算「暴露」時只看這個距離內的敵對單位（省 canSee 射線）
     allySpeedMul: 1.0,       // 扈從移動速度倍率（相對 CONFIG.moveSpeed）
-    closeInMinRush: 400,     // 近接扈從「衝完最後一段」的門檻：wRush ≥ 此值才貼上去（holder 200 不衝＝固守）
+    closeInMinRush: 400,     // 近接扈從的站位門檻：wRush ≥ 此值＝貼到接觸；低於＝停在自己武器長度上（固守）
+    holderStandoffFrac: 0.85, // 固守型停在「武器 reach × 此值」——留一點餘裕，但一定在打得到的範圍內
   },
 };
 /* =====================================================================
@@ -825,29 +826,72 @@ function tickPassives(u, dt) {
 }
 
 /* =====================================================================
-   ENEMY_TYPES — 敵人類型目錄（資料驅動；enemySpawns 以 type 指定，預設 grunt）。
-   weaponId/hp/moveSpeed 同表掌控；armor=擋格率(>0 即帶甲)；attack=ranged|burst（霰彈靠武器 pellets）；
-   personality=預設選點個性（spawn 可覆蓋）；coneHalfDeg/senseMul=感知；radius/hue=外觀。
-   血量刻意與 grunt 相同——重裝的質差來自「裝甲」而非血量（§使用者設計）。
+   UNIT_CLASSES — **共用單位數值表**（Phase 2；使用者定案：扈從＝敵人，同一份身體）。
+
+   這張表管的是「身體」：hp / 體幹 / 移速 / 半徑 / 甲。敵我兩邊都從這裡拿，
+   所以一個 `footman` 站在哪一邊都是同一副身體，數值差異只來自裝備與指令。
+
+   刻意**不**管的東西：
+   - **武器**：敵人由 ENEMY_TYPES.weaponId 綁死，扈從走四槽位自選——這是雙方真正的差別。
+   - **性格**：敵人由 ENEMY_TYPES.personality，扈從由 ARCHETYPES.aiPersonality（同一份 CONFIG.ai）。
+   - **耐力**：**唯一的例外**（使用者定案）。只有玩家操作的騎士管理耐力；
+     AI 不會用資源管理，牠們的壓力由體幹＋攻擊權承擔。makeEnemy 一律 stamMax:0。
+
+   血量刻意壓縮在同一個量級——重裝的質差來自**裝甲與體幹**而非血量（§使用者設計）。
    ===================================================================== */
+const UNIT_CLASSES = {
+  knight:      { name: '騎士',     hp: CONFIG.unitHp, poise: CONFIG.melee.poiseKnight, moveSpeed: CONFIG.moveSpeed, radius: CONFIG.unitRadius },   // 英雄：唯一管理耐力的單位
+  levy:        { name: '農兵',     hp: 45,            poise: 25,  moveSpeed: CONFIG.enemy.moveSpeed, radius: CONFIG.unitRadius },
+  footman:     { name: '徒步兵',   hp: CONFIG.enemy.hp, poise: 45, moveSpeed: 105, radius: CONFIG.unitRadius },
+  spearman:    { name: '槍兵',     hp: CONFIG.enemy.hp, poise: 55, moveSpeed: 95,  radius: CONFIG.unitRadius },
+  wolf:        { name: '戰狼',     hp: 45,            poise: 25,  moveSpeed: 165, radius: 9  },
+  archer:      { name: '弓手',     hp: 60,            poise: 35,  moveSpeed: 95,  radius: CONFIG.unitRadius },
+  arbalest:    { name: '弩手',     hp: 70,            poise: 50,  moveSpeed: 70,  radius: CONFIG.unitRadius },
+  manatarms:   { name: '披甲士',   hp: CONFIG.enemy.hp, poise: 110, moveSpeed: 70, radius: 14, armor: CONFIG.armor.blockChance },
+  serjeant:    { name: '軍士',     hp: CONFIG.enemy.hp, poise: 110, moveSpeed: 85, radius: 14, armor: CONFIG.armor.blockChance },
+  civilian:    { name: '平民',     hp: 30,            poise: 20,  moveSpeed: 95,  radius: 11 },
+  dummy:       { name: '訓練假人', hp: 400,           poise: 70,  moveSpeed: 0,   radius: 13 },
+  dummy_armor: { name: '披甲假人', hp: 400,           poise: 130, moveSpeed: 0,   radius: 15, armor: CONFIG.armor.blockChance },
+};
+const UNIT_CLASS_IDS = Object.keys(UNIT_CLASSES);
+const classOf = (id) => UNIT_CLASSES[id] || UNIT_CLASSES.footman;
+// 扈從可招募的兵種（不含騎士本人、菁英、動物、平民與假人）
+const RECRUIT_CLASS_IDS = ['levy', 'footman', 'spearman', 'archer'];
+// 原型 → 預設兵種（身體與行為是兩件事，但預設要合理：斥候輕、陷陣與固守是正規步兵）。
+// 這只是預設，roster 的 classId 可覆寫（將來「招募到一名披甲士」就走這條）。
+const ARCH_DEFAULT_CLASS = { anchor: 'footman', spearhead: 'footman', ranger: 'archer' };
+// 我方單位的移速。騎士刻意仍讀 CONFIG.moveSpeed——那是數值面板要能**即時**調的旋鈕；
+// 扈從則吃自己兵種的值（敵人那邊本來就是讀 e.moveSpeed，於是兩邊終於是同一件事）。
+function spdOf(u) {
+  if (!u || u.classId === 'knight') return CONFIG.moveSpeed;
+  return u.moveSpeed != null ? u.moveSpeed : CONFIG.moveSpeed;
+}
+
+/* =====================================================================
+   ENEMY_TYPES — 敵人「角色」目錄（資料驅動；enemySpawns 以 type 指定）。
+   **身體數值一律來自 UNIT_CLASSES**，這裡只管角色層：武器 / 性格 / 外觀 / 巡邏 / 菁英標記。
+   合併後 TYPE.hp / TYPE.poise / TYPE.moveSpeed / TYPE.radius / TYPE.armor 仍可直接讀（下游零改動）。
+   attack=ranged|burst；coneHalfDeg/senseMul=感知覆寫；elite/boss＝Hooks 的 kill 事件歸類。
+   ===================================================================== */
+const enemyType = (cls, role) => Object.assign({ cls }, UNIT_CLASSES[cls], role);
 const ENEMY_TYPES = {
   // poise＝體幹上限（未填＝CONFIG.melee 的預設）。雜兵低（兩三下就破）、重裝高（要正經對付）。
   /* ── 中世紀正規 key（Phase 2；**新地圖只能用這一組**）──────────────────
      舊的原版 key（grunt / dog / heavy_lmg / heavy_shot / civ）改由下面的 LEGACY_ENEMY_ALIAS 對照過來，
      只為了讓既有手刻地圖繼續能跑；`ENEMY_TYPE_IDS` 不含它們＝編輯器/新內容選不到，會自然 phase out。
      elite/boss 標記＝Hooks 的 kill 事件歸類（boss 型待 Phase 4）。 */
-  levy:         { name: '農兵',        weaponId: 'club',     hp: 45,              moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 40,  radius: CONFIG.unitRadius, patrols: true, poise: 25 },   // 雜兵：慢而弱，體幹兩下就破
-  footman:      { name: '徒步兵',      weaponId: 'sword',    hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
-  footman_flank:{ name: '徒步兵(包抄)', weaponId: 'sword',   hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'flanker', hue: 26,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 繞側後（佔 flank/vantage 點）
-  spearman:     { name: '槍兵',        weaponId: 'spear',    hp: CONFIG.enemy.hp, moveSpeed: 95,                     personality: 'holder',  hue: 190, radius: CONFIG.unitRadius, patrols: true, poise: 55 },   // 長 reach：逼你繞側，正面很難進
-  wolf:         { name: '戰狼',        weaponId: 'fangs',    hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
-  archer:       { name: '弓手',        weaponId: 'longbow',  hp: 60,              moveSpeed: 95,                     personality: 'holder',  hue: 100, radius: CONFIG.unitRadius, patrols: true, poise: 35 },   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
-  arbalest:     { name: '弩手',        weaponId: 'crossbow', hp: 70,              moveSpeed: 70,                     personality: 'holder',  hue: 260, radius: CONFIG.unitRadius, poise: 50 },                   // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
-  manatarms:    { name: '披甲士',      weaponId: 'mace',     hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋破甲鎚：慢但你砍不動、他一下就把你打崩
-  serjeant:     { name: '軍士',        weaponId: 'axe',      hp: CONFIG.enemy.hp, moveSpeed: 85,                     personality: 'rusher',  hue: 320, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋雙手斧：廣掃 cleave、hyperArmor 不怕打斷
-  civilian:     { name: '平民',        weaponId: 'knife',    hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },               // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰
-  dummy:        { name: '訓練假人',    weaponId: 'knife',    hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 60,  radius: 13, dummy: true, poise: 70 },                     // 只挨打不還手（enemyTick 早退）
-  dummy_armor:  { name: '披甲假人',    weaponId: 'knife',    hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance, poise: 130 },  // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
+  levy:         enemyType('levy',        { weaponId: 'club',     personality: 'rusher',  hue: 40,  patrols: true }),   // 雜兵：慢而弱，體幹兩下就破
+  footman:      enemyType('footman',     { weaponId: 'sword',    personality: 'rusher',  hue: 12,  patrols: true }),   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
+  footman_flank:enemyType('footman',     { name: '徒步兵(包抄)', weaponId: 'sword',      personality: 'flanker', hue: 26, patrols: true }),   // 同一副身體，只換性格：繞側後（佔 flank/vantage 點）
+  spearman:     enemyType('spearman',    { weaponId: 'spear',    personality: 'holder',  hue: 190, patrols: true }),   // 長 reach：逼你繞側，正面很難進
+  wolf:         enemyType('wolf',        { weaponId: 'fangs',    personality: 'rusher',  hue: 45,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false }),  // 快、脆、貼臉連咬、視野廣；動物不會開門
+  archer:       enemyType('archer',      { weaponId: 'longbow',  personality: 'holder',  hue: 100, patrols: true }),   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
+  arbalest:     enemyType('arbalest',    { weaponId: 'crossbow', personality: 'holder',  hue: 260 }),                  // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
+  manatarms:    enemyType('manatarms',   { weaponId: 'mace',     personality: 'rusher',  hue: 280, elite: true }),      // 重裝＋破甲鎚：慢但你砍不動、他一下就把你打崩
+  serjeant:     enemyType('serjeant',    { weaponId: 'axe',      personality: 'rusher',  hue: 320, elite: true }),      // 重裝＋雙手斧：廣掃 cleave、hyperArmor 不怕打斷
+  civilian:     enemyType('civilian',    { weaponId: 'knife',    personality: 'holder',  hue: 150, opensDoors: false }), // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰
+  dummy:        enemyType('dummy',       { weaponId: 'knife',    personality: 'holder',  hue: 60,  dummy: true }),       // 只挨打不還手（enemyTick 早退）
+  dummy_armor:  enemyType('dummy_armor', { weaponId: 'knife',    personality: 'holder',  hue: 285, dummy: true }),       // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
 };
 const ENEMY_TYPE_IDS = Object.keys(ENEMY_TYPES);   // 正規 key（編輯器/新內容只能從這裡選）
 /* ── 舊 key → 中世紀 key 的對照（phase out 用）─────────────────────────
@@ -934,13 +978,18 @@ function srand() {   // mulberry32
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 const rngPick = (a) => a[Math.floor(srand() * a.length)];
+// roster 條目 → 兵種（身體）。缺 classId 的舊存檔/手刻陣容退回原型預設，不會壞。
+const rosterClass = (r) => classOf(r.classId || ARCH_DEFAULT_CLASS[r.archetypeId] || 'footman');
 function makeRecruit(used) {
   let name = rngPick(UNIT_NAMES);
   if (used) { let g = 0; while (used.has(name) && g++ < 50) name = rngPick(UNIT_NAMES); used.add(name); }
-  return { name, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]),
+  // **兵種與原型各擲一次**：兵種是身體（hp/體幹/移速），原型是行為（磐石/先鋒/遊獵）。
+  // 兩者分開擲才會出現「體格像農兵但打法是先鋒」這種人——招募到誰因此真的有差別。
+  const classId = rngPick(RECRUIT_CLASS_IDS);
+  return { name, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]), classId,
     weaponId: rngPick(availPool('weapon', RECRUIT_WEAPON_IDS)), abilityId: 'heal', archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
     weaponId2: FLOOR_WEAPON, allocatedAmmo2: 0,   // 副武器（預設 pistol 底線後備；X 換槍）
-    bonusMaxHp: 0, hp: CONFIG.unitHp, allocatedAmmo: CONFIG.ammo.defaultAlloc, disciplineOverride: null,
+    bonusMaxHp: 0, hp: classOf(classId).hp, allocatedAmmo: CONFIG.ammo.defaultAlloc, disciplineOverride: null,
     tier: 0, passives: [],            // 升階等級(0~3)＋已學被動id；戰果結算二選一累積
     equipId: null, itemId: null, itemCount: 0 };   // 裝備（持續被動）/ 道具（消耗品，itemCount 充能 0~3）各 1 槽，預設空
 }
@@ -1853,7 +1902,10 @@ function makePlayer(i, cfg, pos) {
   const arch = ARCHETYPES[cfg.archetypeId];
   const fx = (cfg.equipId && EQUIPMENT[cfg.equipId]) ? EQUIPMENT[cfg.equipId].fx : {};   // 裝備持續被動
   const AR = ARMORS[cfg.armorId] || ARMORS.none;                                         // 身上的甲（獨立槽位）
-  const maxHp = CONFIG.unitHp + (cfg.bonusMaxHp || 0) + (fx.maxHpAdd || 0);
+  // **身體來自共用單位數值表**（扈從＝敵人）。騎士固定 knight 級；扈從依 roster 的 classId，
+  // 未指定則由原型給預設。耐力是唯一不從這裡來的東西——只有騎士管理（見 UNIT_CLASSES 註解）。
+  const CLS = classOf(i === KNIGHT_ID ? 'knight' : (cfg.classId || ARCH_DEFAULT_CLASS[cfg.archetypeId] || 'footman'));
+  const maxHp = CLS.hp + (cfg.bonusMaxHp || 0) + (fx.maxHpAdd || 0);
   // 跨關回復：以攜帶的當前血量為底，回復「缺口 × interMissionHealFrac」（frac=1 → 滿血，與舊行為一致）
   const carried = clamp(cfg.hp != null ? cfg.hp : maxHp, 0, maxHp);
   const startHp = clamp(Math.round(carried + (maxHp - carried) * CONFIG.interMissionHealFrac), 1, maxHp);
@@ -1889,7 +1941,10 @@ function makePlayer(i, cfg, pos) {
     slots, slotIdx: 0,
     offId: offNow,   // 當前副手（渲染/格擋判定讀 activeSet，這欄只是方便除錯）
     id: i, name: cfg.name, faction: 'player', hue: cfg.hue, strength: cfg.strength || 1,
-    pos: { x: pos.x, y: pos.y }, facing: 0, radius: CONFIG.unitRadius,
+    classId: CLS === UNIT_CLASSES.knight ? 'knight' : (cfg.classId || ARCH_DEFAULT_CLASS[cfg.archetypeId] || 'footman'),
+    cls: CLS, className: CLS.name,
+    pos: { x: pos.x, y: pos.y }, facing: 0, radius: CLS.radius,
+    moveSpeed: CLS.moveSpeed,   // 與敵人同欄位名（移動碼一律讀 u.moveSpeed）
     hp: startHp, maxHp,
     state: i === 0 ? 'CONTROLLED' : 'IDLE',
     archetypeId: cfg.archetypeId, archetype: arch, disciplineOverride: cfg.disciplineOverride || null,
@@ -1907,7 +1962,9 @@ function makePlayer(i, cfg, pos) {
     equipId: cfg.equipId || null, itemId: cfg.itemId || null, itemCount: cfg.itemId ? (cfg.itemCount || 1) : 0,   // 裝備槽 / 道具槽(itemCount 充能)
     dmgResist: (fx.dmgResist || 0), reloadMul: (fx.reloadMul || 1) * pReload, spreadMul: fx.spreadMul || 1,
     turnSpeed: mainSlot.weapon.turnSpeed * (fx.turnMul || 1) * pTurn, moveMul: (fx.moveMul || 1) * AR.moveMul * (offW ? offW.moveMul : 1),
-    armorId: cfg.armorId || 'none', armor: AR.armor, stamRegenMul: AR.stamRegenMul,   // 身上的甲：與重裝敵人同一套機率擋格機制（代價＝移速/耐力回復）
+    // 身上的甲：與重裝敵人同一套機率擋格機制（代價＝移速/耐力回復）。
+    // 取「兵種自帶」與「穿戴」的較大者——披甲士之所以叫披甲士就是因為他有甲，脫不掉。
+    armorId: cfg.armorId || 'none', armor: Math.max(AR.armor, CLS.armor || 0), stamRegenMul: AR.stamRegenMul,
     coneHalfDeg: pCone,                    // 斥候＝視錐更寬（null＝用全域）
     buffT: 0, buffMove: 1, buffFire: 1,    // 道具（腎上腺素）短時 buff
     passBuffT: 0, passBuffMove: 1, passBuffFire: 1, stillT: 0, momentumT: 0, regenT: 0, suppressedT: 0,   // 被動時間態
@@ -1917,8 +1974,12 @@ function makePlayer(i, cfg, pos) {
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接：揮斬狀態機 / 盾格 / 硬直 / 擊退速度 / 招架特效
     aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（扈從也吃；騎士手動射擊不經此）
     parryT: 0, parryDur: 0, parryHit: false,   // 武器招架（無盾時的防禦）：動作計時 / 總長 / 這次有沒有接到攻擊
-    poiseMax: CONFIG.melee.poiseKnight, poise: CONFIG.melee.poiseKnight, poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗
-    stamMax: CONFIG.melee.stamMax, stam: CONFIG.melee.stamMax, stamT: -99,                   // 耐力：揮擊/格擋/奔跑的成本
+    poiseMax: CLS.poise, poise: CLS.poise, poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗（來自共用兵種表）
+    // 耐力：**只有玩家操作的騎士**管理（這是統一數值表唯一的例外，見 UNIT_CLASSES）。
+    // 扈從吃 0＝所有 stamMax 閘門短路，行為與敵人完全一致。
+    // 之前扈從有 100 耐力卻沒有任何管理邏輯（AI 不會退出來回氣），打到見底就變沙包——
+    // 舊版 100 體幹把這件事遮住了，統一數值表一削到 45 才暴露出來。
+    stamMax: i === KNIGHT_ID ? CONFIG.melee.stamMax : 0, stam: i === KNIGHT_ID ? CONFIG.melee.stamMax : 0, stamT: -99,
     poiseBreakFxT: 0, guardBreakFxT: 0, flinchFxT: 0, noStamFxT: 0,
     fireCooldown: 0, engageTimer: 0, alertTimer: 0, muzzle: 0, sprinting: false,
     idleAnchor: 0, sweepPhase: 0, sweepDir: 1, extractNode: null,   // idleAnchor＝進入閒置時的正前方
@@ -1971,12 +2032,12 @@ const rosterFromPlayer = (p) => {
   stashActiveSet(p);   // 先把當前主手狀態存回 set，否則換過手的人會漏掉彈藥/裝填進度
   const m0 = s0 && s0.main ? s0.main : null;
   const free2 = (p.slots && p.slots[2]) || {}, free3 = (p.slots && p.slots[3]) || {};
-  return { name: p.name, hue: p.hue, strength: p.strength,
+  return { name: p.name, hue: p.hue, strength: p.strength, classId: p.classId || null,   // 兵種跨關保留（身體不會因為換關就變）
     weaponId: m0 ? m0.weaponId : p.weaponId, offId: s0 ? s0.off : null,
     weaponId2: w2 ? w2.weaponId : null, offId2: s1 ? s1.off : null,
     abilityId: free3.id || p.abilityId, archetypeId: p.archetypeId, tier: p.tier || 0, passives: (p.passives || []).slice(),
     allocatedAmmo2: w2 ? (isInfiniteAmmo(w2.weaponId) ? 0 : w2.ammoReserve) : 0,
-    bonusMaxHp: p.maxHp - CONFIG.unitHp - eqAdd, hp: p.hp,
+    bonusMaxHp: p.maxHp - classOf(p.classId).hp - eqAdd, hp: p.hp,   // 以**自己兵種**的基底回推加值，換兵種不會憑空長血
     allocatedAmmo: m0 ? (isInfiniteAmmo(m0.weaponId) ? CONFIG.ammo.defaultAlloc : m0.ammoReserve) : CONFIG.ammo.defaultAlloc,
     disciplineOverride: p.disciplineOverride || null, equipId: p.equipId || null, armorId: p.armorId || 'none',
     itemId: (free2.count > 0 ? free2.id : null), itemCount: free2.count || 0, carriesFile: !!p.hasFile };
@@ -2328,7 +2389,7 @@ let eventCur = null, eventPhase = 'CHOICE', eventPendingChoice = null, eventMsg 
 let runFlags = {}, pendingEvents = [];   // 戰役旗標(儲存玩家選擇,跨節點)＋預定的後續事件佇列(被報位/伏擊…)；initRun 重置
 const setFlag = (k, v) => { runFlags[k] = (v === undefined ? true : v); };
 const flag = (k) => runFlags[k];
-const rmaxhp = (r) => CONFIG.unitHp + (r.bonusMaxHp || 0) + ((r.equipId && EQUIPMENT[r.equipId] && EQUIPMENT[r.equipId].fx.maxHpAdd) || 0);
+const rmaxhp = (r) => rosterClass(r).hp + (r.bonusMaxHp || 0) + ((r.equipId && EQUIPMENT[r.equipId] && EQUIPMENT[r.equipId].fx.maxHpAdd) || 0);
 const hasGear = () => warehouse.some(it => it.kind === 'equip' || it.kind === 'item');
 function takeGear() { const i = warehouse.findIndex(it => it.kind === 'equip' || it.kind === 'item'); if (i >= 0) { const it = warehouse[i]; warehouse.splice(i, 1); return (it.kind === 'equip' ? EQUIPMENT : ITEMS)[it.id].name; } return null; }
 function relicPassive(mi) {   // 歪 build：給一員一條尚未擁有的「任意樹」被動（off-tier，不佔升階）
@@ -3938,16 +3999,29 @@ function allyMoveTick(u, dt, target) {
     }
     u.targetNode = best;
     const tn = wp(u.targetNode);
-    /* 近接衝完最後一段——但**只有進取型的性格才衝**。
-       這一行如果對所有近戰扈從一視同仁，會把性格的選點結果整個蓋掉：
-       實測「磐石(holder)」會站得比先鋒還前面（離敵 40px vs 99px），與「持盾固守」完全相反。
-       改以 wRush 當門檻：rusher(700)/flanker(500) 會貼上去，holder(200) 守在選好的點等敵人過來。 */
-    const aggressive = (u.personality.wRush || 0) >= CONFIG.ai.closeInMinRush;
-    const goal = (aggressive && u.weapon.melee && canSee(u, foe.pos) && dist(foe.pos, anc.pos) <= anc.leash * 1.2) ? foe.pos : tn.pos;
-    moveToward(u, goal, CONFIG.moveSpeed * (u.moveMul || 1) * swingMoveMul(u) * CONFIG.ai.allySpeedMul * dt);
+    /* 近接貼身：**性格決定「站多近」，不決定「要不要打」**。
+       舊寫法拿 wRush 當開關（只有進取型才衝完最後一段），本意是保住選點性格——
+       實測確實修好了「磐石站得比先鋒還前面」的倒錯，但代價是 holder 近戰扈從
+       **永遠不進入攻擊距離**：同兵種同武器單挑實測 0 勝 24 敗，站著被砍死。
+       敵人那邊沒這個問題，因為 enemyTick 的近戰一律衝完最後一段——這就是敵我不對稱的來源。
+       改法：近戰一律進到自己打得到的距離，只是進取型貼到接觸、固守型停在武器長度上。
+       磐石仍然站得比先鋒後面，但它終於打得到人。 */
+    const meleeEngage = u.weapon.melee && canSee(u, foe.pos) && dist(foe.pos, anc.pos) <= anc.leash * 1.2;
+    let goal = tn.pos;
+    if (meleeEngage) {
+      if ((u.personality.wRush || 0) >= CONFIG.ai.closeInMinRush) goal = foe.pos;   // 進取型：貼到接觸
+      else {
+        const stand = (u.weapon.reach || u.weapon.range || 60) * CONFIG.ai.holderStandoffFrac;
+        const d = dist(u.pos, foe.pos);
+        goal = d > Math.max(stand, 1)
+          ? { x: foe.pos.x + (u.pos.x - foe.pos.x) / d * stand, y: foe.pos.y + (u.pos.y - foe.pos.y) / d * stand }
+          : u.pos;   // 已在武器長度內＝守住，不再往前擠
+      }
+    }
+    moveToward(u, goal, spdOf(u) * (u.moveMul || 1) * swingMoveMul(u) * CONFIG.ai.allySpeedMul * dt);
     if (dist(u.pos, tn.pos) < CONFIG.nodeReach) u.currentNode = u.targetNode;
   } else if (dAnc > anc.leash * 0.6) {
-    moveToward(u, anc.pos, CONFIG.moveSpeed * (u.moveMul || 1) * CONFIG.ai.allySpeedMul * dt);   // 沒有交戰對象＝回到錨點附近
+    moveToward(u, anc.pos, spdOf(u) * (u.moveMul || 1) * CONFIG.ai.allySpeedMul * dt);   // 沒有交戰對象＝回到錨點附近
     u.currentNode = nearestNode(u.pos, false); u.targetNode = u.currentNode;
   }
 }
@@ -4339,7 +4413,7 @@ function extractTick(u, dt) {
   const turn = (u.turnSpeed || u.weapon.turnSpeed) * Math.PI / 180 * dt;
   if (u.id === controlledId) u.facing = rotToward(u.facing, Input.aim, turn);         // 騎士自走撤離：滑鼠自由轉視野（不中斷撤離）
   else u.facing = rotToward(u.facing, angTo(u.pos, goal), turn);                      // 自走：面向移動方向
-  moveToward(u, goal, CONFIG.moveSpeed * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * dt);   // 低矮牆減速 + 裝備
+  moveToward(u, goal, spdOf(u) * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * dt);   // 低矮牆減速 + 裝備
   for (const d of MAP.doors) if (!d.open && distToDoor(u.pos, d) <= CONFIG.interactRadius) { d.open = true; Sfx.play('door'); }   // 自走撤離也會開路上的門（不被關門卡死＝softlock）
   idleTick(u, dt, true);   // 保留待機開火，但不改朝向（朝向已由上方決定）
 }
@@ -4735,7 +4809,7 @@ function update(dt) {
           const rx = Math.cos(u.facing + Math.PI / 2), ry = Math.sin(u.facing + Math.PI / 2);
           let mx = fx * fwd + rx * strafe, my = fy * fwd + ry * strafe;
           const l = Math.hypot(mx, my) || 1;
-          const spd = CONFIG.moveSpeed * (u.sprinting ? sprintMult(u) : 1) * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * (u.buffMove || 1) * passiveMoveMul(u) * swingMoveMul(u);  // 低矮牆減速 + 裝備/道具 + 被動 + 揮擊/舉盾
+          const spd = spdOf(u) * (u.sprinting ? sprintMult(u) : 1) * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * (u.buffMove || 1) * passiveMoveMul(u) * swingMoveMul(u);  // 低矮牆減速 + 裝備/道具 + 被動 + 揮擊/舉盾
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
@@ -5990,7 +6064,7 @@ function drawRosterCard(r, x, y, w, h, i) {
   ctx.fillStyle = '#cdd6e0'; ctx.font = '11px Consolas';
   ctx.fillText(`${W.name}  ${W.rarity}`, x + pad + 12, y + 39);
   ctx.fillStyle = '#9fb3c8'; ctx.font = '11px Consolas';
-  ctx.fillText(`HP ${CONFIG.unitHp + (r.bonusMaxHp || 0)}   感知x${r.strength.toFixed(1)}`, x + pad, y + 58);
+  ctx.fillText(`${rosterClass(r).name}  HP ${rmaxhp(r)}   感知x${r.strength.toFixed(1)}`, x + pad, y + 58);
   const arch = ARCHETYPES[r.archetypeId];
   ctx.fillStyle = TIER_COLOR[r.tier || 0]; ctx.font = 'bold 11px Consolas';
   ctx.fillText(arch.name + (r.tier ? ' ' + '★'.repeat(r.tier) : ''), x + pad, y + 72);
@@ -6023,7 +6097,7 @@ function drawLoadoutCard(mi, x, y, w, h) {
   ctx.textAlign = 'left'; ctx.font = 'bold 13px Consolas'; ctx.fillStyle = hsl(r.hue, 60, 74);
   ctx.fillText(`[${mi + 1}] ${r.name}`, x + pad, y + 18);
   ctx.textAlign = 'right'; ctx.font = '11px Consolas'; ctx.fillStyle = '#9fb3c8';
-  ctx.fillText(`HP ${CONFIG.unitHp + (r.bonusMaxHp || 0)}`, x + w - pad, y + 18);
+  ctx.fillText(`${rosterClass(r).name} HP ${rmaxhp(r)}`, x + w - pad, y + 18);
   // 個性 archetype：管理階段點名稱＝轉職(pivot 換樹、保留已學被動)。次行＝已學被動 / 性格描述
   const canSwap = manage && restPhase !== 'TARGET';
   ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas'; ctx.fillStyle = TIER_COLOR[r.tier || 0];
