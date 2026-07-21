@@ -179,6 +179,9 @@ const CONFIG = {
     reactionDelay: 0.35,
     strength: 1.0,
     meleeApproach: 60,   // 近戰收尾：weapon.melee 或 range ≤ 此值的單位，交戰且看得到目標時直接朝「目標本人」衝完最後一段（補節點導航到不了的距離）；長射程武器永不觸發
+    // AI 近接打在我方身上的傷害倍率。敵我共用同一份 WEAPONS，但這是「英雄 vs 群體」的遊戲：
+    // 不下修的話，騎士 4 刀就會被砍死（100hp ÷ 30dmg），而清掉 3 隻雜兵要 9 刀＝數學上必輸。
+    meleeDmgMul: 0.45,
     // 敵人武器＝WEAPONS.carbine（已入目錄、可掉落/撿取/裝備）；數值在 WEAPONS 調整
   },
 
@@ -219,18 +222,26 @@ const WEAPONS = {
   //   cleave 單次最多命中數 / knock 擊退力(px/s) / stagger 命中造成的硬直秒 / backstabMul 繞背額外倍率
   //   swingStyle：'sweep'＝刀刃在判定窗內**由一側掃到另一側**（左右交替），只有刀刃掃過的瞬間才判定；
   //               'thrust'＝突刺，刀尖沿正前方由近推到遠（arcDeg 只是刺擊的容錯寬度）。
+  //   poiseDmg：體幹傷害（扣光＝體幹破＝大硬直+處決窗）／stamCost：揮一次的耐力成本
+  //   hyperArmor：判定窗中不被前搖打斷、且體幹傷害減半＝重武器的身分（斧/鎚）
+  //   stagger：直接硬直秒數。現已由「體幹破」取代，全部留 0（欄位保留給未來的特殊武器）
   // range 仍填 reach＝敵 AI 的接近距離判斷(CONFIG.enemy.meleeApproach)與扈從索敵沿用同一欄位。
-  // 節奏＝windup+activeT+recover（fireRate 不再決定攻速，但保留給 fireCooldown 相容）。
-  sword: { name: '長劍',  rarity: 'common',   weight: 1.5, damage: 34, fireRate: 6, range: 66, turnSpeed: 520, pierce: 0.35, melee: true, swingStyle: 'sweep',
-           arcDeg: 100, reach: 66, windup: 0.10, activeT: 0.09, recover: 0.20, cleave: 3, knock: 150, stagger: 0,    backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  axe:   { name: '戰斧',  rarity: 'common',   weight: 2.2, damage: 46, fireRate: 4, range: 62, turnSpeed: 380, pierce: 0.30, melee: true, swingStyle: 'sweep',
-           arcDeg: 160, reach: 62, windup: 0.20, activeT: 0.14, recover: 0.30, cleave: 5, knock: 190, stagger: 0,    backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  mace:  { name: '戰鎚',  rarity: 'uncommon', weight: 2.4, damage: 40, fireRate: 3.5, range: 58, turnSpeed: 360, pierce: 0.95, melee: true, swingStyle: 'sweep',
-           arcDeg: 80,  reach: 58, windup: 0.24, activeT: 0.09, recover: 0.32, cleave: 1, knock: 330, stagger: 0.55, backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  spear: { name: '長槍',  rarity: 'common',   weight: 1.8, damage: 32, fireRate: 5, range: 104, turnSpeed: 440, pierce: 0.55, melee: true, swingStyle: 'thrust',
-           arcDeg: 16,  reach: 104, windup: 0.14, activeT: 0.08, recover: 0.24, cleave: 2, knock: 120, stagger: 0,   backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  dagger:{ name: '短劍',  rarity: 'common',   weight: 0.4, damage: 20, fireRate: 9, range: 44, turnSpeed: 640, pierce: 0.20, melee: true, swingStyle: 'sweep',
-           arcDeg: 60,  reach: 44, windup: 0.05, activeT: 0.06, recover: 0.10, cleave: 1, knock: 60,  stagger: 0,    backstabMul: 2.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  // 節奏＝windup+activeT+recover（近接沒有額外 CD，這一輪就是攻速）。
+  sword: { name: '長劍',  rarity: 'common',   weight: 1.5, damage: 30, fireRate: 6, range: 66, turnSpeed: 520, pierce: 0.35, melee: true, swingStyle: 'sweep',
+           arcDeg: 100, reach: 66, windup: 0.10, activeT: 0.09, recover: 0.26, cleave: 3, knock: 260, stagger: 0, backstabMul: 1.0, poiseDmg: 22, stamCost: 18,
+           magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  axe:   { name: '戰斧',  rarity: 'common',   weight: 2.2, damage: 48, fireRate: 4, range: 62, turnSpeed: 380, pierce: 0.30, melee: true, swingStyle: 'sweep', hyperArmor: true,
+           arcDeg: 160, reach: 62, windup: 0.20, activeT: 0.14, recover: 0.38, cleave: 5, knock: 320, stagger: 0, backstabMul: 1.0, poiseDmg: 34, stamCost: 28,
+           magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  mace:  { name: '戰鎚',  rarity: 'uncommon', weight: 2.4, damage: 38, fireRate: 3.5, range: 58, turnSpeed: 360, pierce: 0.95, melee: true, swingStyle: 'sweep', hyperArmor: true,
+           arcDeg: 80,  reach: 58, windup: 0.24, activeT: 0.09, recover: 0.42, cleave: 1, knock: 560, stagger: 0, backstabMul: 1.0, poiseDmg: 45, stamCost: 30,
+           magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  spear: { name: '長槍',  rarity: 'common',   weight: 1.8, damage: 30, fireRate: 5, range: 104, turnSpeed: 440, pierce: 0.55, melee: true, swingStyle: 'thrust',
+           arcDeg: 16,  reach: 104, windup: 0.14, activeT: 0.08, recover: 0.30, cleave: 2, knock: 200, stagger: 0, backstabMul: 1.0, poiseDmg: 18, stamCost: 20,
+           magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  dagger:{ name: '短劍',  rarity: 'common',   weight: 0.4, damage: 13, fireRate: 9, range: 44, turnSpeed: 640, pierce: 0.20, melee: true, swingStyle: 'sweep',
+           arcDeg: 60,  reach: 44, windup: 0.05, activeT: 0.06, recover: 0.16, cleave: 1, knock: 120, stagger: 0, backstabMul: 2.0, poiseDmg: 10, stamCost: 10,
+           magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
   // 局外解鎖武器（情報點；解鎖後才進招募/loot 池，仍 RNG 取得）
   ar:      { name: 'Assault Rifle', rarity: 'uncommon', weight: 1.6, damage: 18, fireRate: 9, range: 1500, projSpeed: 820, spreadBase: 1.8, spreadPerShot: 1.8, spreadMax: 12, spreadRecover: 9, magazine: 30, reloadTime: 1.7, turnSpeed: 460, pierce: 0.6 },   // 穩定中距、過半穿甲
   revolver:{ name: 'Revolver',      rarity: 'uncommon', weight: 0.7, damage: 30, fireRate: 3, range: 1500,  projSpeed: 760, spreadBase: 1.6, spreadPerShot: 1.2, spreadMax: 8,  spreadRecover: 9, magazine: 6,  reloadTime: 1.6, turnSpeed: 540, pierce: 0.7 },   // 副武器級、單發高穿甲
@@ -264,10 +275,45 @@ CONFIG.melee = {
   windupMoveMul: 0.7,      // 前搖中的移動倍率
   activeMoveMul: 0.35,     // 判定窗中的移動倍率（揮擊瞬間幾乎定身）
   recoverMoveMul: 0.6,     // 後搖中的移動倍率
-  swingTurnMul: 0.25,      // 前搖之後（判定+後搖）的轉向倍率＝揮出去就不能大幅修正方向
-  bladeHalfDeg: 9,         // 刀刃的角度厚度（判定容錯）：掃過的角度帶再往兩側各放寬這麼多
+  swingTurnMul: 0.4,       // 前搖之後（判定+後搖）的轉向倍率＝揮出去就不能大幅修正方向（太低＝完全跟不上走動的敵人）
+  bladeHalfDeg: 14,        // 刀刃的角度厚度（判定容錯）：掃過的角度帶再往兩側各放寬這麼多（太小＝對移動目標很容易揮空）
   thrustMinReachF: 0.35,   // 突刺起手時刀尖伸出的比例（判定窗內由此推到 1.0＝刺出去）
-  knockDecay: 9,           // 擊退速度的指數衰減率（越大停得越快）
+  // 擊退：實際位移 ≈ knock / knockDecay。兩個單位半徑和＝24px，位移必須明顯大於它才「推得開」。
+  knockDecay: 6,           // 擊退速度的指數衰減率（越大停得越快）
+
+  /* ── 體幹（poise）：解決「被打沒有代價」──────────────────────────────
+     每次命中扣體幹；扣到 0＝體幹破＝大硬直 + 受傷加成（處決窗）+ 大幅擊退，之後體幹回滿。
+     另外：**前搖中被命中＝揮擊直接被打斷**（重武器的 hyperArmor 免疫）＝搶到先手的人贏整次交鋒。 */
+  poiseRegenDelay: 1.6,    // 多久沒被打才開始回體幹（太短＝連段打不破，體幹破永遠不會發生）
+  poiseRegen: 18,          // 體幹回復速度 /s
+  poiseBreakStagger: 0.9,  // 體幹破的硬直秒數
+  poiseBreakDmgMul: 1.6,   // 硬直中受到的傷害倍率（處決窗）
+  poiseBreakKnockMul: 2.5, // 體幹破當下的擊退倍率
+  blockPoiseMul: 0.5,      // 舉盾擋下時，體幹只吃這個比例（擋得住傷害，擋不住全部衝擊）
+  hyperPoiseMul: 0.5,      // hyperArmor 武器在判定窗中，體幹傷害只吃這個比例
+
+  /* ── 耐力（stamina）：解決「攻擊沒有成本」────────────────────────────
+     揮擊/格擋/奔跑都要錢。歸零＝揮不動；**舉盾時耐力不足擋下 → 直接破防**（＝體幹破）。
+     主題上就是「敗戰騎士的疲憊」：不能什麼架都接。 */
+  stamMax: 100,
+  stamRegen: 30,           // 耐力回復 /s
+  stamRegenDelay: 0.55,    // 停止消耗後多久開始回
+  stamBlockRegenMul: 0.3,  // 舉盾期間的回復倍率（龜盾回得慢）
+  stamBlockBase: 6,        // 擋下一擊的固定耐力成本
+  stamBlockPerPoise: 0.55, // 擋下一擊的額外成本＝來襲體幹傷害 × 此值（重武器砸盾特別耗）
+  stamSprintDrain: 14,     // 奔跑耐力消耗 /s
+  stamParryRefund: 14,     // 招架成功退還的耐力（獎勵技術）
+
+  /* ── 攻擊權（1 對多的可讀性）────────────────────────────────────────
+     同時只有 maxAttackers 隻近接敵可以進攻，其餘在 ringDist 外圍繞行伺機。
+     不是放水：沒有這層，體幹/耐力只會讓被圍毆變成必死宣告，而不是有趣的壓力。 */
+  poiseKnight: 100,        // 騎士（我方單位）的體幹上限
+  poiseDefault: 50,        // 敵人未指定 ENEMY_TYPES.poise 時的體幹上限
+  maxAttackers: 2,         // 同時可進攻的近接敵數
+  tokenHold: 1.1,          // 取得攻擊權後保有的秒數（沒打到也會過期讓給別人）
+  tokenRest: 0.9,          // 揮完一刀後必須退開休息這麼久才能再拿攻擊權＝進攻有節奏，不是貼身連打
+  ringDist: 115,           // 沒有攻擊權時，與目標保持的距離
+  ringStrafe: 0.55,        // 繞行時的橫移速度倍率
   hitstopHit: 0.035,       // 近接命中的頓幀（比槍擊有份量）
   hitstopBlocked: 0.05,    // 被格擋時的頓幀（金屬撞擊感）
   shakeHit: 5,             // 近接命中的螢幕震動
@@ -546,16 +592,17 @@ function tickPassives(u, dt) {
    血量刻意與 grunt 相同——重裝的質差來自「裝甲」而非血量（§使用者設計）。
    ===================================================================== */
 const ENEMY_TYPES = {
-  grunt:       { name: '步兵(衝鋒)', weaponId: 'carbine', hp: CONFIG.enemy.hp, moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 0,  radius: CONFIG.unitRadius, patrols: true },   // 衝鋒：直線壓上；IDLE 會巡邏
-  grunt_flank: { name: '步兵(包抄)', weaponId: 'carbine', hp: CONFIG.enemy.hp, moveSpeed: CONFIG.enemy.moveSpeed, personality: 'flanker', hue: 18, radius: CONFIG.unitRadius, patrols: true },   // 包抄：繞側後（佔 flank/vantage 點）；IDLE 會巡邏
-  dog:        { name: '警犬',   weaponId: 'fangs',   hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false },  // 快、脆、貼臉連咬、視野廣；動物不會開門
-  heavy_lmg:  { name: '重機槍兵', weaponId: 'lmg',   hp: CONFIG.enemy.hp, moveSpeed: 55,                     personality: 'holder',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, attack: 'burst' },  // 慢、帶甲、點放掃射
-  heavy_shot: { name: '霰彈兵', weaponId: 'shotgun', hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 200, radius: 14, armor: CONFIG.armor.blockChance },                   // 中速、帶甲、推進貼臉
-  civ:        { name: '平民',   weaponId: 'pistol',  hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false },                                  // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰。之後有 asset 換皮、邏輯不變
+  // poise＝體幹上限（未填＝CONFIG.melee 的預設）。雜兵低（兩三下就破）、重裝高（要正經對付）。
+  grunt:       { name: '步兵(衝鋒)', weaponId: 'carbine', hp: CONFIG.enemy.hp, moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 0,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 衝鋒：直線壓上；IDLE 會巡邏
+  grunt_flank: { name: '步兵(包抄)', weaponId: 'carbine', hp: CONFIG.enemy.hp, moveSpeed: CONFIG.enemy.moveSpeed, personality: 'flanker', hue: 18, radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 包抄：繞側後（佔 flank/vantage 點）；IDLE 會巡邏
+  dog:        { name: '警犬',   weaponId: 'fangs',   hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
+  heavy_lmg:  { name: '重機槍兵', weaponId: 'lmg',   hp: CONFIG.enemy.hp, moveSpeed: 55,                     personality: 'holder',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, attack: 'burst', poise: 110 },  // 慢、帶甲、點放掃射
+  heavy_shot: { name: '霰彈兵', weaponId: 'shotgun', hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 200, radius: 14, armor: CONFIG.armor.blockChance, poise: 110 },                   // 中速、帶甲、推進貼臉
+  civ:        { name: '平民',   weaponId: 'pistol',  hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },                                  // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰。之後有 asset 換皮、邏輯不變
   // ---- HOMEWARD 近接測試用 ----
-  footman:    { name: '徒步兵(劍)', weaponId: 'sword', hp: CONFIG.enemy.hp, moveSpeed: 105,                  personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true },                        // 近接敵：走同一條揮斬管線，用來測盾格/招架
-  dummy:      { name: '訓練假人', weaponId: 'pistol',  hp: 400,             moveSpeed: 0,                     personality: 'holder',  hue: 60,  radius: 13, dummy: true },                                          // 只挨打不還手（enemyTick 早退）
-  dummy_armor:{ name: '披甲假人', weaponId: 'pistol',  hp: 400,             moveSpeed: 0,                     personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance },        // 測穿甲（鎚 pierce 0.95 vs 劍 0.35）
+  footman:    { name: '徒步兵(劍)', weaponId: 'sword', hp: CONFIG.enemy.hp, moveSpeed: 105,                  personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },              // 近接敵：走同一條揮斬管線；體幹 45＝長劍兩擊打破
+  dummy:      { name: '訓練假人', weaponId: 'pistol',  hp: 400,             moveSpeed: 0,                     personality: 'holder',  hue: 60,  radius: 13, dummy: true, poise: 70 },                               // 只挨打不還手（enemyTick 早退）
+  dummy_armor:{ name: '披甲假人', weaponId: 'pistol',  hp: 400,             moveSpeed: 0,                     personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance, poise: 130 },  // 測穿甲（鎚 pierce 0.95 vs 劍 0.35）與高體幹
 };
 const ENEMY_TYPE_IDS = Object.keys(ENEMY_TYPES);
 // 陣營登錄（資料驅動，N 個易擴充）：要加新勢力＝在此加一條 + spawn 用其 id 即可，戰鬥/AI/繪製不必改碼。
@@ -1514,6 +1561,9 @@ function makePlayer(i, cfg, pos) {
     caches: 0,                             // 運搬中的密封容器數（每場撿取，撤離開封；不跨關）
     senseRadius: CONFIG.vision.senseRadius * (cfg.strength || 1) * (fx.senseMul || 1) * pSense,
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接：揮斬狀態機 / 盾格 / 硬直 / 擊退速度 / 招架特效
+    poiseMax: CONFIG.melee.poiseKnight, poise: CONFIG.melee.poiseKnight, poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗
+    stamMax: CONFIG.melee.stamMax, stam: CONFIG.melee.stamMax, stamT: -99,                   // 耐力：揮擊/格擋/奔跑的成本
+    poiseBreakFxT: 0, guardBreakFxT: 0, flinchFxT: 0, noStamFxT: 0,
     fireCooldown: 0, engageTimer: 0, alertTimer: 0, muzzle: 0, sprinting: false,
     idleAnchor: 0, sweepPhase: 0, sweepDir: 1, extractNode: null,   // idleAnchor＝進入閒置時的正前方
     burstLeft: CONFIG.idleTap.size, burstCd: 0, wanderTarget: 0, wanderTimer: 0,
@@ -1538,6 +1588,9 @@ function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.P
     burstLeft: (W.burst ? W.burst.size : 0), burstCd: 0,   // 重機槍點放節奏
     currentNode: nodeId, targetNode: nodeId, reservedNode: null,
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接（敵人拿近接武器時同樣走揮斬管線）
+    poiseMax: TYPE.poise || CONFIG.melee.poiseDefault, poise: TYPE.poise || CONFIG.melee.poiseDefault, poiseHitT: -99,
+    stamMax: 0, stam: 0, stamT: -99,   // 敵人不管理耐力（AI 不會用；壓力靠體幹 + 攻擊權）
+    poiseBreakFxT: 0, guardBreakFxT: 0, flinchFxT: 0, noStamFxT: 0,
     fireCooldown: 0, engageTimer: 0, muzzle: 0, isReinforce, watchFacing: facing,
     detect: 0,   // 識別進度 0~1：感知到玩家時累積、滿則轉 ENGAGED（潛行空窗）
     revealT: 0,   // 開火現形倒數：>0 時對玩家可見（即使躲草叢/在霧中）＝槍口火光暴露
@@ -1632,7 +1685,7 @@ function startMission() {
   for (const p of players) { p.facing = faceInto; p.idleAnchor = faceInto; }
   controlledId = 0;
   enemies = []; bullets = []; grenades = []; smokes = []; flashFx = []; particles = []; corpses = []; decals = []; soundPings = []; shakeAmt = 0; kickY = 0; hitstopT = 0;
-  reservations = new Map(); patrolClaims = new Map(); enemyIdSeq = 1; drops = []; fileDrop = null;
+  reservations = new Map(); patrolClaims = new Map(); attackTokens = new Map(); enemyIdSeq = 1; drops = []; fileDrop = null;
   cacheGround = (MAP.caches || []).map(c => ({ x: c.x, y: c.y }));   // 密封容器：本場地圖配置的（撿走撤離才開封）
   for (const p of players) p.caches = 0;
   if (CONFIG.relicEnabled && !fromSandbox && !fromEditor && !finaleActive) {   // 遺物：本場由 roster 指定的攜帶者背上（保底＝沒人標記就給騎士，遺物不能憑空消失）
@@ -1678,7 +1731,7 @@ let arenaMode = false;          // true＝試作場（update 跳過撤離/結算
 let arenaNoFog = true;          // 試作場預設關迷霧（看得見扇形判定才調得動數值）
 let arenaAllies = false;        // 是否放兩名 AI 扈從（預設關＝孤騎，先感覺自己的手感）
 let arenaWIdx = 0;              // 目前近接武器在 MELEE_WEAPON_IDS 的索引
-let arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0 };
+let arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0 };
 const arenaWeaponId = () => MELEE_WEAPON_IDS[((arenaWIdx % MELEE_WEAPON_IDS.length) + MELEE_WEAPON_IDS.length) % MELEE_WEAPON_IDS.length];
 
 const arenaMember = (name, hue, wid, arch) => ({
@@ -1693,10 +1746,11 @@ function arenaRoster() {
 }
 // 配置測試對象：左列訓練假人（不還手，量傷害/cleave/穿甲）＋右側近接敵（會反擊，測盾格/招架/硬直）
 function arenaSpawn() {
-  enemies = []; enemyIdSeq = 1; reservations = new Map(); patrolClaims = new Map();
+  enemies = []; enemyIdSeq = 1; reservations = new Map(); patrolClaims = new Map(); attackTokens = new Map();
   const put = (typeId, x, y, facing, node) => {
     const e = makeEnemy(node, null, false, facing, typeId);
     e.pos = { x, y };
+    e.homePos = { x, y };   // 假人被擊退後會慢慢飄回原位＝維持整齊的一列，方便反覆測 cleave
     if (!e.dummy) commitReservation(e, e.currentNode);
     enemies.push(e); return e;
   };
@@ -1721,7 +1775,7 @@ function enterArena() {
   startMission();          // 沿用一般開場流程（建地圖衍生表/我方單位/相機），arena 的 enemySpawns 為空
   arenaSpawn();            // 再放測試對象
   forcedMap = null;
-  arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0 };
+  arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0 };
 }
 function arenaSetWeapon(i) {
   if (!arenaMode) return;
@@ -1741,6 +1795,8 @@ function arenaResetFight() {
     p.state = (p.id === KNIGHT_ID) ? 'CONTROLLED' : 'IDLE';
     p.swing = null; p.staggerT = 0; p.blocking = false; p.blockT = null; p.kbx = 0; p.kby = 0;
     p.hitFlash = 0; p.flinchX = 0; p.flinchY = 0; p.parryFxT = 0;
+    p.poise = p.poiseMax; p.stam = p.stamMax; p.poiseHitT = -99; p.stamT = -99;
+    p.poiseBreakFxT = 0; p.guardBreakFxT = 0; p.flinchFxT = 0; p.noStamFxT = 0;
     const sp = spawnPos(i, players.length); p.pos.x = sp.x; p.pos.y = sp.y;
   });
   controlledId = KNIGHT_ID;
@@ -2312,9 +2368,70 @@ function swapWeapon(u) {
    接在 fireUnit 的最前面＝**所有既有開火路徑（玩家手動 / 扈從 overwatch / 敵人 AI）自動共用**，
    不必為玩家寫一條專用碼；Phase 2 敵種中世紀化只要把 ENEMY_TYPES.weaponId 換成近接武器即可。
    ===================================================================== */
+/* ── 體幹 / 耐力 / 攻擊權 ─────────────────────────────────────────────
+   兩條資源解決兩個獨立的問題：
+     體幹（poise）＝「被打有代價」：扣光＝大硬直＋處決窗 → 亂 trade 會被直接處決
+     耐力（stamina）＝「攻擊有成本」：揮擊/格擋/奔跑都要錢 → 不能無限攻擊，也不能無限龜盾
+   攻擊權（token）＝讓 1 對多 可讀：同時只有幾隻能進攻，其餘繞行伺機。 */
+const poiseMaxOf = (u) => (u.poiseMax || 1);
+const inSwingActive = (u) => !!(u.swing && u.swing.t >= u.swing.windup && u.swing.t < u.swing.windup + u.swing.active);
+const hasHyperArmor = (u) => !!(u.weapon && u.weapon.hyperArmor && inSwingActive(u));
+// 每幀回復體幹/耐力（受擊或消耗後有延遲；舉盾時耐力回得慢）
+function tickResources(u, dt) {
+  const M = CONFIG.melee;
+  if (u.poiseMax) {
+    if (simTime - (u.poiseHitT || -99) >= M.poiseRegenDelay && u.staggerT <= 0)
+      u.poise = Math.min(u.poiseMax, (u.poise || 0) + M.poiseRegen * dt);
+  }
+  if (u.stamMax) {
+    if (simTime - (u.stamT || -99) >= M.stamRegenDelay)
+      u.stam = Math.min(u.stamMax, (u.stam || 0) + M.stamRegen * (u.blocking ? M.stamBlockRegenMul : 1) * dt);
+  }
+}
+function spendStam(u, n) { if (!u.stamMax) return true; u.stam = Math.max(0, (u.stam || 0) - n); u.stamT = simTime; return true; }
+// 體幹傷害 → 可能觸發體幹破（大硬直 + 處決窗 + 大幅擊退）。回傳是否破了。
+function applyPoise(t, amount, fromAng) {
+  if (!t.poiseMax || amount <= 0) return false;
+  t.poiseHitT = simTime;
+  t.poise = (t.poise || 0) - amount;
+  if (t.poise > 0) return false;
+  breakPoise(t, fromAng);
+  return true;
+}
+function breakPoise(t, fromAng) {
+  const M = CONFIG.melee;
+  t.poise = t.poiseMax;
+  t.staggerT = Math.max(t.staggerT || 0, M.poiseBreakStagger);
+  t.swing = null; t.blocking = false; t.blockT = null;   // 破了就是破了：揮到一半也中斷、盾也垮
+  t.poiseBreakFxT = M.arcFadeT * 2;
+  if (fromAng != null) applyKnock(t, fromAng + Math.PI, (t.lastKnock || 160) * M.poiseBreakKnockMul);
+  spawnCrit(t.pos);
+  Sfx.play('block', t.pos);
+}
+/* 攻擊權：同時只有 CONFIG.melee.maxAttackers 隻近接敵可以進攻。
+   取得後保有 tokenHold 秒（沒打到也會過期讓給別人＝不會卡死）。 */
+let attackTokens = new Map();   // enemyId → 到期的 simTime
+function pruneAttackTokens() { for (const [id, t] of attackTokens) if (t <= simTime) attackTokens.delete(id); }
+function hasAttackToken(e) { return attackTokens.has(e.id); }
+function tryAcquireToken(e) {
+  if (attackTokens.has(e.id)) { attackTokens.set(e.id, simTime + CONFIG.melee.tokenHold); return true; }
+  if ((e.atkRestT || 0) > 0) return false;   // 剛揮完＝退開休息，讓別隻上（進攻有節奏）
+  if (attackTokens.size >= CONFIG.melee.maxAttackers) return false;
+  attackTokens.set(e.id, simTime + CONFIG.melee.tokenHold);
+  return true;
+}
+function releaseAttackToken(e) { attackTokens.delete(e.id); }
+
 function startSwing(u, fireRateMult) {
   const W = u.weapon;
   if (u.swing || u.staggerT > 0 || u.swapT > 0) return false;   // 揮擊中/硬直中/換武器中不能再揮
+  const cost = W.stamCost || 0;   // 耐力不足＝揮不動（攻擊有成本）
+  if (u.stamMax && cost > 0 && (u.stam || 0) < cost) {
+    u.noStamFxT = 0.25;
+    if (arenaMode && u.id === KNIGHT_ID && u.faction === 'player') arenaStats.noStam++;
+    return false;
+  }
+  if (cost > 0) spendStam(u, cost);
   const rm = 1 / Math.max(0.05, (fireRateMult || 1) * (u.buffFire || 1) * passiveFireMul(u));   // 攻速 buff＝縮短全段
   u.swingDir = -(u.swingDir || -1);   // 左右交替：連續揮擊會是 →、←、→…（不是每次都同一邊）
   u.swing = {
@@ -2354,7 +2471,11 @@ function tickMelee(u, dt) {
   }
   const aStart = s.windup, aEnd = s.windup + s.active;
   if (s.t > aStart && prev < aEnd) meleeHitTest(u, s);   // 判定窗（跨幀也算，低 FPS 不漏判）
-  if (s.t >= aEnd + s.recover) u.swing = null;
+  if (s.t >= aEnd + s.recover) {
+    u.swing = null;
+    // 敵人揮完一刀＝交還攻擊權並退開休息，換別隻上（不然拿到權的那隻會貼著你連打）
+    if (u.faction !== 'player') { u.atkRestT = CONFIG.melee.tokenRest; releaseAttackToken(u); }
+  }
   return true;
 }
 // 刀刃掃過的角度帶判定：只有「上一幀→本幀」之間掃過的角度算命中（再各放寬 bladeHalfDeg＝刀刃厚度）。
@@ -2380,13 +2501,24 @@ function meleeHitTest(u, s) {
     s.hits.add(t); s.n++;
     const fromAng = angTo(t.pos, u.pos);                  // 目標→攻擊者＝來向（damageUnit 用來判繞背/格擋）
     const back = Math.abs(angDiff(fromAng, t.facing)) > Math.PI / 2;   // 從目標背面砍＝短劍背刺加成
-    const dmg = W.damage * (back ? (W.backstabMul || 1) : 1);
-    const hp0 = t.hp;
-    const blocked = damageUnit(t, dmg, W.pierce, fromAng, { melee: true, attacker: u, knock: W.knock || 0, stagger: W.stagger || 0 });
+    let dmg = W.damage * (back ? (W.backstabMul || 1) : 1);
+    if (u.faction !== 'player' && t.faction === 'player') dmg *= CONFIG.enemy.meleeDmgMul;   // 英雄 vs 群體：AI 近接對我方減傷
+    const hp0 = t.hp, stag0 = t.staggerT || 0, swing0 = !!t.swing;
+    const blocked = damageUnit(t, dmg, W.pierce, fromAng, { melee: true, attacker: u, knock: W.knock || 0, stagger: W.stagger || 0, poiseDmg: W.poiseDmg || 0 });
     if (arenaMode) {   // 試作場即時數據：本次揮擊打中幾隻、實際扣多少血（含裝甲/格擋後的真值）
       const dealt = Math.max(0, hp0 - t.hp);
-      if (u.faction === 'player' && u.id === KNIGHT_ID) { arenaStats.hits++; arenaStats.lastHits++; arenaStats.dmg += dealt; arenaStats.lastDmg += dealt; if (blocked) arenaStats.blocked++; }
-      else if (t.faction === 'player' && t.id === KNIGHT_ID) { arenaStats.tookHits++; if (blocked) { if (dealt <= 0) arenaStats.tookParried++; else arenaStats.tookBlocked++; } }
+      const broke = (t.staggerT || 0) > stag0;
+      const cut = swing0 && !t.swing && !broke;   // 揮擊被打斷（不是體幹破造成的）
+      if (u.faction === 'player' && u.id === KNIGHT_ID) {
+        arenaStats.hits++; arenaStats.lastHits++; arenaStats.dmg += dealt; arenaStats.lastDmg += dealt;
+        if (blocked) arenaStats.blocked++;
+        if (broke) arenaStats.brokeFoe++;
+        if (cut) arenaStats.interrupted++;
+      } else if (t.faction === 'player' && t.id === KNIGHT_ID) {
+        arenaStats.tookHits++;
+        if (blocked) { if (dealt <= 0) arenaStats.tookParried++; else arenaStats.tookBlocked++; }
+        if (broke) arenaStats.tookBreak++;
+      }
     }
     spawnSwingFx(u, t, blocked);
     hitstop(blocked ? CONFIG.melee.hitstopBlocked : CONFIG.melee.hitstopHit);
@@ -2634,28 +2766,53 @@ function enemyAttack(e, ang, dt) {
 const idleEngageFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase / CONFIG.idleAccuracyMult) * (hasPassive(u, 'overwatch') ? CONFIG.passive.overwatchSpread : 1) + u.bloom, CONFIG.idleFireRateMult, u.weapon.spreadPerShot);   // 警戒待命：待機 overwatch 更準
 
 // fromAng＝攻擊來向（目標→發射原點的角度）。落在目標視野錐外＝flank（側後）。
-// opts（近接用，選填）：{ melee, attacker, knock, stagger }。回傳 true＝本次被盾格擋下（近接判定用來播金屬音/頓幀）。
+// opts（近接用，選填）：{ melee, attacker, knock, stagger, poiseDmg }。回傳 true＝本次被盾格擋下。
 function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
+  const M = CONFIG.melee;
+  let poiseDmg = (opts && opts.poiseDmg) || 0;
+  if (opts) u.lastKnock = opts.knock || 0;   // 給 breakPoise 算「體幹破當下」的大幅擊退
   // ---- 盾格：正面 blockArcDeg 內才成立；舉盾後 parryWindow 內＝招架（完全格擋 + 攻擊者硬直）----
   let blocked = false;
   if (fromAng != null && blockCovers(u, fromAng)) {
     blocked = true;
-    const parry = (simTime - u.blockT) <= CONFIG.melee.parryWindow;
+    const parry = (simTime - u.blockT) <= M.parryWindow;
     spawnBlock(u.pos);
     if (parry) {
       const atk = opts && opts.attacker;
-      if (atk) { atk.staggerT = Math.max(atk.staggerT || 0, CONFIG.melee.parryStagger); atk.swing = null; }
-      u.parryFxT = CONFIG.melee.arcFadeT;   // 招架成功的視覺回饋
+      // 招架＝把衝擊整個反推回去：對方吃體幹傷害（常常直接體幹破）+ 固定硬直；自己退還耐力
+      if (atk) {
+        atk.staggerT = Math.max(atk.staggerT || 0, M.parryStagger); atk.swing = null;
+        applyPoise(atk, poiseDmg, fromAng + Math.PI);
+      }
+      if (u.stamMax) { u.stam = Math.min(u.stamMax, (u.stam || 0) + M.stamParryRefund); }
+      u.parryFxT = M.arcFadeT;   // 招架成功的視覺回饋
       Sfx.play('parry', u.pos);
-      return true;                          // 完全格擋：不吃傷、不吃擊退/硬直
+      return true;                          // 完全格擋：不吃傷、不吃擊退/體幹
     }
-    dmg *= (1 - CONFIG.melee.blockResist);
-    if (opts) { opts = Object.assign({}, opts, { knock: (opts.knock || 0) * 0.35, stagger: 0 }); }   // 擋下＝擊退大減、不吃硬直
+    // 擋下：傷害大減，但**耐力要付錢**；耐力不夠 → 破防（＝體幹破，大硬直）
+    dmg *= (1 - M.blockResist);
+    poiseDmg *= M.blockPoiseMul;
+    if (u.stamMax) {
+      const cost = M.stamBlockBase + poiseDmg * M.stamBlockPerPoise;
+      const enough = (u.stam || 0) >= cost;
+      spendStam(u, cost);
+      if (!enough) { u.guardBreakFxT = M.arcFadeT * 2; breakPoise(u, fromAng); poiseDmg = 0; }
+    }
+    if (opts) opts = Object.assign({}, opts, { knock: (opts.knock || 0) * 0.35, stagger: 0 });   // 擋下＝擊退大減
+  }
+  // ---- 體幹：扣光＝大硬直＋處決窗。hyperArmor（斧/鎚判定窗中）只吃一半 ----
+  if (poiseDmg > 0 && u.poiseMax) {
+    const wasSwinging = !!u.swing, inWindup = wasSwinging && u.swing.t < u.swing.windup;
+    const hyper = hasHyperArmor(u);
+    const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng);
+    // 打斷：前搖中被命中＝這一刀直接被打斷（重武器 hyperArmor 免疫）＝搶到先手的人贏整次交鋒
+    if (!broke && inWindup && !hyper) { u.swing = null; u.flinchFxT = 0.18; }
   }
   if (opts && (opts.knock || opts.stagger) && fromAng != null) {
     applyKnock(u, fromAng + Math.PI, opts.knock || 0);                                   // 往「背離攻擊者」的方向推
-    if (opts.stagger) { u.staggerT = Math.max(u.staggerT || 0, opts.stagger); u.swing = null; }   // 硬直＝中斷對方的揮擊
+    if (opts.stagger) { u.staggerT = Math.max(u.staggerT || 0, opts.stagger); u.swing = null; }
   }
+  if (u.staggerT > 0 && !blocked) dmg *= M.poiseBreakDmgMul;   // 處決窗：硬直中的人挨打特別痛
   const coneHalf = (u.coneHalfDeg || CONFIG.vision.coneHalfDeg) * Math.PI / 180;
   let flanked = (fromAng != null) && Math.abs(angDiff(fromAng, u.facing)) > coneHalf;   // 錐外＝繞背
   if (blocked) flanked = false;                                                            // 擋下來的那一擊不算繞背
@@ -2684,7 +2841,7 @@ function killUnit(u) {
   hitstop(CONFIG.juice.hitstopKill); addShakeAt(u.pos, CONFIG.juice.shakeKill);   // 擊殺：頓幀 + 較大震動
   pushDecal(u.pos.x, u.pos.y, 8 + Math.random() * 3, 'rgba(92,15,22,0.5)');       // 死亡血池
   corpses.push({ x: u.pos.x, y: u.pos.y, enemy: u.faction !== 'player' });   // 地上留陣亡叉叉（任一 AI 陣營＝敵屍）
-  if (u.faction !== 'player') { spawnDrop(u, CONFIG.ammo.salvageEnemy); u.dead = true; releaseReservation(u); releasePatrol(u); }   // 任一 AI 陣營死亡（駐軍/暴民…）
+  if (u.faction !== 'player') { spawnDrop(u, CONFIG.ammo.salvageEnemy); u.dead = true; releaseReservation(u); releasePatrol(u); releaseAttackToken(u); }   // 任一 AI 陣營死亡（駐軍/暴民…）；攻擊權立刻讓給還活著的
   else {
     spawnDrop(u, CONFIG.ammo.salvageAlly);
     if (u.hasFile) { u.hasFile = false; fileDrop = { x: u.pos.x, y: u.pos.y }; Sfx.play('death', u.pos); }   // 攜帶者陣亡→遺物掉在原地，待人回收（CONFIG.relicEnabled 關閉時不會發生）
@@ -3151,15 +3308,35 @@ function enemyTick(e, dt) {
   const tn = wp(e.targetNode);
   // 收尾衝刺：超短射程(近戰)看得到目標時直奔本人；長射程永不觸發
   // 近接武器一律衝完最後一段（不看 range 門檻：長槍 reach 104 > meleeApproach，但它仍然必須貼上去才打得到）
-  const goalPos = (seen && (e.weapon.melee || e.weapon.range <= CONFIG.enemy.meleeApproach)) ? aimPos : tn.pos;
-  moveToward(e, goalPos, e.moveSpeed * flashMoveMul(e) * dt);   // 閃光暈眩＝減速
+  const melee = !!e.weapon.melee;
+  // 攻擊權（1 對多的可讀性）：近接敵要先取得攻擊權才進逼；沒拿到的在 ringDist 外圍繞行伺機。
+  // 沒有這層，體幹/耐力只會讓被圍毆變成必死宣告。
+  let token = true;
+  if (melee && seen && !threatOnly) {
+    token = tryAcquireToken(e);
+    if (!token) releaseAttackToken(e);
+  } else if (melee) { releaseAttackToken(e); }
+  let goalPos = (seen && (melee || e.weapon.range <= CONFIG.enemy.meleeApproach)) ? aimPos : tn.pos;
+  let spd = e.moveSpeed * flashMoveMul(e);
+  if (melee && seen && !token) {
+    // 繞行：保持 ringDist，並沿切線橫移（以自己的 id 決定繞哪一邊＝不會全部擠同一側）
+    const R = CONFIG.melee.ringDist, d = dist(e.pos, aimPos), a = angTo(aimPos, e.pos);
+    const side = (e.id % 2) ? 1 : -1;
+    const tang = a + side * Math.PI / 2;
+    const ring = { x: aimPos.x + Math.cos(a) * R, y: aimPos.y + Math.sin(a) * R };
+    goalPos = (Math.abs(d - R) > 18)
+      ? ring                                                                              // 太近/太遠 → 先回到環上
+      : { x: e.pos.x + Math.cos(tang) * 60, y: e.pos.y + Math.sin(tang) * 60 };            // 在環上 → 沿切線繞
+    spd *= CONFIG.melee.ringStrafe;
+  }
+  moveToward(e, goalPos, spd * dt);   // 閃光暈眩＝減速
   if (dist(e.pos, tn.pos) < CONFIG.nodeReach) e.currentNode = e.targetNode;
 
   const turn = e.weapon.turnSpeed * Math.PI / 180 * dt;
   if (seen) {
     const ang = angTo(e.pos, aimPos);
     e.facing = rotToward(e.facing, ang, turn * 2);
-    if (inRange && !threatOnly) { e.engageTimer += dt; if (e.engageTimer >= CONFIG.enemy.reactionDelay) enemyAttack(e, ang, dt); }   // 只憑來向記憶＝先朝來向推進/回頭，不對空地開火；親眼看到真目標才射
+    if (inRange && !threatOnly && token) { e.engageTimer += dt; if (e.engageTimer >= CONFIG.enemy.reactionDelay) enemyAttack(e, ang, dt); }   // 只憑來向記憶＝先朝來向推進/回頭，不對空地開火；親眼看到真目標才射；近接還需攻擊權
     else e.engageTimer = 0;
   } else {
     e.engageTimer = 0;
@@ -3473,8 +3650,10 @@ function update(dt) {
   if (cutscene && cutscene.lock) return;   // 演出鎖控制：只跑鏡頭/演出，不跑常規 sim
 
   const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
-  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); if (p.parryFxT > 0) p.parryFxT -= dt; }
-  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); if (e.parryFxT > 0) e.parryFxT -= dt; }
+  const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
+  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickResources(p, dt); meleeFxDecay(p); }
+  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickResources(e, dt); meleeFxDecay(e); }
+  pruneAttackTokens();   // 攻擊權：過期的釋放出來給別隻
 
   // 0) 自走撤離 seize：騎士自走撤離時，移動或開火 → 奪回手動、撤離中斷（滑鼠轉視野不算）
   if (knight() && knight().state === 'EXTRACTING') {
@@ -3503,7 +3682,8 @@ function update(dt) {
         if (Input.held('w')) fwd += 1; if (Input.held('s')) fwd -= 1;
         if (Input.held('d')) strafe += 1; if (Input.held('a')) strafe -= 1;
         const moving = !!(fwd || strafe);
-        u.sprinting = moving && Input.held('shift') && !isScoping() && !u.swing && !u.blocking;   // Shift 奔跑（望遠/揮擊/舉盾時禁奔跑）
+        u.sprinting = moving && Input.held('shift') && !isScoping() && !u.swing && !u.blocking && (u.stam || 0) > 1;   // 奔跑要耐力（望遠/揮擊/舉盾時禁奔跑）
+        if (u.sprinting) spendStam(u, CONFIG.melee.stamSprintDrain * dt);
         if (moving) {
           const fx = Math.cos(u.facing), fy = Math.sin(u.facing);
           const rx = Math.cos(u.facing + Math.PI / 2), ry = Math.sin(u.facing + Math.PI / 2);
@@ -3550,6 +3730,13 @@ function update(dt) {
 
   // 7) 撤離判定：走到撤離點的人脫離戰場（試作場不判定撤離＝打不完，專心調手感）
   if (arenaMode) {
+    // 假人：被擊退後慢慢飄回原位（維持整齊的一列，方便反覆測 cleave / 擊退距離）
+    for (const e of enemies) {
+      if (!e.dummy || e.dead || !e.homePos) continue;
+      if (Math.abs(e.kbx) > 2 || Math.abs(e.kby) > 2) continue;
+      const d = dist(e.pos, e.homePos);
+      if (d > 2) moveToward(e, e.homePos, Math.min(d, 45 * dt));
+    }
     simTime += dt;
     if (!knightAlive()) arenaResetFight();   // 試作場：騎士倒下＝原地重來，不結束
     return;
@@ -3637,7 +3824,11 @@ function drawArenaHUD() {
     ['傷害', W.damage], [W.swingStyle === 'thrust' ? '刺擊寬容' : '揮動角', W.arcDeg + '°'], ['觸及', W.reach], ['穿甲', W.pierce],
     ['前搖', W.windup.toFixed(2) + 's'], ['判定', W.activeT.toFixed(2) + 's'], ['後搖', W.recover.toFixed(2) + 's'],
     ['一擊間隔', (W.windup + W.activeT + W.recover).toFixed(2) + 's'],
-    ['cleave', W.cleave], ['擊退', W.knock], ['硬直', W.stagger + 's'], ['背刺', '×' + (W.backstabMul || 1)],
+    ['DPS(理論)', Math.round(W.damage / (W.windup + W.activeT + W.recover))],
+    ['體幹傷害', W.poiseDmg], ['耐力消耗', W.stamCost],
+    ['hyperArmor', W.hyperArmor ? '有(判定窗)' : '—'],
+    ['cleave', W.cleave], ['擊退距離', Math.round((W.knock || 0) / CONFIG.melee.knockDecay) + 'px'],
+    ['背刺', '×' + (W.backstabMul || 1)],
   ] : [['（遠程武器）', W.name]];
   const bw = 208, bh = 30 + rows.length * 15;
   ctx.fillStyle = 'rgba(10,14,20,0.82)'; ctx.fillRect(pad, pad, bw, bh);
@@ -3658,8 +3849,12 @@ function drawArenaHUD() {
     ['平均傷害/揮', S.swings ? Math.round(S.dmg / S.swings) : '—'],
     ['上一擊', `${S.lastHits} 目標 / ${Math.round(S.lastDmg)} 傷`],
     ['被格擋', S.blocked],
+    ['打破敵體幹', S.brokeFoe], ['打斷敵前搖', S.interrupted],
+    ['耐力不足次數', S.noStam],
     ['—', ''],
     ['我方挨打', S.tookHits], ['我方擋下', S.tookBlocked], ['我方招架', S.tookParried],
+    ['我方被打崩', S.tookBreak],
+    ['持攻擊權敵數', `${attackTokens.size} / ${CONFIG.melee.maxAttackers}`],
   ];
   const sw = 230, sh = 30 + stats.length * 15, sx = cv.width - sw - pad;
   ctx.fillStyle = 'rgba(10,14,20,0.82)'; ctx.fillRect(sx, pad, sw, sh);
@@ -4241,6 +4436,36 @@ function edgeMarker(worldPos, color, label, filled) {
   if (label) { ctx.font = 'bold 11px Consolas'; ctx.textAlign = 'center'; ctx.fillText(label, x, y - 11); ctx.textAlign = 'left'; }
   return onScreen;
 }
+/* 騎士的兩條資源（畫面中下，交戰時掃一眼就看得到）：
+   耐力＝能不能再揮/再擋；體幹＝再挨幾下會被打崩。這兩條就是新的戰鬥語言，必須醒目。 */
+function drawKnightResources() {
+  const k = knight(); if (!k || k.state === 'DEAD' || k.state === 'EXTRACTED') return;
+  const w = 220, h = 9, x = cv.width / 2 - w / 2, y = cv.height - 148;
+  const bar = (yy, f, col, bg, label) => {
+    ctx.fillStyle = bg; ctx.fillRect(x, yy, w, h);
+    ctx.fillStyle = col; ctx.fillRect(x, yy, w * clamp(f, 0, 1), h);
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, yy + 0.5, w - 1, h - 1);
+    ctx.font = '9px Consolas'; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(220,230,240,0.75)';
+    ctx.fillText(label, x - 6, yy + h - 1); ctx.textAlign = 'left';
+  };
+  const stamF = (k.stam || 0) / (k.stamMax || 1);
+  const low = stamF < 0.25;
+  // 耐力：低於 25% 轉紅並在不足時閃爍＝「你快揮不動了」
+  bar(y, stamF, (k.noStamFxT > 0 && Math.sin(simTime * 40) > 0) ? '#ffffff' : (low ? '#ff8a5c' : '#7fe3a0'), 'rgba(12,18,26,0.8)', '耐力');
+  const poiseF = (k.poise || 0) / (k.poiseMax || 1);
+  bar(y + h + 3, poiseF, poiseF < 0.34 ? '#ffd24a' : 'rgba(200,160,85,0.9)', 'rgba(12,18,26,0.8)', '體幹');
+  // 硬直/破防的大字提示（被打崩時要非常清楚，否則玩家不知道自己為什麼不能動）
+  if (k.staggerT > 0) {
+    ctx.textAlign = 'center'; ctx.font = 'bold 17px Consolas';
+    ctx.fillStyle = `rgba(255,190,90,${0.55 + 0.45 * Math.sin(simTime * 22)})`;
+    ctx.fillText(k.guardBreakFxT > 0 ? '破防！' : '體幹破 — 硬直中', cv.width / 2, y - 10);
+    ctx.textAlign = 'left';
+  } else if (k.noStamFxT > 0) {
+    ctx.textAlign = 'center'; ctx.font = 'bold 13px Consolas';
+    ctx.fillStyle = 'rgba(255,140,90,0.9)'; ctx.fillText('耐力不足', cv.width / 2, y - 8);
+    ctx.textAlign = 'left';
+  }
+}
 function drawScreenOverlays() {
   // 區域標記（永遠正立、離場時夾到邊緣）
   const reinforcing = simTime > curTimeBudget;
@@ -4253,7 +4478,11 @@ function drawScreenOverlays() {
     let col = p.hp / p.maxHp > 0.6 ? '#5fd06b' : low ? '#ff4d4d' : '#e0c24a';
     if (low && Math.sin(simTime * 18) > 0) col = '#ffffff';
     screenBar(s, p.hp / p.maxHp, col, -p.radius * cam.scale - 12);
-    if (p.reloadT > 0) screenBar(s, 1 - p.reloadT / (p.reloadDur || p.weapon.reloadTime), '#7fa8ff', -p.radius * cam.scale - 6);
+    if (p.poiseMax) {   // 體幹條（我方也看得到，被圍毆時知道自己快被打崩了）
+      const pf = clamp((p.poise || 0) / p.poiseMax, 0, 1);
+      screenBar(s, pf, pf < 0.34 ? '#ffd24a' : 'rgba(210,170,90,0.85)', -p.radius * cam.scale - 7);
+    }
+    if (p.reloadT > 0) screenBar(s, 1 - p.reloadT / (p.reloadDur || p.weapon.reloadTime), '#7fa8ff', -p.radius * cam.scale - 2);
     ctx.font = 'bold 10px Consolas'; ctx.textAlign = 'center';
     ctx.fillStyle = (p.state === 'CONTROLLED') ? '#ffffff' : hsl(p.hue, 60, 72);
     let tag = `${p.id + 1}`; if (p.state === 'EXTRACTING') tag += '→EXT'; if (low) tag += ' LOW';
@@ -4268,7 +4497,13 @@ function drawScreenOverlays() {
     if (!debugView && !isRevealed(e)) continue;
     const s = w2s(e.pos);
     screenBar(s, e.hp / e.maxHp, '#ff6b6b', -e.radius * cam.scale - 10);
+    // 體幹條（血條下方，琥珀色）：看得出「再幾下就破」＝值不值得繼續壓
+    if (e.poiseMax) {
+      const f = clamp((e.poise || 0) / e.poiseMax, 0, 1);
+      screenBar(s, f, f < 0.34 ? '#ffd24a' : 'rgba(210,170,90,0.85)', -e.radius * cam.scale - 5);
+    }
   }
+  drawKnightResources();
   // 砲塔準星（沿騎士 facing；另畫一條較淡的目標朝向線顯示轉向延遲）
   if (controlledId != null && players[controlledId].state === 'CONTROLLED') {
     const u = players[controlledId], s = w2s(u.pos);
