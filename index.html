@@ -143,6 +143,7 @@ const CONFIG = {
   // bulletSpeedMul：原版 4＝為了讓槍戰接近 hitscan。HOMEWARD 中世紀化後箭矢要「看得見在飛、能預判走位」→ 1.5
   juice: { bulletSpeedMul: 1.5, tracer: 1.0, bulletAlpha: 0.16, tracerEvery: 5, recoil: 4, recoilDecay: 60, camKick: 0, shakeFire: 0, shakeHit: 0, shakeKill: 0, shakeMax: 12, shakeDecay: 16, hitstopKill: 0.04,   // 一般彈＝極細淡線(bulletAlpha,0＝隱形)；曳光彈＝火光色、每 tracerEvery 發一發(現實 4:1≈第5發)、只有 W.tracer 的槍有
     hitFlash: 0.12, flinch: 5,                                              // 受擊：閃白時長 / 後仰位移(px)
+    cardHit: 0.45, cardShake: 4,                                            // 狀態卡受擊：紅框時長 / 震幅(px)
     deathHitstop: 0.06 },   // 我方陣亡：只保留短頓幀「頓一下」（已取消死亡鏡頭＝相機不轉去死亡點，激戰中不干擾操作）
   // 視覺化聲音：控制角色「視線外」方向有聲音時，畫面邊框朝該方向發光（無音效的替代提示；arcade 亦沿用）。
   soundEdge: { alpha: 0.6, frame: 0.07 },   // alpha＝發光最大不透明度；frame＝常駐外框淡度
@@ -2142,6 +2143,56 @@ function spawnPos(i, n) {
 function releasePointer() { if (document.exitPointerLock) document.exitPointerLock(); }
 
 // 開新的一輪 run（從基礎陣容起，先進路線圖）
+/* =====================================================================
+   ORIGINS — **出身：開局選一種玩法**（使用者提案，取代被擱置的敘事序章）
+
+   使用者要的不是教學，是「決定第一個角色（＝你操作的騎士）有怎樣的初始裝備」。
+   所以這一頁只做一件事：把四套配裝攤開來，選的是**打法**不是數值高低。
+   每一套都各有一個明確的弱點，沒有全能選項：
+
+     劍與盾   能格擋能招架，但輸出最低
+     雙手斧   hyperArmor 硬換，但**不能格擋**（只剩武器招架，空招會自己硬直）
+     遊獵     遠程風箏，但貼身就完蛋
+     術士     開局就會火矢（唯一開局帶「習得」的），但甲最薄
+
+   只影響騎士（roster[0]），扈從仍是隨機招募。 */
+const ORIGINS = {
+  warden:  { name: '守備',   title: '劍與盾', hue: 205,
+             desc: '長劍圓盾。能格擋、能招架——防禦的每一種選項你都有，代價是輸出最低。',
+             kit: { classId: 'knight', weaponId: 'sword', offId: 'shield', armorId: 'mail',
+                    weaponId2: 'javelin', offId2: 'shield', itemId: 'tonic', abilityId: 'mend' } },
+  reaver:  { name: '陷陣',   title: '雙手斧', hue: 20,
+             desc: '雙手斧。判定窗中有 hyperArmor，可以硬換一刀——但**不能帶盾＝不能格擋**，只剩武器招架。',
+             kit: { classId: 'knight', weaponId: 'axe', offId: null, armorId: 'cuirass',
+                    weaponId2: 'sword', offId2: 'buckler', itemId: 'firepot', abilityId: 'bandage' } },
+  ranger:  { name: '遊獵',   title: '長弓', hue: 110,
+             desc: '長弓與短刀。拉開距離放箭，但雙手武器不能帶盾，被貼上就只能靠走位。',
+             kit: { classId: 'knight', weaponId: 'longbow', offId: null, armorId: 'gambeson',
+                    weaponId2: 'knife', offId2: 'buckler', itemId: 'smokepot', abilityId: 'mend' } },
+  adept:   { name: '習術',   title: '火矢', hue: 285,
+             desc: '**開局就會火矢**（唯一一開始就有「習得」的出身）。高穿甲專治重裝，代價是甲最薄。',
+             kit: { classId: 'knight', weaponId: 'sword', offId: 'buckler', armorId: 'gambeson',
+                    weaponId2: 'crossbow', offId2: null, itemId: 'firebolt', abilityId: 'firebolt' } },
+};
+const ORIGIN_IDS = Object.keys(ORIGINS);
+let originPick = null;   // 本局選的出身（顯示用；實際效果已寫進 roster[0]）
+function enterOrigin() { scene = 'ORIGIN'; releasePointer(); }
+// 選定出身 → 覆寫騎士的配裝 → 進路線圖
+function chooseOrigin(id) {
+  const O = ORIGINS[id];
+  if (!O || scene !== 'ORIGIN') return false;
+  originPick = id;
+  const k = roster[KNIGHT_ID];
+  Object.assign(k, O.kit);
+  k.originId = id;
+  k.hue = O.hue;
+  k.itemCount = k.itemId ? ITEM_STACK_MAX : 0;   // 卷軸給整疊
+  k.allocatedAmmo = isInfiniteAmmo(k.weaponId) ? 0 : CONFIG.ammo.defaultAlloc;
+  k.allocatedAmmo2 = isInfiniteAmmo(k.weaponId2) ? 0 : CONFIG.ammo.defaultAlloc;
+  Hooks.fire('originChosen', { id, origin: O });
+  scene = 'MAP'; releasePointer();
+  return true;
+}
 function initRun() {
   arenaMode = false;   // 離開近戰試作場
   knightRelics = new Set(); applyRelicHooks();         // roguelite：聖物 run 中撿、開新 run 清空
@@ -2155,12 +2206,12 @@ function initRun() {
   genRoadmap();   // 本局程序生成路線圖（吃種子）
   roadCompleted = new Set(); roadCurrent = null; roadAvailable = roadmap.start.slice();
   result = null; lastSummary = null; loseReason = ''; fileDrop = null;
-  /* **序章擱置中**（使用者定案）：直接進路線圖。
+  /* **敘事序章擱置中，改為出身選擇**（使用者定案）。
      原本是 startIntro() → 序章休息 → 路線圖，但那一關是原版的間諜題材（管制室/同僚/控制台），
-     中世紀化要整段重寫敘事，屬於 Phase 4。在那之前每局都播一段不合題材的教學只會擋路。
-     startIntro/intro 地圖都保留著，Phase 4 重寫開場時直接接回來即可。 */
-  introActive = false; cutscene = null;
-  scene = 'MAP'; releasePointer();
+     中世紀化要整段重寫敘事＝Phase 4。使用者要的是另一種開場：選玩法與初始裝備。
+     startIntro/intro 地圖都保留著，Phase 4 重寫開場時可以接在出身選擇之後。 */
+  introActive = false; cutscene = null; originPick = null;
+  enterOrigin();
 }
 
 // 在路線圖選擇一個可前往的節點
@@ -2434,7 +2485,7 @@ function arenaResetFight() {
     p.hp = p.maxHp; p.dead = false;
     p.state = (p.id === KNIGHT_ID) ? 'CONTROLLED' : 'IDLE';
     p.swing = null; p.staggerT = 0; p.blocking = false; p.blockT = null; p.kbx = 0; p.kby = 0;
-    p.hitFlash = 0; p.flinchX = 0; p.flinchY = 0; p.parryFxT = 0;
+    p.hitFlash = 0; p.cardHitT = 0; p.flinchX = 0; p.flinchY = 0; p.parryFxT = 0;
     p.poise = p.poiseMax; p.stam = p.stamMax; p.poiseHitT = -99; p.stamT = -99;
     p.poiseBreakFxT = 0; p.guardBreakFxT = 0; p.flinchFxT = 0; p.noStamFxT = 0;
     const sp = spawnPos(i, players.length); p.pos.x = sp.x; p.pos.y = sp.y;
@@ -3797,7 +3848,8 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (u.faction === 'player') { u.alertTimer = CONFIG.ghostAlertTime; u.regenT = 0; }   // 受傷＝在戰鬥（清戰場急救脫戰計時）
   if (flanked || surprise) spawnCrit(u.pos); else spawnHit(u.pos);   // 繞背/突襲命中＝不同火花
   addShakeAt(u.pos, (flanked || surprise) ? CONFIG.juice.shakeHit * 1.6 : CONFIG.juice.shakeHit);   // 命中震動（依離相機衰減）
-  u.hitFlash = CONFIG.juice.hitFlash;                                 // 受擊閃白
+  u.hitFlash = CONFIG.juice.hitFlash;                                 // 受擊閃白（單位本體，0.12s）
+  u.cardHitT = CONFIG.juice.cardHit;                                  // 狀態卡的紅框＋震動（比本體長，不然掃一眼會漏看）
   const pa = (fromAng != null) ? fromAng + Math.PI : u.facing;        // 子彈推進方向（背向射手）
   u.flinchX = Math.cos(pa) * CONFIG.juice.flinch; u.flinchY = Math.sin(pa) * CONFIG.juice.flinch;   // 後仰（繪製偏移）
   spawnBlood(u.pos, pa); pushDecal(u.pos.x, u.pos.y, 3 + Math.random() * 3, 'rgba(122,20,28,0.5)');  // 血霧 + 地上血漬
@@ -4790,7 +4842,7 @@ cv.addEventListener('click', () => {
     if (b && mouse.mx >= b.x && mouse.mx <= b.x + b.w && mouse.my >= b.y && mouse.my <= b.y + b.h) { editorOpen(); return; }
     const id = roadNodeAt(mouse.mx, mouse.my); if (id != null) selectNode(id);
   }
-  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR') restClick(mouse.mx, mouse.my);
+  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR' || scene === 'ORIGIN') restClick(mouse.mx, mouse.my);
   else if (scene === 'SETTLE') settleClick(mouse.mx, mouse.my);
   else if (scene === 'EVENT') eventClick(mouse.mx, mouse.my);
   else if (scene === 'RUNEND' || scene === 'RUNWIN') goMenu();
@@ -4889,6 +4941,7 @@ window.addEventListener('keydown', e => {
   }
   if (scene === 'ARMORY') { if (k >= '1' && k <= '9') armoryPick(parseInt(k, 10) - 1); return; }
   if (scene === 'TUTOR') { if (k >= '1' && k <= '9') tutorPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') tutorLeave(); return; }
+  if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(ORIGIN_IDS[parseInt(k, 10) - 1]); return; }
   if (scene === 'RUNEND' || scene === 'RUNWIN') { if (k === 'r') goMenu(); return; }
   if (scene === 'MENU') return;   // 主選單以滑鼠點選
   if (scene === 'HQ') { if (k === 'escape' || k === 'backspace') { goMenu(); e.preventDefault(); } return; }   // 總部：Esc/Backspace 回選單，其餘以滑鼠點選
@@ -4996,7 +5049,7 @@ function update(dt) {
   shakeAmt = Math.max(0, shakeAmt - CONFIG.juice.shakeDecay * dt); kickY *= Math.exp(-CONFIG.juice.shakeDecay * dt);   // 震動/相機踢衰減
   if (cutscene && cutscene.lock) return;   // 演出鎖控制：只跑鏡頭/演出，不跑常規 sim
 
-  const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
+  const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.cardHitT > 0) u.cardHitT -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
   const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
   for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickReactiveBlock(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
   for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickReactiveBlock(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
@@ -5142,6 +5195,7 @@ function draw() {
   if (scene === 'EVENT') { drawEvent(); return; }
   if (scene === 'ARMORY') { drawArmory(); return; }
   if (scene === 'TUTOR') { drawTutor(); return; }
+  if (scene === 'ORIGIN') { drawOrigin(); return; }
   if (scene === 'RUNEND') { drawRunEnd(); return; }
   if (scene === 'RUNWIN') { drawRunWin(); return; }
 
@@ -6206,15 +6260,89 @@ function drawHUD() {
 }
 
 /* ---- 底部單位卡片：名稱 / 生命 / 武器 / 彈夾·備彈 / 技能CD ---- */
+/* 隊伍狀態卡（使用者定案）：**靠左、由上而下**。
+   騎士一張完整（武器/彈藥/術的 CD），扈從各一張精簡的——你對扈從真正需要知道的只有
+   「還活著嗎、血多少、崩了沒」，其餘都是雜訊。
+   挨打時整張卡紅框＋震動（`cardHitT`，比單位本體的閃白久，掃一眼才不會漏看）。 */
+const MORALE_TAG = { shaken: { t: '動搖', c: '#ffb347' }, routed: { t: '潰逃', c: '#ff6b6b' } };
 function drawCards() {
-  const n = players.length, cw = 196, ch = 84, gap = 10;
-  const totalW = n * cw + (n - 1) * gap;
-  const x0 = (cv.width - totalW) / 2, y0 = cv.height - ch - 6;
-  for (let i = 0; i < n; i++) drawCard(players[i], x0 + i * (cw + gap), y0, cw, ch, i);
+  const x0 = 12, top = 96, gap = 6, cw = 208;
+  let y = top;
+  const knight = players[KNIGHT_ID];
+  if (knight) { drawCard(knight, x0, y, cw, 92, KNIGHT_ID); y += 92 + gap; }
+  for (const p of players) {
+    if (!p || p.id === KNIGHT_ID) continue;
+    drawAllyCard(p, x0, y, cw, 46);
+    y += 46 + gap;
+  }
+}
+// 受擊回饋：回傳這一幀要套用的震動位移（同時給紅框強度）
+function cardShakeOf(p) {
+  const t = p.cardHitT || 0;
+  if (t <= 0) return { dx: 0, dy: 0, f: 0 };
+  const f = clamp(t / CONFIG.juice.cardHit, 0, 1);
+  const a = CONFIG.juice.cardShake * f;
+  return { dx: Math.sin(simTime * 90) * a, dy: Math.cos(simTime * 70) * a * 0.6, f };
+}
+// 受擊紅框（騎士與扈從共用）
+function drawCardHitFrame(p, x, y, w, h, f) {
+  if (f <= 0) return;
+  ctx.lineWidth = 2 + 2 * f;
+  ctx.strokeStyle = `rgba(255,70,70,${0.35 + 0.5 * f})`;
+  ctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
+}
+/* 扈從卡：名字 + 血條 + 狀態。**沒有武器、沒有彈藥、沒有技能**——
+   那些你既不能操作也不需要即時知道，放上去只會把騎士自己的資訊擠掉。 */
+function drawAllyCard(p, x, y, w, h) {
+  const inactive = (p.state === 'DEAD' || p.state === 'EXTRACTED');
+  const sh = cardShakeOf(p);
+  x += sh.dx; y += sh.dy;
+  const pad = 8, bw = w - 2 * pad, bx = x + pad;
+  ctx.fillStyle = inactive ? 'rgba(14,18,24,0.8)' : 'rgba(18,24,32,0.88)';
+  ctx.fillRect(x, y, w, h);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = inactive ? 'rgba(120,130,140,0.3)' : hsl(p.hue, 50, 55, 0.8);
+  ctx.strokeRect(x, y, w, h);
+
+  ctx.textAlign = 'left'; ctx.font = 'bold 12px Consolas';
+  ctx.fillStyle = inactive ? '#6a727c' : hsl(p.hue, 60, 74);
+  ctx.fillText(p.name, bx, y + 15);
+  // 狀態：陣亡/撤離 > 士氣（動搖/潰逃）。**潰逃要最顯眼**——那代表這個人已經不聽指令了
+  const ms = MORALE_TAG[p.moraleState];
+  ctx.textAlign = 'right'; ctx.font = 'bold 10px Consolas';
+  if (p.state === 'DEAD') { ctx.fillStyle = '#8a6a6a'; ctx.fillText('陣亡', x + w - pad, y + 15); }
+  else if (p.state === 'EXTRACTED') { ctx.fillStyle = '#5fd06b'; ctx.fillText('已撤離', x + w - pad, y + 15); }
+  else if (p.state === 'EXTRACTING') { ctx.fillStyle = '#7fa8ff'; ctx.fillText('撤離中', x + w - pad, y + 15); }
+  else if (ms) {
+    const blink = p.moraleState === 'routed' && Math.sin(simTime * 10) > 0;
+    ctx.fillStyle = blink ? '#ffffff' : ms.c;
+    ctx.fillText(ms.t, x + w - pad, y + 15);
+  } else { ctx.fillStyle = 'rgba(205,214,224,0.5)'; ctx.font = '9px Consolas'; ctx.fillText(p.archetype ? p.archetype.name : '', x + w - pad, y + 15); }
+
+  // 血條
+  const hpFrac = clamp(p.hp / p.maxHp, 0, 1), low = hpFrac <= CONFIG.lowHpFrac && !inactive;
+  const by = y + 23;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(bx, by, bw, 8);
+  let hpcol = inactive ? '#3a424c' : hpFrac > 0.6 ? '#5fd06b' : low ? '#ff4d4d' : '#e0c24a';
+  if (low && Math.sin(simTime * 18) > 0) hpcol = '#ffffff';
+  ctx.fillStyle = hpcol; ctx.fillRect(bx, by, bw * hpFrac, 8);
+  ctx.textAlign = 'right'; ctx.font = '8px Consolas'; ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  if (!inactive) ctx.fillText(`${Math.max(0, Math.ceil(p.hp))}/${p.maxHp}`, bx + bw - 2, by + 7);
+  // 體幹（細條）：看得出「再幾下就被打崩」
+  if (!inactive && p.poiseMax) {
+    const pf = clamp((p.poise || 0) / p.poiseMax, 0, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(bx, by + 10, bw, 3);
+    ctx.fillStyle = pf > 0.35 ? 'rgba(224,194,74,0.85)' : '#ff9a6a';
+    ctx.fillRect(bx, by + 10, bw * pf, 3);
+  }
+  drawCardHitFrame(p, x, y, w, h, sh.f);
+  ctx.textAlign = 'left';
 }
 function drawCard(p, x, y, w, h, i) {
   const ctrl = (p.id === KNIGHT_ID);   // HOMEWARD：卡片高亮＝騎士本人（不再是「當前附身對象」）
   const inactive = (p.state === 'DEAD' || p.state === 'EXTRACTED');
+  const sh = cardShakeOf(p);
+  x += sh.dx; y += sh.dy;
   const pad = 9, bw = w - 2 * pad, bx = x + pad;
   // 面板
   ctx.fillStyle = ctrl ? 'rgba(42,52,66,0.94)' : 'rgba(18,24,32,0.86)';
@@ -6285,6 +6413,7 @@ function drawCard(p, x, y, w, h, i) {
     ctx.textAlign = 'right'; ctx.font = '8px Consolas'; ctx.fillStyle = '#e8eef5';
     ctx.fillText(p.abilityCd > 0 ? p.abilityCd.toFixed(1) + 's' : 'READY', x + w - pad - 2, sby + 7);
   }
+  drawCardHitFrame(p, x, y, w, h, sh.f);
   ctx.textAlign = 'left';
 }
 /* ---- 休息關畫面 ---- */
@@ -6533,6 +6662,44 @@ function drawRestOffers() {
 // 軍械庫節點畫面（獨立場景；三選一）
 /* 導師畫面：每個學得會的術一列，直接把「你有幾張 / 要幾張」攤在臉上。
    看得到但學不起的也列出來（灰掉）——玩家要知道「再撿一張就能學」才會去撿。 */
+/* 出身選擇：四套配裝攤開來比。每一列直接把「你會拿到什麼」寫滿——
+   選的是打法，所以弱點要跟優點一樣顯眼（不能格擋/甲最薄 都用亮色標出來）。 */
+function drawOrigin() {
+  restRects = [];
+  ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e8eef5'; ctx.font = 'bold 30px Consolas'; ctx.fillText('你是什麼樣的騎士', cv.width / 2, 74);
+  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '14px Consolas';
+  ctx.fillText('選一套開局配裝——這決定的是打法，不是強弱。四套各有一個明確的弱點。', cv.width / 2, 100);
+
+  const bw = 940, bh = 96, gap = 12, y0 = 138, bx = cv.width / 2 - bw / 2;
+  ORIGIN_IDS.forEach((id, i) => {
+    const O = ORIGINS[id], y = y0 + i * (bh + gap);
+    const col = hsl(O.hue, 62, 66);
+    ctx.fillStyle = 'rgba(24,30,40,0.97)'; ctx.fillRect(bx, y, bw, bh);
+    ctx.lineWidth = 2; ctx.strokeStyle = col; ctx.strokeRect(bx, y, bw, bh);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px Consolas'; ctx.fillStyle = col; ctx.fillText(`[${i + 1}]`, bx + 16, y + 30);
+    ctx.font = 'bold 20px Consolas'; ctx.fillStyle = '#e8eef5'; ctx.fillText(O.name, bx + 56, y + 32);
+    ctx.font = '13px Consolas'; ctx.fillStyle = col; ctx.fillText(O.title, bx + 56 + 56, y + 32);
+    ctx.font = '12px Consolas'; ctx.fillStyle = '#9fb3c8'; ctx.fillText(O.desc.replace(/\*\*/g, ''), bx + 56, y + 54);
+    // 實際配裝：一眼看得到四個槽位 + 甲
+    const K = O.kit;
+    const wName = (w) => (w && WEAPONS[w] ? WEAPONS[w].name : '—');
+    const oName = (o) => (o && OFFHANDS[o] ? OFFHANDS[o].name : '空手');
+    const aName = (a) => (a && ARTS[a] ? ARTS[a].name : '—');
+    ctx.font = '11px Consolas'; ctx.fillStyle = '#7f8b99';
+    ctx.fillText(
+      `槽1 ${wName(K.weaponId)}＋${oName(K.offId)}　·　槽2 ${wName(K.weaponId2)}＋${oName(K.offId2)}　·　` +
+      `槽3 卷軸 ${aName(K.itemId)}　·　槽4 習得 ${aName(K.abilityId)}　·　甲 ${(ARMORS[K.armorId] || ARMORS.none).name}`,
+      bx + 56, y + 78);
+    pushRect(bx, y, bw, bh, () => chooseOrigin(id));
+  });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(205,214,224,0.45)'; ctx.font = '11px Consolas';
+  ctx.fillText('點選或按數字鍵 1–4　·　扈從仍是沿途隨機招募，這一頁只決定你自己', cv.width / 2, y0 + ORIGIN_IDS.length * (bh + gap) + 22);
+  ctx.textAlign = 'left';
+}
 function drawTutor() {
   restRects = [];
   ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
