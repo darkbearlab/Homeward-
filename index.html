@@ -418,6 +418,7 @@ CONFIG.melee = {
   parryStagger: 0.7,       // 招架成功給攻擊者的硬直秒
   parryHealFrac: 0,        // （預留）招架回復比例
   windupMoveMul: 0.7,      // 前搖中的移動倍率
+  castMoveMul: 0.45,       // **施法**前搖中的移動倍率（比揮擊更慢＝唸咒要站得住）
   activeMoveMul: 0.35,     // 判定窗中的移動倍率（揮擊瞬間幾乎定身）
   recoverMoveMul: 0.6,     // 後搖中的移動倍率
   swingTurnMul: 0.4,       // 前搖之後（判定+後搖）的轉向倍率＝揮出去就不能大幅修正方向（太低＝完全跟不上走動的敵人）
@@ -1990,8 +1991,8 @@ function makePlayer(i, cfg, pos) {
   const slots = [
     mkSet(cfg.weaponId, cfg.offId, cfg.allocatedAmmo) || mkSet(FLOOR_WEAPON, null, 0),
     mkSet(cfg.weaponId2, cfg.offId2, cfg.allocatedAmmo2),
-    { kind: 'free', type: 'item', id: cfg.itemId || null, count: cfg.itemId ? (cfg.itemCount || 1) : 0 },
-    { kind: 'free', type: 'ability', id: cfg.abilityId || null },
+    { kind: 'free', type: 'item', id: cfg.itemId || null, count: cfg.itemId ? (cfg.itemCount || 1) : 0, cd: 0 },        // 卷軸載具
+    { kind: 'free', type: 'ability', id: cfg.abilityId || null, cd: 0 },                                                 // 習得載具
   ];
   const mainSlot = slots[0].main;
   const offNow = slots[0].off;
@@ -2032,6 +2033,7 @@ function makePlayer(i, cfg, pos) {
     senseRadius: CONFIG.vision.senseRadius * (cfg.strength || 1) * (fx.senseMul || 1) * pSense,
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接：揮斬狀態機 / 盾格 / 硬直 / 擊退速度 / 招架特效
     aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（扈從也吃；騎士手動射擊不經此）
+    cast: null,   // 施法前搖狀態 { slot, artId, t, dur }；卷軸即時＝不經過這裡
     parryT: 0, parryDur: 0, parryHit: false,   // 武器招架（無盾時的防禦）：動作計時 / 總長 / 這次有沒有接到攻擊
     poiseMax: CLS.poise, poise: CLS.poise, poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗（來自共用兵種表）
     // 耐力：**只有玩家操作的騎士**管理（這是統一數值表唯一的例外，見 UNIT_CLASSES）。
@@ -3019,12 +3021,88 @@ function selectSlot(u, i) {
   Sfx.play('reload', u.pos);
   return true;
 }
-// 自由位：道具走 useItem 的充能制、技能走 useAbility 的 CD 制（兩套都已存在，這裡只是接槽位）
-function useFreeSlot(u, i) {
-  const sl = u.slots[i]; if (!sl || sl.kind !== 'free' || !sl.id) return false;
-  if (sl.type === 'ability') { const prev = u.abilityId, pa = u.ability; u.abilityId = sl.id; u.ability = artOf(sl.id); const r = useAbility(u); if (!r) { u.abilityId = prev; u.ability = pa; } return r; }
-  if (sl.type === 'item') { const prevId = u.itemId, prevN = u.itemCount; u.itemId = sl.id; u.itemCount = sl.count != null ? sl.count : 0; const r = useItem(u); sl.count = u.itemCount; if (!r) { u.itemId = prevId; u.itemCount = prevN; } return r; }
-  return false;
+/* ── 自由位＝術的載具（Phase 2-B，使用者定案）──────────────────────────
+   槽位欄位沿用舊名以免動到休息關/倉庫 UI（約 85 處），但語意已經是「載具」：
+     sl.type === 'item'    → **卷軸**：sl.count 次、無 CD、即時（無前搖、不吃耐力）
+     sl.type === 'ability' → **習得**：無限次、sl.cd 秒 CD、有前搖且吃耐力、會被打斷
+   ★ CD 存在**槽位**上而不是單位上。舊版寫在 u.abilityCd，兩個習得的術會共用同一條 CD。
+
+   舊版這裡還有一個靠運氣在動的 bug：useAbility/useItem 都沒有 return，
+   而呼叫端寫的是 `const r = useX(u); if (!r) { 還原 }` → r 恆為 undefined ＝**每次都還原**。
+   道具因為先寫回 sl.count 才僥倖正確。現在全部走 castArt，有真正的回傳值。 */
+function useFreeSlot(u, i) { return castArt(u, i); }
+const artCdOf = (sl) => (sl && sl.cd > 0 ? sl.cd : 0);
+const artUsesOf = (sl) => (sl && sl.type === 'item' ? (sl.count || 0) : Infinity);
+// 這個槽位現在按得下去嗎（HUD 用；不含「正在施法」等瞬時狀態）
+function artReady(u, sl) {
+  if (!sl || sl.kind !== 'free' || !sl.id || !artOf(sl.id)) return false;
+  return sl.type === 'ability' ? artCdOf(sl) <= 0 : artUsesOf(sl) > 0;
+}
+function castArt(u, i) {
+  const sl = u && u.slots && u.slots[i];
+  if (!sl || sl.kind !== 'free' || !sl.id) return false;
+  const A = artOf(sl.id); if (!A) return false;
+  // **騎士專屬**（使用者定案）：AI 不做資源管理——給了 CD 與次數，扈從只會亂放或永遠不放，
+  // 就跟「扈從有耐力卻不會回氣」是同一個坑。
+  if (u.id !== KNIGHT_ID || u.state !== 'CONTROLLED') return false;
+  if (u.staggerT > 0 || u.cast || u.swing) return false;
+  const learned = sl.type === 'ability';
+  if (learned && !A.learnable) return false;   // 陶罐學不會
+  if (learned) {
+    if (artCdOf(sl) > 0) return false;
+    if (u.stamMax && (u.stam || 0) < (A.stamCost || 0)) { u.noStamFxT = 0.25; Hooks.fire('stamEmpty', { u }); return false; }
+    u.cast = { slot: i, artId: resolveArt(sl.id), t: 0, dur: A.castTime || 0.4 };   // 前搖開始，會被打斷
+    u.blocking = false; u.blockT = null;
+    Hooks.fire('castStart', { u, artId: u.cast.artId, art: A, carrier: 'learned' });
+    return true;
+  }
+  if (!(sl.count > 0)) return false;
+  sl.count--;                                   // 卷軸：即時生效，用完就沒了
+  applyArt(u, A);
+  Hooks.fire('cast', { u, artId: resolveArt(sl.id), art: A, carrier: 'scroll' });
+  return true;
+}
+// CD 逐槽位遞減（**每個習得的術有自己的 CD**，不是共用一條）
+function tickArtSlots(u, dt) {
+  if (!u.slots) return;
+  for (const sl of u.slots) if (sl && sl.cd > 0) sl.cd = Math.max(0, sl.cd - dt);
+}
+// 前搖推進：走完＝扣耐力、生效、進 CD。被打斷在 damageUnit 裡（與揮擊同一處）。
+function tickCast(u, dt) {
+  if (!u.cast) return;
+  u.cast.t += dt;
+  if (u.cast.t < u.cast.dur) return;
+  const artId = u.cast.artId, sl = u.slots && u.slots[u.cast.slot], A = ARTS[artId];
+  u.cast = null;
+  if (!sl || !A) return;
+  if (u.stamMax) { u.stam = Math.max(0, (u.stam || 0) - (A.stamCost || 0)); u.stamT = simTime; }
+  applyArt(u, A);
+  sl.cd = A.cooldown || 0;
+  Hooks.fire('cast', { u, artId, art: A, carrier: 'learned' });
+}
+// 效果本體：敵我共用一套管線，載具只決定「你憑什麼用它」
+function applyArt(u, A) {
+  if (A.heal) { u.hp = Math.min(u.maxHp, u.hp + A.heal); spawnHeal(u.pos); }
+  if (A.refill) { u.ammoInMag = unitMag(u); if (!isInfiniteAmmo(u.weaponId)) u.ammoReserve += unitMag(u) * 2; spawnPickup(u.pos); }
+  if (A.buff) { u.buffT = A.buff.dur; u.buffMove = A.buff.moveMul || 1; u.buffFire = A.buff.fireRateMul || 1; spawnHeal(u.pos); }
+  if (A.grenade) throwGrenade(u, A.grenade);
+  if (A.smoke) throwSmoke(u, A.smoke);
+  if (A.flash) throwFlash(u, A.flash);
+  if (A.bolt) castBolt(u, A.bolt);
+}
+/* 火矢：走**既有的彈道管線**（同一個 bullets 陣列＝同一套牆面/單位碰撞、
+   同一套友軍誤傷、同一套穿甲）。高 pierce ＝專門對付披甲士。 */
+function castBolt(u, B) {
+  const a = u.facing;
+  bullets.push({
+    x: u.pos.x + Math.cos(a) * (u.radius + 2), y: u.pos.y + Math.sin(a) * (u.radius + 2),
+    vx: Math.cos(a) * B.projSpeed * CONFIG.juice.bulletSpeedMul, vy: Math.sin(a) * B.projSpeed * CONFIG.juice.bulletSpeedMul,
+    dmg: B.dmg, faction: u.faction, range: B.range, traveled: 0,
+    ox: u.pos.x, oy: u.pos.y, pierce: B.pierce || 0, tracer: true, owner: u,
+  });
+  for (let i = 0; i < 10; i++) particles.push(mkPart(u.pos, 160, 0.35, i % 2 ? '#ffd27a' : '#ff8a3a'));
+  addShakeAt(u.pos, CONFIG.juice.shakeKill);
+  Sfx.play('shot', u.pos);
 }
 // 舊介面相容：X／滾輪＝在兩個手部 set 之間切換
 function swapWeapon(u) {
@@ -3131,7 +3209,7 @@ function friendlyInSwingArc(u, aimPos) {
 
 function startSwing(u, fireRateMult) {
   const W = u.weapon;
-  if (u.swing || u.staggerT > 0 || u.swapT > 0 || u.parryT > 0) return false;   // 揮擊中/硬直中/換手中/招架動作中不能再揮
+  if (u.swing || u.staggerT > 0 || u.swapT > 0 || u.parryT > 0 || u.cast) return false;   // 揮擊中/硬直中/換手中/招架中/施法前搖中不能再揮
   const cost = W.stamCost || 0;   // 耐力不足＝揮不動（攻擊有成本）
   if (u.stamMax && cost > 0 && (u.stam || 0) < cost) {
     u.noStamFxT = 0.25;
@@ -3281,6 +3359,7 @@ function tickWeaponParry(u, dt) {
 // 揮擊中的移動/轉向倍率（前搖還能修正方向，揮出去就幾乎鎖死＝要預判）
 function swingMoveMul(u) {
   const s = u.swing;
+  if (u.cast) return CONFIG.melee.castMoveMul;   // 施法前搖：走得比揮擊前搖還慢（定身唸咒的代價）
   if (!s) return u.blocking ? CONFIG.melee.blockMoveMul : (u.parryT > 0 ? CONFIG.melee.wpMoveMul : 1);
   if (s.t < s.windup) return CONFIG.melee.windupMoveMul;
   if (s.t < s.windup + s.active) return CONFIG.melee.activeMoveMul;
@@ -3356,26 +3435,11 @@ function tickAmmo(u, dt) {
   if (u.buffT > 0) { u.buffT -= dt; if (u.buffT <= 0) { u.buffT = 0; u.buffMove = 1; u.buffFire = 1; } }  // 道具短時 buff 倒數
 }
 // 手動：基礎+連射 bloom（玩家的扳機紀律＝技巧）。待機：固定平庸發散、不累積 bloom、射速慢。敵人：同手動會 bloom。
-// 技能（僅手動可用，待機不放）：目前佔位＝恢復少量生命，有 CD
-function useAbility(u) {
-  if (!u || u.state !== 'CONTROLLED' || !u.ability || u.abilityCd > 0) return;
-  const a = u.ability;
-  if (a.heal) { u.hp = Math.min(u.maxHp, u.hp + a.heal); spawnHeal(u.pos); }
-  u.abilityCd = a.cooldown;
-}
-// 道具（一次性，C 鍵；用完消失）：瞬補 / 補彈 / 短時 buff / 手榴彈
-function useItem(u) {
-  if (!u || u.state !== 'CONTROLLED' || !u.itemId || !(u.itemCount > 0)) return;
-  const it = artOf(u.itemId);   // 經過舊 key 解析（grenade→firepot 等）
-  if (!it) return;
-  if (it.heal) { u.hp = Math.min(u.maxHp, u.hp + it.heal); spawnHeal(u.pos); }
-  if (it.refill) { u.ammoInMag = unitMag(u); if (!isInfiniteAmmo(u.weaponId)) u.ammoReserve += unitMag(u) * 2; spawnPickup(u.pos); }
-  if (it.buff) { u.buffT = it.buff.dur; u.buffMove = it.buff.moveMul || 1; u.buffFire = it.buff.fireRateMul || 1; spawnHeal(u.pos); }
-  if (it.grenade) throwGrenade(u, it.grenade);
-  if (it.smoke) throwSmoke(u, it.smoke);
-  if (it.flash) throwFlash(u, it.flash);
-  u.itemCount = Math.max(0, (u.itemCount || 0) - 1);   // 消耗一顆充能（剩 0＝用完，rosterFromPlayer 不再帶回）
-}
+/* 舊介面（空白鍵＝習得的術、C＝卷軸）：**只是槽位的別名**，一律走 castArt。
+   保留兩條各自實作的路徑等於保留兩份 bug——舊版就是這樣搞出「兩個習得的術共用 CD」的。 */
+const SLOT_SCROLL = 2, SLOT_LEARNED = 3;   // 自由位 3/4 的預設分工（槽位本身可放任一載具）
+function useAbility(u) { return castArt(u, SLOT_LEARNED); }
+function useItem(u) { return castArt(u, SLOT_SCROLL); }
 // 手榴彈：朝瞄準方向「丟出去」一顆會飛的手榴彈→落點才 360° 炸開散射一批彈丸（不算爆破半徑，威力＝被幾顆打中＝中心密/遠處稀，自然衰減）。
 function throwGrenade(u, G) {
   const ang = u.facing;
@@ -3605,10 +3669,16 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
     const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng, opts && opts.attacker);
     // 打斷：前搖中被命中＝這一刀直接被打斷（重武器 hyperArmor 免疫）＝搶到先手的人贏整次交鋒
     if (!broke && inWindup && !hyper) { u.swing = null; u.flinchFxT = 0.18; Hooks.fire('interrupt', { u, by: (opts && opts.attacker) || null }); }
+    // **施法前搖同理**：習得的術被打斷＝這一發沒了，但不進 CD、不扣耐力（成本在 tickCast 收尾才付）。
+    // 卷軸沒有前搖，所以打不斷——這就是卷軸作為「救命按鈕」的價值。
+    if (u.cast) {
+      const cid = u.cast.artId; u.cast = null; u.flinchFxT = 0.18;
+      Hooks.fire('interrupt', { u, by: (opts && opts.attacker) || null, artId: cid, cast: true });
+    }
   }
   if (opts && (opts.knock || opts.stagger) && fromAng != null) {
     applyKnock(u, fromAng + Math.PI, opts.knock || 0);                                   // 往「背離攻擊者」的方向推
-    if (opts.stagger) { u.staggerT = Math.max(u.staggerT || 0, opts.stagger); u.swing = null; }
+    if (opts.stagger) { u.staggerT = Math.max(u.staggerT || 0, opts.stagger); u.swing = null; u.cast = null; }
   }
   if (armorBlocked) return blocked;   // 被甲彈開：不流血（體幹/擊退已在上面結算過了）
   if (u.staggerT > 0 && !blocked) dmg *= M.poiseBreakDmgMul;   // 處決窗：硬直中的人挨打特別痛
@@ -4824,7 +4894,7 @@ function update(dt) {
 
   const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
   const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
-  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
+  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
   for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
   tickFactionMorale(dt); pruneMomentum();   // 陣營士氣的恢復 + 氣勢衰退
   pruneAttackTokens();   // 攻擊權：過期的釋放出來給別隻
