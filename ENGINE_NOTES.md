@@ -1,0 +1,171 @@
+# SLEEPER — 開發脈絡（現況版）
+
+> 接手前先讀這份。**以現況架構為主、精簡可自足**；逐功能的歷史細節（含舊 §4.x 編號、時間線）封存在 `封存/開發進度與脈絡_v1封存_2026-06-24.md`，需要考古再翻。原始規格 `SLEEPER_開發計畫.md`。整理日：2026-06-24。
+
+## 0. 一句話 + 檔案佈局
+俯視戰術射擊 × 附身式小隊操作 × Slay-the-Spire roguelite。一次只完整附身一名單位（FPS 滑鼠鎖定瞄準、WASD、Shift 奔跑），其餘隊員跑各自「待機個性」本能；每場在時間關門、追兵湧入前至少把一人帶到撤離點，撤出者帶入後續、陣亡永久損失。路線圖選路前進（戰鬥/休息/軍械庫節點），走到終點＝過關。美術全為幾何佔位，數值全為佔位待調。
+
+- **`index.html`** — 遊戲本體，單檔（原生 JS + Canvas 2D、零相依、開檔即玩）。所有可調數值/內容在檔頂目錄（見 §6）。
+- **`editor.html`** — 獨立地圖編輯器（多地圖庫 maps.json + 測試戰鬥往返）。與 index 分檔。
+- **`CLAUDE.md`** — 精簡常駐指示（每 session 自動載入）。
+- **`SLEEPER_開發計畫.md`** — 原始設計規格。`地圖編輯器規劃.md`、`舊地圖備份.md`、`封存/` — 參考/歷史。
+- **`extraction_arcade/`** — 2D 搜打撤 arcade 變體，**規劃中未動工**（只有設計文件，將由本遊戲複製分家、非共用引擎）。改 index 時可忽略。
+- GitHub：`darkbearlab/sleeper_roguelite`（main）。**每個完成且驗證過的更新都 commit+push**（GCM 認證；`_check.js`/`_edcheck.js` 為一次性測試檔，gitignored）。
+
+## 1. 怎麼跑 / 怎麼驗證
+- **跑**：瀏覽器開 `index.html` → 主選單。戰鬥點畫面鎖滑鼠才開始推進（未鎖＝暫停、黑屏「點擊以開始」`drawCombatStart`）。
+- **驗證（每次改完必跑）**：抽出 `<script>` 丟 Node `vm`，stub 掉 DOM/canvas(Proxy ctx)/pointerlock/**localStorage**，移除結尾 `requestAnimationFrame`，**逐幀跑遍所有場景的 `update()+draw()`**（不要只在 COMBAT 跑，否則漏掉非戰鬥場景碰 cam/players 的崩潰）。
+  - 踩雷：strict-mode `eval` 裡 `var x` **不跨 R() 呼叫保留** → 多語句狀態包成單一 `R('(function(){…})()')`，或暫存到 `globalThis.x`。
+  - `editor.html` 同法（無 DOM 時 model 層仍可測；UI 全包 try/catch）。`fitView` 有 `if(!cv)return` 守衛。
+
+## 2. 場景與流程
+`scene ∈ { MENU, MAP, COMBAT, REST, SETTLE, EVENT, ARMORY, RUNEND, RUNWIN, EDITOR, SANDBOX }`
+- **MENU**（進入點）：`goMenu/drawMenu/menuRects/menuClick`，三選項 → 戰役 `initRun()` / 自由戰鬥 `enterSandbox()` / 地圖編輯器 `location.href='editor.html'`。RUNEND/RUNWIN 點擊/R 與 `exitSandbox` 都回選單（選單＝hub）。
+- **戰役**：`initRun` → `startIntro()`（第0關序章，COMBAT scene + `cutscene` 導演，可 Esc 跳）→ 序章休息 → `MAP` 路線圖 → `selectNode(id)` 進節點 → 戰鬥 `endMission()`（勝→**戰果結算 SETTLE**`enterSettle` 挑人升階→`settleAdvance`）/ 休息 `restDoContinue()` → `advanceNode()`（標記完成、開放後繼或 RUNWIN）。
+- **開機路由**（檔尾）：`?playtest`→`bootPlaytest`（編輯器帶圖）；`?sandbox`→`enterSandbox`；否則 `goMenu()`。
+- **update 守衛**：`update()` 開頭 `if (scene!=='COMBAT') return; if (!Input.locked) return;`。
+
+## 3. index.html 內部分區（依出現順序，關鍵符號）
+| 區段 | 關鍵符號 |
+|---|---|
+| 內容目錄 | `CONFIG / WEAPONS,WEAPON_IDS / ABILITIES / EQUIPMENT / ITEMS / ARCHETYPES / ENEMY_TYPES / DESTRUCT / *_IDS,LOOT_*_IDS / makeRecruit` |
+| 幾何 | `dist,angTo,angDiff,rotToward,clamp,segIntersect,closestOnSeg,segCircle,raySegT,rayHit`(含關門) |
+| 地圖 | `MAPS`(alpha/bravo/outpost/lanes/intro),`MAP`(作用中 let),`WORLD`,`rectWalls`,`buildMapDerived`(重建衍生表),`adj`,`wp` |
+| 路線圖 | `ROADMAP`(COMBAT 節點含 `map` 欄),`roadAdj`,`roadNode` |
+| 視線 | `segBlocked,clearLine,clearLineWalls,nodeVis,nearestNode,extractNodeId,nextHop,buildNextHop,canSee,isRevealed` |
+| 相機 | `cam,camTarget,initCamera,updateCamera,w2s,applyCam` |
+| 全域狀態 | `players,enemies,bullets,grenades,particles,drops,fileDrop,prisoners,controlledId,roster,missionIndex,warehouse,backpack,ammoStock,scene,playtestMode,…` |
+| 建單位 | `makePlayer`(套裝備fx+hasFile),`makeEnemy`(類型化),`freePrisoner` |
+| 流程 | `goMenu,initRun,selectNode,advanceNode,startMission,endMission,startIntro/finishIntro/skipIntro,enterRest,enterArmory,enterSandbox,sandboxStart,bootPlaytest` |
+| 戰鬥 | `fireUnit,unitMag,startReload,tickAmmo,useAbility,useItem,throwGrenade/detonateGrenade/updateGrenades,manualFire,enemyFire,enemyAttack,damageUnit,killUnit,updateBullets` |
+| AI | `idleTick`(我方待機),`updateThreatKnowledge,nearestKnownPlayer,registerHitThreat,scoreNode,watchPoint,patrolStep,huntStep,searchMoveTo,enemyIdleTick,enemyTick`,開關門 `openDoorsNear/closeDoorsBehind` |
+| 附身/撤離 | `activePlayers,possess,toggleExtract,extractAll,autoPossess,seizeIfEscorting,extractTick` |
+| 移動 | `moveToward,pushOutSeg,collideWalls,onLowWall,lowWallSpeedMult,separate,sprintMult` |
+| 物品 | `spawnDrop,spawnDevRack,updateDrops,updateFile,spawnPickup` |
+| 互動 | `nearestInteractable,tryInteract`（**F**：門/按鈕/俘虜/序章控制台） |
+| 渲染 | `draw` + `drawMenu/Roadmap/Rest/Armory/RunEnd/RunWin/Editor/SandboxBackdrop`、`drawFog/Players/Enemies/Bullets/Grenades/FileDrop/HUD/Cards/Cutscene/SoundEdges` |
+| 工具 | 數值面板 `initTunerUI/tune*`、in-index 編輯器(scene EDITOR `editorOpen…`)、沙盒 `initSandboxUI` |
+| 接縫/迴圈 | `Input`(讀輸入唯一介面)、`Sfx.play(id,pos)`(音效 no-op + 視覺化聲音)、`update/draw/frame`(rAF+累積器固定 dt) |
+
+## 4. 核心系統（現況；關鍵函式 + 踩雷）
+- **附身/控制/撤離**：單位 `state ∈ CONTROLLED|IDLE|EXTRACTING|EXTRACTED|DEAD`。1/2/3 切換無 CD。**撤離護送**＝`controlledId` 指向 EXTRACTING 單位：持續自走撤離＋滑鼠可轉視野，任一指令(移動/開火/技能/換彈R/道具C/互動F)→`seizeIfEscorting` 奪回；E/Q 姿態不奪回。H 撤離、Shift+H 全體。場上無 active 我方 → `endMission`。
+- **相機**：旋轉跟隨被附身單位（恆朝上）。**我方死亡鏡頭已取消**（使用者要求：激戰中相機轉去死亡點干擾操作）＝陣亡只留短頓幀 `hitstop(CONFIG.juice.deathHitstop)`，相機續跟、自動接手。
+- **視線/迷霧**：`canSee(observer,pos)` 依狀態（IDLE 敵＝短錐 `idleConeMul`+有限視距 `idleViewRange`；近身 senseRadius 360° 保底；草叢 MOBA 遮蔽）。迷霧用**離屏 canvas 遮罩**（**不可在主畫布 destination-out**＝會擦掉世界）。`isRevealed`＝開火現形 `revealT>0` 或被任一我方 canSee（草叢內開火的敵人對玩家現形）。
+- **武器/開火**：手動 bloom（扳機紀律＝技巧），待機另計固定基礎。`fireUnit` 發射原點 `b.ox/oy`（低矮牆越射判定）；非消音開火 `alertEnemiesNear`（聽覺半徑驚動 IDLE）。子彈是**掃描式碰撞**（`segIntersect(old→new)`+`segCircle`）＝高速不穿牆；`pierce` 穿甲；juice 近 hitscan（`projSpeed×bulletSpeedMul`）+曳光。
+- **雙武器（主+副）+ 換槍**：每單位兩槽，active 在常規欄位、副武器存 `u.weapon2`(完整槽:weaponId/weapon/mag/ammoInMag/ammoReserve/reloadT/bloom)。**X `swapWeapon`** 對調 active↔weapon2、設 `u.swapT`(=`CONFIG.weaponSwap.base+抽出 weight×perWeight`，越重越慢)、換槍期間 fireUnit 早退、重算 `u.turnSpeed=weapon.turnSpeed×turnMul`。負重 `carriedWeight`(主+副)吃進 `sprintMult`＝帶兩把跑較慢(代價)。`makeWeaponSlot` 建槽;makeRecruit 預設 `weaponId2='pistol'`;rosterFromPlayer 帶回 `weaponId2/allocatedAmmo2`。idle/敵人只用 active。配裝卡「主/副」切換(`restWslot[mi]`)＋ equip/卸下/彈藥 model 函式吃 `slot` 參數(`WF/AF` 欄位選擇)；沙盒每員副武器選單。HUD 顯示 `X⇄副名`/SWAP/∞。**knife 小刀**(新)：攻速同手槍·range42·weight0.1·dmg45·pierce0.9·`melee`(無限彈不換彈)＝解甲副武器;`isInfiniteAmmo`＝pistol 或 melee。
+- **敵人 AI（waypoint 圖、無真尋路）**：
+  - 類型 `ENEMY_TYPES`（`enemySpawns.type` 指定，預設 grunt）：grunt(衝鋒)/grunt_flank(包抄)/dog(警犬,不開門)/heavy_lmg/heavy_shot。**裝甲＝機率整發擋下非穿甲**（`armor.blockChance`×(1−pierce)），重裝血量同 grunt。
+  - FSM `IDLE↔ENGAGED`（latch 永不回退）。轉 ENGAGED：看到(canSee)／槍聲(`alertEnemiesNear`)／被擊中(`damageUnit`)。**識別空窗**：IDLE 看到玩家先累 `detect`（`identifyTime`）滿才交戰（快閃安全、貼臉瞬識、槍聲/被打瞬交戰）。
+  - **IDLE 巡邏**（只有 grunt：`type.patrols`）：`patrolStep` 認領制 `patrolClaims`（`computePatrolPool`＝patrol 標籤點，否則距入口/撤離口都遠的點）→`bfsPath` 走→`startDwell` 掃視→放掉再認領。
+  - **交戰後共享情報**（`updateThreatKnowledge` 每幀）：KNOWN(任一敵看到→全體共享 `player.lastSeenPos`，`nearestKnownPlayer` 選點吃已知位置不穿牆、開火吃實位且需本隻 canSee)→SEARCH(全員失視線→`searchFocusNode/searchSet` bfsWithin，走到/掃過清格)→PATROL(清光沒找到→全場巡邏，待新目擊再建焦點)。
+  - **被擊中來向局部脅威**（`registerHitThreat`）：被擊中→在「被擊中者→射手」方位放脅威點，傳給本人＋看得到他的敵＋`threatShareRadius` 內近隣（皆 ENGAGED），存 per-enemy `threatPos`（只給方向、非全體 lastSeen＝保潛行）。`enemyTick` 無全體已知目標但有新鮮 threatPos→`threatOnly`＝朝來向回頭/推進但不對空地開火；看到真玩家才開火。解「側翼成功後敵人魚貫面前方被側射全滅」。
+  - **近戰收尾**：`goalPos = (seen && weapon.range ≤ meleeApproach60) ? 目標本人 : 節點`（只有 fangs 觸發）。**開關門**：`openDoorsNear`（狗 `opensDoors:false` 不開）；交戰後只開不關；玩家自走撤離也開門＝門是減速帶非死牆（softlock 已解）。
+  - 敵 AI 侵略性旋鈕：`chargeMul/holdProxMul`（能否交火決定推進 vs 拉距）、`CONFIG.ai.rusher/flanker/holder`。
+- **側翼/突襲**（敵我皆適用）：繞背(目標視野錐外)＝傷害×2 且無視所有裝甲；閒置敵正面＝×1.5；取高不疊。`damageUnit` 第4參 `fromAng`。
+- **地形**：牆/門(關＝實體)/低矮牆(掩體：不擋視線、玩家減速、敵實體繞行、子彈機率擋)/草叢(`MAP.bushes`)/**可破壞地形**(`MAP.destructibles`：intact↔broken 兩形態+HP，被擋子彈扣 HP 換形態；五型預設木箱/落地窗/有矮牆窗/全遮蔽/鐵網；玻璃非穿甲擋穿甲穿)。改阻擋邏輯看 `segBlocked/collideWalls/onLowWall/updateBullets/canSee`。**低矮牆/擋移動破壞物不可壓在敵人 waypoint 邊上**（無真尋路→卡牆；編輯器有紅標把關）。
+- **區域地形 `MAP.areas`＋牆體厚度**（地形屬性矩陣的補完）：地形＝「材質(move/los/bullet 三軸) × 形狀(線性/區域) × 狀態(靜態/可摧毀/門)」。
+  - **材質表 `MATERIALS`**（`aMat(z)`）：solid(柱/建築/實心車：全擋)・cover(車輛/大型掩體：擋移擋視+射線機率擋,躲後面偶被穿)・barrier(壕溝/欄杆/破洞：擋移、看穿打穿)・lowcover(矮掩體叢：減速、越看越射)・smoke(煙幕：可穿越、看不穿、穿彈,靜態)。可摧毀區域暫不做。
+  - **區域＝自由矩形** `{x,y,w,h,mat}`：`segHitsRect`(子彈/視線 boolean)、`rayRectT`(迷霧視錐被擋視區域截斷)、`pushOutRect`(圓-AABB 解碰；solid/cover/barrier move:true 全擋、lowcover 'slow' 僅敵實體+玩家減速)。接到 `segBlocked/updateBullets/collideWalls/onLowWall/rayHit`＋`drawAreas`＋skeleton 參考框。
+  - **牆體厚度＝線性固定厚** `CONFIG.wallThick`(8px≈20cm，40px=1m)：`drawWalls` 描邊寬＝此值；子彈/視線改以 `segSegDist(路徑,牆) ≤ 半厚` 撞**渲染牆面**(非中心線)；資料仍是線段(中心線=唯一真相)→LoS/AI圖/迷霧視錐/門切牆**全不動**。移動退避維持單位半徑(已 12px>半厚)；迷霧視錐 `rayHit` 牆維持中心線(差 4px 無感)、但 los 區域用 rect 截斷。承重牆＝平行畫兩條(不在資料分型)。
+  - **showcase**：`MAPS.alpha` 右側放了 lowcover/cover/smoke/barrier 各一(避開 y360 撤離主軸與 waypoint 邊)。**踩雷同低矮牆：擋移動區域不可壓 waypoint 邊**(編輯器 `edgeBlocked` 把 moveBlockers 線段＋moveBlockAreas 區域一起紅標)。
+- **重生點**：`spawnPos` 圍著作用中地圖 `ENTRY` 成隊形展開（非固定左邊），沿「ENTRY→EXTRACT」垂直軸、往內挪；開場面向地圖內部。
+- **機密檔案**（run 級必護送目標物）：`roster[i].carriesFile ↔ player.hasFile`，`ensureFileCarrier` 恆一名、跨關隨撤出者、休息配裝卡單選指派。攜帶者陣亡→`fileDrop` 掉地（穿迷霧永遠可見 `drawFileDrop`＋HUD 警示＋邊框箭頭），任一活動我方走過即背（`updateFile`）。**失敗條件**：`endMission` 無「撤出成功者帶著檔案」→ RUN FAILED（`loseReason`）。沙盒/編輯/第0關不啟用。
+- **掉落/拾取**：`killUnit→spawnDrop`（底線武器/敵專屬武器不掉）；`updateDrops` 被附身單位走過撿進 `backpack`（任務中不可動用）；`enterRest` 整理進 `warehouse`/`ammoStock`（支援 weapon/ability/item/equip）。**開發測試架**（`CONFIG.devLootRack` 預設 true、發佈前設 false）：第0關地上陳列所有武器/道具(一般掉落) `spawnDevRack`。
+- **休息關 meta**：`warehouse`(有上限=人數×slotsPerMember)/`backpack`/`ammoStock`；**搜刮＝純整補 `rollResupply`**(抽類型→抽內容、彈藥可複數、全進倉庫/儲備、零風險無抉擇；風險移到事件)/喚醒+1；配裝卡(主/副武器+技能 SK+裝備🛡+道具+彈藥±+📁機密檔案指派+**↻轉職** `cycleArchetype`)；`drawRest`/`restRects`/`restClick`。
+- **事件節點（scene `EVENT`，風險/取捨/歪 build 集中地）**：路線圖 `?` 紫節點 → `enterEvent`(從 `EVENTS` 資料目錄隨機抽、本局 `eventSeen` 避重) → `drawEvent`/`eventClick`/`eBtn`(CHOICE 選項卡→可選 `eventChoosable`；`need:'target'`→TARGET 子階指定成員→DONE) → `eventAdvance`→advanceNode。`applyEventOutcome(o,mi)` outcome 只用現有資源：ammo/loot/heal/damage(下限 1、不致命)/maxhp(全隊或單人)/weapon/equip/item/ability/recruit/**relic(`relicPassive`＝跨樹 off-tier 被動,不佔升階)**/trade(`takeGear` 付裝備換 gain)/gamble(知情機率 win/lose)/**combat**。**準則：每事件都有安全選項、風險知情、下檔有上限不致命**。**★combat hook**：`{type:'combat',map}`→`forcedMap`+`startMission`(接特製短地圖；打完走一般結算→advanceNode＝事件由戰鬥解決)。種子 4 事件(封鎖軍械庫/黑市掮客/老兵指點/巷弄埋伏)，**內容待逐一設計**;`EVENTS`/`EVENT_CFG` 檔頂可調。
+- **戰役旗標 + 種子 RNG + 連動事件（地基）**：`runFlags`(跨節點儲存玩家選擇,`setFlag/flag`,initRun 重置)。事件支援 `cond:f=>…`(出現條件)、`scripted:true`(只能被佇列觸發、不進隨機池)、選項 `set:{k:v}`/`queue:[ids]`(寫旗標/排後續)。`pendingEvents` 佇列：`enterEvent` 先消耗佇列(優先播被預定的後續＝報位/伏擊，**節點仍顯 `?`**)否則隨機抽(濾 seen/cond/scripted)。**踩雷：`pendingEvents.shift()` 要先取出 id 再 `find`，別放進 find 的 predicate(會逐元素 drain)**。outcome 加 `rest`(事件→`enterRest`＝這格變休息)。**單一 run 的非戰鬥 RNG 吃一顆種子**：`srand`(mulberry32)/`srandSeed`，initRun 以 `Math.random` 隨機播種一次→之後可重現;`rngPick`/`weightedPick` + rollResupply/gamble 的裸 random 都改吃 srand(它們的呼叫處全是非戰鬥)；**戰鬥(發散/裝甲/粒子/震動)仍用 `Math.random`**。`runSeed` 由 `drawSeedTag` 在 frame() 角落淡色顯示(可重現/分享)。
+- **cutscene 對話「選項」節拍**：beat `{kind:'choice', text?, pos?, options:[{label, fn?, set?, queue?, then?:[beats]}]}`。`beatEnter`(choice)＝列選項、鎖;**按數字鍵 1~9 選**(演出鎖滑鼠故用鍵盤;mousedown/keydown 都攔到 choice 分支)。`beatDone`(choice)＝選後套 opt.fn/set(旗標)/queue(後續)，把 `opt.then` 節拍 `splice` 到後面續播＝分支對話。`drawCutscene` 在畫面下方畫 `[n] 選項`。＝所有劇情演出都能分歧(序章 + scene 事件共用)。
+- **scene-kind 事件（在戰鬥地圖上演劇情）**：`EVENTS` 條目 `kind:'scene', map, onEnter?(f), scene:f=>[beats]`。`enterEvent` 遇 scene-kind → `startSceneEvent`：`eventActive=true`、`onEnter`(擲隱藏身分等,吃種子)、`forcedMap=map`、`startMission`(在該圖生我方+演員 enemySpawns)、設 `cutscene={beats:ev.scene(runFlags)}`。收場由腳本的 `do` 拍呼叫：`eventResolveAdvance`(和平→advanceNode)/`eventResolveRest`(→enterRest 變休息)/`eventResolveCombat`(清 cutscene+eventActive、敵全 ENGAGED→解鎖續戰→一般結算)。演員＝**`civ` 敵人型**(pistol、`opensDoors:false`；`cutscene.lock` 期間敵不行動＝演出當下不攻擊；之後有 asset 換皮、邏輯不變)。專用小地圖 **`meet`(相遇)/`ambush`(伏擊)**，`eventMap:true`＝startMission 不加難度遞增兵、update 不召追兵。**男孩事件**：`boy`(scene,隨機池)隱藏身分 `boyHostile=srand()<0.5`，對話 choice 相信/拒絕 × 友善/敵意 4 分支(友善信→rest、友善拒→advance、敵信→combat、敵拒→setFlag boyReported+queue `boyAmbush`+advance)；`boyAmbush`(scene,scripted)＝佇列觸發的伏擊(在 `?` 節點演)。`civ` 未同步進 editor.html(編輯器暫放不了 civ，無妨)。`SPAWN_TAG.civ` 已補。
+- **成長弧：個性技能樹 + 戰果結算升階**（核心 roguelite 養成迴圈）：
+  - **3 型 archetype**（只看 facing 軸；discipline/fireMode 每型固定預設）：磐石 Anchor(HOLD·固守)/先鋒 Spearhead(SWEEP·推進)/遊獵 Ranger(TRACK·戰場生存)。by-the-book→chill 光譜。每型一棵**被動樹** `PASSIVE_TREES`(3 階×二選一=18 條,各階獨立無前置)。`PASSIVES` 表＝metadata(name/tree/tier/desc),`hasPassive(u,id)`。單位/roster 帶 `tier`(0~3)+`passives[]`。
+  - **升階＝戰果結算**(scene `SETTLE`)：COMBAT 勝→`endMission` 不直接 advanceNode→`enterSettle`→`drawSettle`/`settleClick`(PICK 挑單位→PASS 二選一→DONE 前進)；`settlePromote`(tier++、學該階配對之一)、`settleEligible`(tier<3)、`settleSkip`、`settleAdvance`。不要經驗值、每場一次、第0關/沙盒/編輯不到。升階寫進 roster→下關 `makePlayer` 套用。
+  - **休息＝轉職**：`cycleArchetype` 換 archetype(換樹、保留已學被動,後續升階抽新樹)＝weird build 來源（換型同時改 idle 行為＝天然成本）。
+  - **被動效果＝條件式戰技**(訓練非超能;`CONFIG.passive` 面板可調)：fireUnit(发散`passiveSpreadMul`/開火傷害`passiveFireDmgMul`/射速`passiveFireMul`/bloom 上限/槍聲半徑/子彈標記 breacher,suppress,shooterId)、updateBullets 命中(`breacherMul` 依距離/壓制 suppressedT/擊殺 `onKillPassive` 斬首buff+戰場急救回血)、damageUnit(`passiveNegateCrit` 免暴擊/`passiveDmgTakenMul` 減傷)、enemyFire(被壓制發散×2)、idleTick+idleEngageFire(警戒待命)、移動(`passiveMoveMul`)、makePlayer(靜態:破門手轉向/快手換彈/斥候 coneHalfDeg+senseRadius)、`tickPassives` 每幀(靜止 stillT/衝鋒 momentumT/passBuff/戰場急救脫戰回血)。
+- **打擊感 juice**（`CONFIG.juice`，面板可調）：近 hitscan 子彈+曳光、hitstop(僅擊殺/陣亡)、受擊閃白/後仰/血霧/地上血漬 `decals`、開火後座/槍口閃焰。**螢幕震動預設全關**（shake*=0）。音效暫不做（`Sfx` no-op 接縫）。
+- **視覺化聲音**（無音效替代）：`Sfx.play(id,pos)`→`pingSound`(`SOUND_PINGS`)→`soundPings`；`drawSoundEdges` 對控制角色 `!canSee` 的 ping 在畫面邊框該方向發光。引擎級、arcade 沿用。
+- **手榴彈道具**（不用新系統）：`throwGrenade` 朝瞄準方向**丟出一顆會飛的手榴彈**（`grenades`，`rayHit` 算落點不穿牆，`throwRange/throwSpeed`）→`updateGrenades` 飛抵落點才 `detonateGrenade` 360° 散射一批 `bullets`（faction 玩家）。威力衰減＝被幾顆打中。
+
+- **局外進度（meta 解鎖；橫向為主）**：跨 run 持久 `meta`(localStorage `sleeper_meta_v1`)＝`{intel(情報點), unlocked{weapon/equip/archetype/ability}, stats{runs,wins,missions,winArch}}`。`loadMeta/saveMeta/normalizeMeta`。**`UNLOCKS` 登錄**＝未來新內容 `{kind,id,via:'milestone'(cond:s=>bool)|'intel'(cost),name,desc,req}`；base 內容不列＝永遠可用。`isAvailable(kind,id)`／`availPool(kind,ids)` 把招募/loot 的 weapon/archetype/equip/ability 池**過濾未解鎖**(空池保底回全集不崩)。解鎖＝只是「進池」，局內仍 RNG 取得(不破壞平衡)。`metaOnRunEnd(won)`(advanceNode 終點 RUNWIN / endMission 失敗 RUNEND 呼叫)＝`intel += 關數×CONFIG.meta.intelPerMission + (won?intelWin:0)`、累計 stats、`checkMilestoneUnlocks` 自動解里程碑、存檔。`unlockWithIntel(kind,id)` 花情報點解鎖。**分工(使用者定)**：里程碑解 archetype/技能、情報點解 武器/裝備;一開始基礎全開、之後加法解鎖。**種子 3 項**：`ar`(突擊步槍,情報90)、`revolver`(左輪,情報60)、`surge`(戰地手術大補,里程碑通關1次)。
+- **最終真相挑戰（scene FINALE/ENDING）**：通關 `CONFIG.finale.revealWins`(3)次後，`goMenu` 攔截先播一次「真相揭示」純文字(`FINALE_REVEAL`；`meta.revealSeen` 只播一次)→主選單多紅色「最終潛入」入口。`enterFinaleSetup`(畫布打字輸種子)→`startFinale`(種子 srandSeed／`baseRoster()` 組隊／`finaleActive=true`／`forcedMap='finale'`；鐵人＝無路線圖/補給/結算)→`startMission`(MAPS.finale＝bravo 結構＋更硬敵配、無檔案機制)。`endMission` 開頭 `if(finaleActive) resolveFinale()`：撤出≥1＝勝→`grantFinaleUnlock`(機制保留、內容 placeholder＝`meta.finaleWon`)＋真結局；否則 Bad End。結局＝scene ENDING 純文字(`playEnding/endingTick(frame 用真實 delta 逐行出)/endingAdvance(加速/繼續)/drawEnding` 黑底白字漸顯)。兩結局都回 `goMenu`＝**回挑戰前繼續玩，無刪檔/無軟鎖**。設計：真結局也是悲劇(沉睡者授勳宴上被毒殺「For our Father」)、失敗 bad end(總部清算/被當籌碼)。
+- **總部 HQ（scene HQ；主選單「總部」進）**：`enterHQ`(先補播里程碑+存檔)→`drawHQ` 列 `UNLOCKS`：已解鎖✓／里程碑(顯 `req`，達成自動解)／情報點(顯 cost＋「解鎖」鈕，足才可點)。`hqRects/hqClick/hqMsg`，返回＝`goMenu`，Esc/Backspace 回選單。**主選單重設計**(`drawMenu`)＝四鈕(戰役/自由戰鬥/總部/編輯器)＋下方「完成度／戰況」strip(正面回饋：情報點/通關/清關/解鎖 X/Y＋各目錄 `Object.keys().length` 即時內容量＋已完成系統勾選列)。draw/click/keydown 皆接 `HQ` 分支(`update` 非 COMBAT 早退故安全)。
+
+## 5. 工具
+- **主選單**＋**編輯器測試戰鬥往返**（跨頁、localStorage 傳遞）：editor「▶ 測試戰鬥」`playtestCurrent()` 把目前地圖存 `localStorage.sleeper_playtest`、整庫+curKey 存 `sleeper_editor_session` → `index.html?playtest=1` → index `bootPlaytest` 讀圖、`enterSandbox` 預填地圖 JSON、`playtestMode=true` → 打完/離開/Backspace `location.href='editor.html'` → editor `restoreSession()` 還原整個工作區。
+- **自由戰鬥 SANDBOX**（index 內場景）：自選小隊(個性/武器/技能/裝備+🎲隨機)+貼地圖 JSON 或內建下拉 → 打一場（敵人沿用 enemySpawns）。重用 startMission/endMission 靠 `fromSandbox` 路由。設定存 `localStorage.sleeper_sandbox_v1`。
+- **數值平衡面板**：`` ` `` 或右上齒輪開的 DOM 側欄，依物件結構自動生成滑桿/勾選、直接寫 CONFIG/WEAPONS/… 活值＝多數即時生效（武器是共用參考；彈夾/unitHp/敵 hp,armor 下次生成套用）。四分頁+搜尋、localStorage `sleeper_tuning_v1`、輸出覆寫/重設。資料層(`tune*`)與 UI(`initTunerUI`，全包 try/catch)分離。新增 CONFIG 數值不必改面板。
+- **地圖編輯器 `editor.html`**（與 index 分檔）：**五分頁(① 地圖物件/② waypoint+連線/③ 敵人配置/④ 底圖/⑤ 地圖管理)**、拖曳、連線編輯、邊穿牆/穿區域紅標(`edgeBlocked`)、特徵庫 `FEATURES`、**區域工具**(拖框放 `MAP.areas`+材質選 `MATERIALS`+人讀說明 `matDesc`，群組/鏡像/cleanOf/normalize 都吃)、**敵人配置工具列敵人類型/個性選單**(`assignType`/`assignPers`：選好類型→點 waypoint 放置；點既有 spawn＝選取並同步筆刷不覆蓋；與右側 inspector 雙向同步)、牆渲染加厚至 8px(WYSIWYG)、框選群組(transient、無持久 `_gid`)、**門/窗(破壞物)放置時自動切牆缺口**(`cutWallsForDoor` 共線重疊把牆切斷；破壞物 inspector 也有「切出牆缺口」鈕)、參考底圖(可旋轉，editor-only)、地圖尺寸可調、新增 waypoint 自動連線。**地圖層級操作集中在「⑤ 地圖管理」分頁**：地圖庫(maps.json 讀入/下載/切換/＋新增/🗑刪除/改鍵)、本圖(名稱/範本/尺寸/外牆/鏡像)、單張匯入匯出、測試戰鬥——全在 `#managePanel`(蓋滿整個 main 區的覆蓋面板 `position:absolute;inset:0;z-index:6`、`.inner` 限寬+每項附說明 `.exp`)；顯示由 `rebuildUI` 直接設 `mp.style.display`(非 CSS class 串接，避免 grid 失效)。頂列只留**檢視**(格線/適配/復原/重做，各分頁通用)+「？」說明(`EDITOR_HELP` 開 overlay)。**比例尺**：地圖左下角 1 公尺×1 公尺方框(`PX_PER_M=40`、`drawScaleRef`、世界空間隨縮放)。**鏡像 ⇄/⇅**(`mirrorMap`/`mirrorToNew`)：剛性座標變換(H:`x'=W−x`、V:`y'=H−y`，敵朝向 H:`π−θ`/V:`−θ`，edges 不變)，**鏡像成庫裡新的一張(保留原圖)＝做變體的起點**。**多地圖庫 maps.json**(`{鍵:地圖}`)：讀入整份/下拉切換/＋新增/🗑刪除/改鍵/下載；model 層 `mapLib/curKey/syncCurrentToLib/selectMap/addMap/deleteMap/libImportObj/libExportObj`。**匯出開頭放 `_index` 目錄(鍵→地圖名)方便閱讀**；`libImportObj` 略過 `_` 開頭 meta 鍵、`uniqKey` 去頭底線(不影響讀取)。**踩雷：刪 waypoint 必須重編號**（遊戲 `wp=id=>MAP.waypoints[id]` 以陣列索引當 id，連帶 edges/enemySpawns.nodeId）。editor.html 自帶一份小常數(ENEMY_TYPE_IDS/ENEMY_META/WP_TAGS/DESTRUCT_PRESETS/**MATERIALS**/FEATURES/TEMPLATES)，改 index 對應內容要手動同步。in-index 編輯器(scene EDITOR)仍並存。
+
+## 6. 內容目錄與資料模型（index 檔頂；面板可調）
+```
+RosterEntry { name,hue,strength,weaponId,weaponId2(副,預設pistol),abilityId?,archetypeId,tier(0~3),passives[],bonusMaxHp,hp,allocatedAmmo,allocatedAmmo2,
+              disciplineOverride?,equipId?,itemId?,carriesFile }
+Weapon  { name,rarity,weight,damage,fireRate,range,projSpeed,spread{Base,PerShot,Max,Recover},
+          magazine,reloadTime,turnSpeed,pierce(0~1),pellets?,burst?{size,gap},silent? }
+EnemyType { name,weaponId,hp,moveSpeed,personality,hue,radius,coneHalfDeg?,senseMul?,armor?(=blockChance),attack?('ranged'|'burst'),patrols?,opensDoors? }
+Equipment { name,rarity,fx:{maxHpAdd?,dmgResist?,senseMul?,reloadMul?,magMul?,spreadMul?,turnMul?,moveMul?} }  // 持續被動
+ItemDef  { name,rarity,heal?|refill?|buff{dur,moveMul,fireRateMul}?|grenade{pellets,dmg,range,projSpeed,throwRange,throwSpeed}? }  // 一次性 C 鍵
+MapDef   { label,width,height,walls,doors,lowWalls,bushes,destructibles,areas,buttons,waypoints,edges,
+           entryPoints,extractionPoints,enemySpawns,prisoners?,timeBudget? }
+Destructible 形態 ∈ wall/glass/lowwall/fence/flat（runtime +cur/curHp）
+Area     { x,y,w,h, mat }   mat ∈ MATERIALS: solid/cover/barrier/lowcover/smoke（自由矩形區域地形）
+MATERIALS[mat] { move:true|'slow'|false, los:true|false, bullet:'block'|'prob'|'pass', name, col }
+Archetype { name, facing(HOLD/SWEEP/TRACK), discipline, fireMode, tree, desc }  // 3 型:anchor/spearhead/ranger
+PASSIVES[id] { name, tree(anchor/spear/ranger), tier(1~3), desc }  // 18 條;PASSIVE_TREES[tree]=[[t1a,t1b],[t2..],[t3..]]
+EnemySpawn { nodeId,type?(預設grunt),personality?,facing? }
+RoadNode { type:'COMBAT'|'REST'|'ARMORY'|'EVENT',map?,timeBudget? }
+EventDef { id,title,text,choices:[{label,hint?,req?('gear'),need?('target'),outcome}] }  // outcome 由 applyEventOutcome 解析
+Bullet { x,y,vx,vy,dmg,faction,range,traveled,ox,oy,pierce }
+```
+- **WEAPONS**：pistol(底線/無限彈/不掉)、smg/pdw/rifle(pierce.5)/dmr(pierce.9,rare 天花板)/silpistol(消音)/**knife(小刀:近戰melee/無限/高傷高穿甲/極短程)** 玩家池；carbine(敵步兵,可掉撿裝)；敵專屬 fangs/lmg/shotgun(不掉)。招募抽 `RECRUIT_WEAPON_IDS`、戰利品 `LOOT_WEAPON_IDS`(含 knife)。
+- **ABILITIES**（單槽）heal/medkit/firstaid＝瞬補（關內回血只有技能）。**EQUIPMENT** armor/scope/quickmag/extmag/stabil/light/plate。**ITEMS** stim/ammobox/adrenaline/**grenade**。**ARCHETYPES** 8 種（facing×discipline×fireMode）。
+- **MAPS**：alpha(開闊庭院)/lanes(雙線哨廊)/outpost(前哨站)/bravo(門禁設施,破門原型)/intro(第0關)。設計原則：waypoint 走 3×3 grid、掩體島放格內不壓 edge＝邊不穿牆。
+- **跨關回血** `interMissionHealFrac`（1.0＝全補；調低＝帶傷壓力，但 REST 目前無治療選項＝backlog）。
+
+### CONFIG 值速查（目前；完整見檔頂與面板）
+```
+unitHp100 moveSpeed110 turnSpeed480 mouseSensitivity0.0035 sprint{base1.9,weightPenalty0.5,minMult1.1}
+timeBudget90 reinforce{start2.0,rampEvery10,rampDelta-0.3,min0.4} hysteresisBonus25 squadSize3 interMissionHealFrac1.0
+loadout{slotsPerMember2,abilitiesCountTowardCap,scavengeChoices3} ammo{stockStart600,defaultAlloc240,salvageAlly120,salvageEnemy60,subsonicStart18} pickupRadius26
+vision{coneHalfDeg45,senseRadius90,coneMax2200} stealth{idleConeMul0.6,idleViewRange360,identifyTime0.8,concealMul0.25,decay1.5,fireReveal0.6}
+enemy{moveSpeed85,hp70,reactionDelay0.35,meleeApproach60,strength1.0} idleReactionDelay0.4 enemyHearRadius320 interactRadius40
+armor{blockChance0.85} flank{flankMult2.0,surpriseMult1.5} lowWall{slow0.3,touchR12,closeRange90,blockChance0.55} wallThick8(牆寬px,半厚=子彈/視線撞牆面門檻)
+passive{…18 條被動的數值,如 duginResist0.25/breacherClose1.4/ambushDmg1.5/executeFire1.3…面板可調}
+weaponSwap{base0.35,perWeight0.18}(換槍冷卻＝base+抽出武器weight×perWeight)
+meta{intelPerMission10,intelWin50}(局外結算情報點)
+hunt{searchHops3,knownGrace0.5,threatGrace4,threatShareRadius240,threatDist320} patrol{dwell2.0,speedMul0.7,autoBandFromEnds200}
+scope{anchorY0.82,scale0.86,spreadMul0.5} camera{scale1.0,followLerp9,rotateLerp8,anchorY0.66}
+juice{bulletSpeedMul4,tracer1.0,recoil4,shake*=0,hitstopKill0.04,deathHitstop0.06,hitFlash0.12,flinch5} soundEdge{frame,alpha}
+devLootRack(true,發佈前 false) chargeMul1.7 holdProxMul0.2
+```
+
+## 7. 必踩雷（彙整）
+1. `update()` 先判 `scene!=='COMBAT'` 再碰 `cam/players`（非戰鬥場景未建立）。
+2. 迷霧用離屏 canvas 遮罩，**不可在主畫布 destination-out**。
+3. `MAP` 是 registry 作用中指標；衍生表(`N/adj/nodeVis/nextHop/EXTRACT/ENTRY/extractNodeId`)由 `buildMapDerived(key)` 重建，別假設是載入期常數。
+4. **sandbox/playtest 不經 `initRun`** → meta 全域(`warehouse/backpack/ammoStock/drops`)在宣告處給空預設，否則 drawHUD 讀 undefined.length 崩。`endMission` 的機密檔案檢查也要在 sandbox/editor/intro 早退之後。
+5. headless：strict-eval `var` 不跨 R()；新增戰鬥邏輯讀輸入只走 `Input.*`（別直接讀 keys/mouse/pointerLocked/aimDir）、出聲只走 `Sfx.play`。
+6. editor 刪 waypoint 必須重編號（陣列索引當 id）；editor 自帶常數要與 index 手動同步。
+7. 新內容/數值放 index 檔頂目錄，面板自動吃；細節寫進「本檔」或 `封存/`，CLAUDE.md 保持精簡。
+
+## 8. Backlog / 暫緩（已與使用者討論的方向）
+- **✅ 成長弧（個性技能樹 + 戰果結算升階）已實作**（2026-06-25，4 批；headless 全綠）＝詳見 §4「成長弧」。解 STS 死亡螺旋/無 build。仍待續的子題：
+  - **✅ 雙武器 + 小刀已實作**（2026-06-25，Phase A/B；headless A22/B15）＝詳見 §4「雙武器」。
+  - **被動樹/武器數值平衡**：被動 18 條 + 換槍/小刀數值都是佔位(`CONFIG.passive`/`CONFIG.weaponSwap`/`WEAPONS.knife`)，要實際試玩調。fog 視錐沒吃 scout 的寬錐(只 canSee 吃)＝小限制。
+  - ~~新隊員加入機制~~：**已存在＝休息關「喚醒 +1 隊員」(`restDoAwaken`)，不另加**(2026-06-25 使用者定)。
+- **✅ 搜刮重設計＝純整補已實作**（2026-06-25）＝詳見 §4「休息關 meta」(`rollResupply`)。
+- **✅ 事件系統已實作**（2026-06-25，多批；headless 全綠）＝EVENT 節點 + overlay 事件 + 戰役旗標/種子/連動佇列 + cutscene 對話選項 + scene-kind 事件(在戰鬥地圖演,含男孩 4 分支) + combat hook。詳見 §4「事件節點/scene-kind 事件」。**仍待續**：
+  - **事件內容逐一設計**：種子事件還很少;照「安全選項/風險知情/下檔有上限不 feel-bad」準則繼續加(overlay 抽象事件 + scene 劇情事件)。
+  - **更多 scene 劇情 + 專用小地圖**：目前只有 meet/ambush + 男孩;之後加更多角色事件(用 editor 畫小地圖、加 civ 同步)。
+  - **Phase 2 outcome**：下場戰鬥修正(更難/更易)、商店式(花資源)、更多 outcome 型。
+  - **editor 同步**：civ 敵人型未進 editor.html 的 ENEMY 常數(要在編輯器擺事件演員時才需補)。
+- **遊戲端讀 maps.json**：目前 maps.json 只給編輯器/測試戰鬥用，index 內建地圖仍寫死。要讓遊戲吃 maps.json（`file://` 擋 fetch）→ 走 `<script src>` companion 或貼回 MAPS。
+- **敵 AI 性格→完整行動包**：rusher/flanker/holder 目前只驅動選點走位，不改開火/距離/掩體/低血脫離；「既知脅威在出口時不飛出去、改在掩體等」屬此重設計。
+- **音效**：WebAudio 接 `Sfx.play`（最大未動的槓桿）。
+- **extraction_arcade 變體**：複製分家、玩家本位+獵人 FFA、寶物/滿意值撤退/本機排行榜（記錄在案、未動工）。
+- **地圖重用**（2026-06-24 討論定案）：**runtime 隨機進/撤點不做**——會連帶要重算敵人配置＋一堆進撤點距離約束，不划算。改走**內容做法**：同一基底圖手動下不同進/撤點＋重配敵人、存成 maps.json 裡不同地圖。**編輯器已加鏡像 ⇄/⇅**(`mirrorToNew`：鏡像成新的一張、保留原圖)當變體起點。更強的 replay 槓桿是**敵人配置隨機**(抽 spawn 子集/類型/數量)，更大工程、另議。
+- **可摧毀區域地形**：目前 `MAP.areas` 只靜態(無 HP)；之後可比照 destructibles 給區域 intact→broken 轉換(打爛的車殼、燒掉的草煙等)。**計時消散煙幕**(投擲式/倒數)也在此列＝偏道具系統。
+- 其他：彈藥真咬人(調低 stockStart/defaultAlloc)、REST 治療選項、+1 技能槽、穩路撤離、穿甲做成裝備/消耗品、玩家可用敵專屬武器、難度曲線、序章每次播(可加跳過選項)、場外低血警示、沙盒設定的裝備/技能補齊。
+
+## 9. 相關檔案與記憶
+- 記憶檔在 `.claude/.../memory/`（索引 `MEMORY.md`，每 session 載入摘要）；逐功能深細節在 `封存/開發進度與脈絡_v1封存_2026-06-24.md`（含舊 §4.x 編號、完整時間線、TTK 旋鈕速查、與原規格對應、I/O 接縫詳解）。
+- **回覆語言：繁體中文。**
