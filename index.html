@@ -546,14 +546,76 @@ function applyRelicHooks() {    // 重掛（撿到/失去聖物後呼叫）
 }
 
 // 技能：目前全部佔位＝恢復生命，有 CD（僅手動可用）。多種＝倉庫換技能有取捨（量/CD 不同）。
-const ABILITIES = {
-  heal:     { name: 'Heal',      cooldown: 8,  heal: 25 },
-  medkit:   { name: 'Medkit',    cooldown: 14, heal: 50 },
-  firstaid: { name: 'First Aid', cooldown: 5,  heal: 14 },
-  surge:    { name: '戰地手術',  cooldown: 28, heal: 75 },   // 局外里程碑解鎖：大量瞬補、長 CD
+/* =====================================================================
+   ARTS — **術／技藝：自由槽位(3/4)的唯一內容表**（Phase 2-B，使用者提案）
+
+   使用者的洞見：內容只有一份，**資源模型有兩種**——卷軸（撿到的）與習得（學會的）。
+   所以這張表只描述「效果是什麼」，不描述「你憑什麼用它」。後者叫**載具(carrier)**：
+
+     卷軸 scroll   有限次數、無 CD、**即時**（沒有前搖、不吃耐力）＝救命按鈕
+     習得 learned  無限次數、有 CD、**有前搖且吃耐力、會被打斷**＝可持續的工具
+
+   ★ 載具改變的是**成本**，不是威力。同一發火矢，卷軸和習得打出來一樣痛——
+     這樣「找到已學會法術的卷軸」仍然有價值（它的即時性是別的東西給不了的），
+     而且一個術只有一組數值要調，不會每加一個術就要平衡兩份表。
+
+   `learnable:false` ＝這東西只有卷軸那一欄。陶罐、藥、箭袋本來就學不會，
+   這條旗標讓「投擲道具」與「魔法」共用同一張表而不彆扭。
+   `kind` 直接對應既有管線（projectile→彈道／thrown→投擲／self→自身），沒有新的戰鬥碼。
+   ===================================================================== */
+const ARTS = {
+  // ── 學得會的 ──────────────────────────────────────────────────────
+  firebolt: { name: '火矢', kind: 'projectile', rarity: 'uncommon', learnable: true,
+              bolt: { dmg: 34, pierce: 0.9, projSpeed: 520, range: 520 },   // 高 pierce＝專門對付披甲士（走既有彈道管線）
+              cooldown: 6, castTime: 0.45, stamCost: 22, scrollUses: 3, scrollsToLearn: 2 },
+  mend:     { name: '癒手', kind: 'self', rarity: 'common', learnable: true, heal: 25,
+              cooldown: 8, castTime: 0.35, stamCost: 18, scrollUses: 3, scrollsToLearn: 2 },
+  salve:    { name: '藥膏', kind: 'self', rarity: 'common', learnable: true, heal: 50,
+              cooldown: 14, castTime: 0.5, stamCost: 26, scrollUses: 2, scrollsToLearn: 3 },
+  bandage:  { name: '包紮', kind: 'self', rarity: 'common', learnable: true, heal: 14,
+              cooldown: 5, castTime: 0.3, stamCost: 12, scrollUses: 3, scrollsToLearn: 2 },
+  miracle:  { name: '聖療', kind: 'self', rarity: 'rare', learnable: true, heal: 75,
+              cooldown: 28, castTime: 0.7, stamCost: 40, scrollUses: 1, scrollsToLearn: 4 },   // 局外里程碑解鎖
+  holylight:{ name: '聖光', kind: 'thrown', rarity: 'uncommon', learnable: true,
+              flash: { pellets: 36, range: 130, projSpeed: 600, throwRange: 230, throwSpeed: 520, fuse: 1.4, perHit: 0.34 },
+              cooldown: 16, castTime: 0.4, stamCost: 20, scrollUses: 3, scrollsToLearn: 3 },
+  // ── 學不會的實體：只有卷軸(消耗品)那一欄 ──────────────────────────
+  firepot:  { name: '火油罐', kind: 'thrown', rarity: 'uncommon', learnable: false, scrollUses: 3,
+              grenade: { pellets: 40, dmg: 9, range: 120, projSpeed: 600, throwRange: 230, throwSpeed: 520, fuse: 1.5 } },
+  smokepot: { name: '煙罐',   kind: 'thrown', rarity: 'common',   learnable: false, scrollUses: 3,
+              smoke: { throwRange: 230, throwSpeed: 520, radius: 110, dur: 5 } },
+  tonic:    { name: '藥劑',   kind: 'self',   rarity: 'common',   learnable: false, scrollUses: 3, heal: 60 },
+  quiver:   { name: '箭袋',   kind: 'self',   rarity: 'common',   learnable: false, scrollUses: 3, refill: true },
+  draught:  { name: '烈酒',   kind: 'self',   rarity: 'uncommon', learnable: false, scrollUses: 3,
+              buff: { dur: 6, moveMul: 1.4, fireRateMul: 1.4 } },
 };
+const ART_IDS = Object.keys(ARTS);
+/* 舊 key → 術 key（phase out 用，與 LEGACY_ENEMY_ALIAS 同一套做法）。
+   舊存檔的 roster/倉庫、以及手刻地圖的掉落物仍在用左邊那組。 */
+const LEGACY_ART_ALIAS = {
+  heal: 'mend', medkit: 'salve', firstaid: 'bandage', surge: 'miracle',
+  grenade: 'firepot', smoke: 'smokepot', flash: 'holylight',
+  stim: 'tonic', ammobox: 'quiver', adrenaline: 'draught',
+};
+const _legacyArtWarned = new Set();
+function resolveArt(id) {
+  if (!id) return null;
+  if (ARTS[id]) return id;
+  const to = LEGACY_ART_ALIAS[id];
+  if (to) {
+    if (!_legacyArtWarned.has(id)) { _legacyArtWarned.add(id); try { console.warn(`[HOMEWARD] 舊術 key「${id}」→「${to}」。新內容請用 ART_IDS。`); } catch (e) {} }
+    return to;
+  }
+  return null;
+}
+const artOf = (id) => ARTS[resolveArt(id)] || null;
+
+/* 相容視圖：ABILITIES／ITEMS 現在是 ARTS 的**投影**，不是第二份資料。
+   戰利品池、倉庫、休息關 UI、沙盒面板（約 85 處）因此一行都不用改，
+   等它們陸續改讀 ARTS 之後這兩個名字就可以直接刪掉。 */
+const ABILITIES = Object.fromEntries(Object.entries(ARTS).filter(([, a]) => a.learnable));
 const ABILITY_IDS = Object.keys(ABILITIES);
-const LOOT_ABILITY_IDS = ['medkit', 'firstaid', 'heal', 'surge']; // 搜刮可出的技能（surge 需解鎖）
+const LOOT_ABILITY_IDS = ['salve', 'bandage', 'mend', 'miracle']; // 搜刮可出的術（miracle 需解鎖）
 
 // 裝備（持續被動，每單位 1 槽；效果於 makePlayer 套用）。fx 欄位皆為佔位倍率/加值。
 //   maxHpAdd / senseMul / reloadMul / magMul / dmgResist(0~1減傷) / spreadMul(發散×) / turnMul / moveMul
@@ -652,7 +714,7 @@ function saveMeta() { try { localStorage.setItem(META_KEY, JSON.stringify(meta))
 const UNLOCKS = [   // 初始種子（之後慢慢加）。base 內容不列＝永遠可用。
   { kind: 'weapon',  id: 'warbow',   via: 'intel', cost: 90, name: '戰弓',   desc: '長弓上位、過半穿甲；進招募/loot 池' },
   { kind: 'weapon',  id: 'falchion', via: 'intel', cost: 60, name: '彎刀',   desc: '單手廣掃 cleave4，對付雜兵群' },
-  { kind: 'ability', id: 'surge',    via: 'milestone', cond: s => (s.wins || 0) >= 1, req: '通關 1 次', name: '戰地手術', desc: '大量瞬補、長 CD' },
+  { kind: 'ability', id: 'miracle',  via: 'milestone', cond: s => (s.wins || 0) >= 1, req: '通關 1 次', name: '戰地手術', desc: '大量瞬補、長 CD' },
   { kind: 'weapon',  id: 'knell',    via: 'finale', name: '喪鐘', desc: '雙手大劍，每一擊的鳴響全場聽得見（無法潛行）；解鎖後每場自動入倉庫' },
 ];
 const unlockDef = (kind, id) => UNLOCKS.find(u => u.kind === kind && u.id === id);
@@ -682,14 +744,11 @@ function metaOnRunEnd(won) {   // run 結束結算：情報點 + stats + 里程�
 //   heal: 立即補血 / refill: 補滿彈夾+備彈 / buff: { dur, moveMul, fireRateMul } / grenade: 360°散射一批彈丸
 //   grenade＝不用新系統：朝 360° 短距離噴一批子彈(像霰彈)，威力＝被幾顆打中(中心多顆/遠處稀疏→自然衰減)；
 //   pellets 顆數、dmg 每顆傷害、range 短射程(≈爆破半徑)、pierce 0(反人員、被裝甲擋＝對重裝弱、要靠 AP 武器)。
-const ITEMS = {
-  stim:      { name: 'Stim',       rarity: 'common',   heal: 60 },
-  ammobox:   { name: 'Ammo Box',   rarity: 'common',   refill: true },
-  adrenaline:{ name: 'Adrenaline', rarity: 'uncommon', buff: { dur: 6, moveMul: 1.4, fireRateMul: 1.4 } },
-  grenade:   { name: 'Grenade',    rarity: 'uncommon', grenade: { pellets: 40, dmg: 9, range: 120, projSpeed: 600, throwRange: 230, throwSpeed: 520, fuse: 1.5 } },   // 朝瞄準方向丟出(throwRange/throwSpeed)→落點等引信(fuse 秒)才 360° 散射；顆數多＝近全方位覆蓋、近密遠稀→衰減
-  smoke:     { name: 'Smoke',      rarity: 'common',   smoke:   { throwRange: 230, throwSpeed: 520, radius: 110, dur: 5 } },   // 朝瞄準方向丟出→落地即生效＝暫時煙幕(草叢遮蔽，dur 秒)；有效區域以落點視線截斷＝不穿牆
-  flash:     { name: 'Flashbang',  rarity: 'uncommon', flash:   { pellets: 36, range: 130, projSpeed: 600, throwRange: 230, throwSpeed: 520, fuse: 1.4, perHit: 0.34 } },   // 落點等引信→360° 噴不傷害的閃光彈丸；中到的敵人暈眩(視野縮/減速/發散增，中越多越強)。值另見 CONFIG.flash
-};
+/* ITEMS 也是 ARTS 的投影（見 ARTS 的註解）：**每一個術都能以卷軸/消耗品的形式存在**，
+   所以這裡就是整張 ARTS。差別只在 learnable 的那些額外還能被「學會」。
+   投擲的行為未變：朝瞄準方向丟出(throwRange/throwSpeed)→火油罐等引信才 360° 散射（近密遠稀＝自然衰減）、
+   煙罐落地即生效（以落點視線截斷＝不穿牆）、聖光噴不傷害的彈丸使中到的敵人暈眩（值另見 CONFIG.flash）。 */
+const ITEMS = ARTS;
 const ITEM_IDS = Object.keys(ITEMS);
 const LOOT_ITEM_IDS = ITEM_IDS.slice();
 const ITEM_STACK_MAX = 3;   // 消耗品一疊上限；取得即一疊(3)，休息可堆疊到上限
@@ -987,7 +1046,7 @@ function makeRecruit(used) {
   // 兩者分開擲才會出現「體格像農兵但打法是先鋒」這種人——招募到誰因此真的有差別。
   const classId = rngPick(RECRUIT_CLASS_IDS);
   return { name, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]), classId,
-    weaponId: rngPick(availPool('weapon', RECRUIT_WEAPON_IDS)), abilityId: 'heal', archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
+    weaponId: rngPick(availPool('weapon', RECRUIT_WEAPON_IDS)), abilityId: 'mend', archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
     weaponId2: FLOOR_WEAPON, allocatedAmmo2: 0,   // 副武器（預設 pistol 底線後備；X 換槍）
     bonusMaxHp: 0, hp: classOf(classId).hp, allocatedAmmo: CONFIG.ammo.defaultAlloc, disciplineOverride: null,
     tier: 0, passives: [],            // 升階等級(0~3)＋已學被動id；戰果結算二選一累積
@@ -1898,7 +1957,7 @@ function makeWeaponSlot(weaponId, reserve, fx) {
 }
 function makePlayer(i, cfg, pos) {
   const W = WEAPONS[cfg.weaponId];
-  const ab = ABILITIES[cfg.abilityId];
+  const ab = artOf(cfg.abilityId);
   const arch = ARCHETYPES[cfg.archetypeId];
   const fx = (cfg.equipId && EQUIPMENT[cfg.equipId]) ? EQUIPMENT[cfg.equipId].fx : {};   // 裝備持續被動
   const AR = ARMORS[cfg.armorId] || ARMORS.none;                                         // 身上的甲（獨立槽位）
@@ -2215,9 +2274,9 @@ let arenaOffIdx = 1;            // 副手：ARENA_OFF_IDS 的索引（O 鍵循�
 const ARENA_OFF_IDS = [null, ...OFFHAND_IDS, 'dagger'];   // 空手 / 三種盾 / 雙持短劍
 const arenaMember = (name, hue, wid, arch) => ({
   name, hue, strength: 1, weaponId: wid, offId: ARENA_OFF_IDS[arenaOffIdx] || null,
-  weaponId2: 'longbow', offId2: null, abilityId: 'heal', archetypeId: arch,
+  weaponId2: 'longbow', offId2: null, abilityId: 'mend', archetypeId: arch,
   tier: 0, passives: [], bonusMaxHp: 0, allocatedAmmo: 999, allocatedAmmo2: 999,   // 試作場彈藥管夠（弓弩要備箭）
-  equipId: null, itemId: 'grenade', itemCount: 3, carriesFile: false, armorId: ARMOR_IDS[arenaArmorIdx] || 'none',
+  equipId: null, itemId: 'firepot', itemCount: 3, carriesFile: false, armorId: ARMOR_IDS[arenaArmorIdx] || 'none',
 });
 // 換副手（試作場）：雙手武器不能帶副手＝直接跳過
 function arenaSetOff(i) {
@@ -2963,7 +3022,7 @@ function selectSlot(u, i) {
 // 自由位：道具走 useItem 的充能制、技能走 useAbility 的 CD 制（兩套都已存在，這裡只是接槽位）
 function useFreeSlot(u, i) {
   const sl = u.slots[i]; if (!sl || sl.kind !== 'free' || !sl.id) return false;
-  if (sl.type === 'ability') { const prev = u.abilityId, pa = u.ability; u.abilityId = sl.id; u.ability = ABILITIES[sl.id]; const r = useAbility(u); if (!r) { u.abilityId = prev; u.ability = pa; } return r; }
+  if (sl.type === 'ability') { const prev = u.abilityId, pa = u.ability; u.abilityId = sl.id; u.ability = artOf(sl.id); const r = useAbility(u); if (!r) { u.abilityId = prev; u.ability = pa; } return r; }
   if (sl.type === 'item') { const prevId = u.itemId, prevN = u.itemCount; u.itemId = sl.id; u.itemCount = sl.count != null ? sl.count : 0; const r = useItem(u); sl.count = u.itemCount; if (!r) { u.itemId = prevId; u.itemCount = prevN; } return r; }
   return false;
 }
@@ -3307,7 +3366,8 @@ function useAbility(u) {
 // 道具（一次性，C 鍵；用完消失）：瞬補 / 補彈 / 短時 buff / 手榴彈
 function useItem(u) {
   if (!u || u.state !== 'CONTROLLED' || !u.itemId || !(u.itemCount > 0)) return;
-  const it = ITEMS[u.itemId];
+  const it = artOf(u.itemId);   // 經過舊 key 解析（grenade→firepot 等）
+  if (!it) return;
   if (it.heal) { u.hp = Math.min(u.maxHp, u.hp + it.heal); spawnHeal(u.pos); }
   if (it.refill) { u.ammoInMag = unitMag(u); if (!isInfiniteAmmo(u.weaponId)) u.ammoReserve += unitMag(u) * 2; spawnPickup(u.pos); }
   if (it.buff) { u.buffT = it.buff.dur; u.buffMove = it.buff.moveMul || 1; u.buffFire = it.buff.fireRateMul || 1; spawnHeal(u.pos); }
@@ -3648,7 +3708,7 @@ function updateCaches() {
 function slotsOf(kind, id) { if (kind === 'weapon') { const w = WEAPONS[id]; return (w && w.weight >= 1.6) ? 2 : 1; } return 1; }
 // 「基本階」＝common 稀有度（武器/裝備/道具）或最基礎技能(heal/firstaid)；密封容器抽選排除之
 function isBasic(kind, id) {
-  if (kind === 'ability') return id === 'heal' || id === 'firstaid';
+  if (kind === 'ability') return id === 'mend' || id === 'bandage';
   const cat = kind === 'weapon' ? WEAPONS : kind === 'equip' ? EQUIPMENT : ITEMS;
   return !!(cat[id] && cat[id].rarity === 'common');
 }
@@ -6930,7 +6990,7 @@ let sandboxCfg = null;          // 上次設定（記憶 + localStorage）
 let sandboxLast = null;         // 上一場結果（撤離/陣亡）顯示用
 let sandboxEl = null, sandboxMembersEl = null, sandboxMapText = null, sandboxMapSel = null, sandboxMsgEl = null, sandboxResultEl = null, sandboxRows = [];
 
-const defaultMember = () => ({ archetypeId: rngPick(ARCHETYPE_IDS), weaponId: 'sword', offId: 'shield', weaponId2: 'longbow', abilityId: 'heal', equipId: '', itemId: '' });
+const defaultMember = () => ({ archetypeId: rngPick(ARCHETYPE_IDS), weaponId: 'sword', offId: 'shield', weaponId2: 'longbow', abilityId: 'mend', equipId: '', itemId: '' });
 const randomMember = () => { const wp = randomWeaponPool(availPool('weapon', SANDBOX_WEAPON_IDS)); return { archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)), weaponId: rngPick(wp), weaponId2: rngPick(['longbow', 'dagger', 'javelin', ...wp]), abilityId: rngPick(availPool('ability', ABILITY_IDS)), equipId: rngPick(['', ...availPool('equip', EQUIP_IDS)]), itemId: rngPick(['', '', ...availPool('item', ITEM_IDS)]) }; };
 function makeSandboxMember(m, used) {
   const r = makeRecruit(used);
