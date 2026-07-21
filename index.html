@@ -670,7 +670,7 @@ let lastIntelBreakdown = null;          // 上一局情報點明細（run-end �
 // 成功＝真結局＋最後解鎖；失敗＝Bad End。兩者都只播純文字＋回到挑戰前繼續玩（無刪檔/無軟鎖）。
 CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數）；結局每行間隔秒
 // 隨機路線圖生成（genRoadmap，吃種子）。cols＝run 長度（欄數，含起點與王；可調平衡）。
-CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, typeWeights: { COMBAT: 5, EVENT: 2, ARMORY: 1.4, REST: 1.2 } };
+CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, typeWeights: { COMBAT: 5, EVENT: 2, ARMORY: 1.4, REST: 1.2, TUTOR: 1.0 } };   // TUTOR＝導師（燒卷軸習得），比軍械庫略稀有
 // 閃光彈：落點 360° 噴一批「不傷害」的閃光彈丸，中到的敵人累積暈眩 u.flash（中越多越強，上限 max、每秒 decay）。
 // 暈眩效果隨飽和度 flashF(0~1) 縮放：視錐變窄(coneShrink)、視距變短(rangeMax→rangeMin)、移速降(moveSlow)、發散增(spreadAdd)。
 CONFIG.flash = {
@@ -1920,6 +1920,7 @@ let editDestructPreset = 0;
 let roster;                  // 跨關攜帶的陣容（撤出者存活、陣亡者損失）
 let missionIndex;            // 已清的戰鬥數（用於難度遞增/HUD）
 let restMsg, lastSummary;    // 休息關狀態
+let tutorOffers = null, tutorMsg = '';   // 導師節點：可學清單 / 提示訊息
 let warehouse = [];          // 共用倉庫：未裝備物品 [{kind:'weapon'|'ability', id}]（有上限）。預設空＝沙盒/選單不經 initRun 也不為 undefined
 let backpack = [];           // 臨時背包：任務中撿到、待休息關處理 [{kind, id, ammo}]（無上限、任務中不可動用）
 let ammoStock = {};          // 共用彈藥儲備 {weaponId: number}（按武器類別）
@@ -2150,6 +2151,7 @@ function selectNode(id) {
   const t = roadNode(id).type;
   if (t === 'COMBAT') startMission();
   else if (t === 'ARMORY') enterArmory();
+  else if (t === 'TUTOR') enterTutor();
   else if (t === 'EVENT') enterEvent();
   else enterRest();
 }
@@ -2792,6 +2794,50 @@ function armoryPick(i) {
   if (scene !== 'ARMORY' || !armoryOffers || i < 0 || i >= armoryOffers.length) return;
   const o = armoryOffers[i]; if (o.type === 'item') giveItemStack(o.id); else warehouse.push({ kind: o.type, id: o.id }); armoryOffers = null; advanceNode();
 }
+
+/* ── 導師節點（使用者定案）──────────────────────────────────────────────
+   卷軸的取捨在這裡收斂：**現在用掉它，還是燒掉它換永久**。
+   導師節點在路線圖上跟其他節點一樣**事先就看得見**（本來就會畫出 type/glyph），
+   所以「這條路上有導師」是分岔時的判斷依據，不是走到才知道的驚喜。
+   一張＝一個充能（ARTS[x].scrollsToLearn 張，各術不同＝旋鈕）。 */
+const scrollsHeld = (artId) => warehouse.reduce((n, w) => n + ((w.kind === 'item' && resolveArt(w.id) === artId) ? (w.count || 0) : 0), 0);
+const hasLearned = (artId) => warehouse.some(w => w.kind === 'ability' && resolveArt(w.id) === artId) ||
+                              (roster || []).some(r => resolveArt(r.abilityId) === artId);
+function burnScrolls(artId, n) {
+  let left = n;
+  for (const w of warehouse) {
+    if (left <= 0) break;
+    if (w.kind !== 'item' || resolveArt(w.id) !== artId) continue;
+    const take = Math.min(left, w.count || 0);
+    w.count -= take; left -= take;
+  }
+  for (let i = warehouse.length - 1; i >= 0; i--) if (warehouse[i].kind === 'item' && !(warehouse[i].count > 0)) warehouse.splice(i, 1);
+  return left === 0;
+}
+// 這個術現在學不學得起來？回 { artId, name, held, need, ok, why }
+function tutorOffer(artId) {
+  const A = ARTS[artId], need = A.scrollsToLearn || 2, held = scrollsHeld(artId), known = hasLearned(artId);
+  return { artId, name: A.name, held, need, known,
+           ok: !known && held >= need,
+           why: known ? '已經學會了' : (held < need ? `還差 ${need - held} 張` : '可以學') };
+}
+function enterTutor() {
+  scene = 'TUTOR'; releasePointer();
+  // 只列「學得會的術」；學不會的實體（陶罐/藥/箭袋）根本不該出現在導師面前
+  tutorOffers = ART_IDS.filter(id => ARTS[id].learnable).map(tutorOffer);
+}
+function tutorPick(i) {
+  if (scene !== 'TUTOR' || !tutorOffers || i < 0 || i >= tutorOffers.length) return false;
+  const o = tutorOffers[i];
+  if (!o.ok) { tutorMsg = `${o.name}：${o.why}`; return false; }
+  if (!burnScrolls(o.artId, o.need)) { tutorMsg = `${o.name}：卷軸不足`; return false; }
+  warehouse.push({ kind: 'ability', id: o.artId });
+  Hooks.fire('learn', { artId: o.artId, art: ARTS[o.artId], burned: o.need });
+  tutorOffers = null; tutorMsg = '';
+  advanceNode();
+  return true;
+}
+function tutorLeave() { if (scene !== 'TUTOR') return; tutorOffers = null; tutorMsg = ''; advanceNode(); }
 
 // --- 進入休息關：整理臨時背包（彈藥折算進儲備、item 進倉庫 haul）---
 function enterRest(tutorial = false) {
@@ -4687,7 +4733,7 @@ cv.addEventListener('click', () => {
     if (b && mouse.mx >= b.x && mouse.mx <= b.x + b.w && mouse.my >= b.y && mouse.my <= b.y + b.h) { editorOpen(); return; }
     const id = roadNodeAt(mouse.mx, mouse.my); if (id != null) selectNode(id);
   }
-  else if (scene === 'REST' || scene === 'ARMORY') restClick(mouse.mx, mouse.my);
+  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR') restClick(mouse.mx, mouse.my);
   else if (scene === 'SETTLE') settleClick(mouse.mx, mouse.my);
   else if (scene === 'EVENT') eventClick(mouse.mx, mouse.my);
   else if (scene === 'RUNEND' || scene === 'RUNWIN') goMenu();
@@ -4785,6 +4831,7 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (scene === 'ARMORY') { if (k >= '1' && k <= '9') armoryPick(parseInt(k, 10) - 1); return; }
+  if (scene === 'TUTOR') { if (k >= '1' && k <= '9') tutorPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') tutorLeave(); return; }
   if (scene === 'RUNEND' || scene === 'RUNWIN') { if (k === 'r') goMenu(); return; }
   if (scene === 'MENU') return;   // 主選單以滑鼠點選
   if (scene === 'HQ') { if (k === 'escape' || k === 'backspace') { goMenu(); e.preventDefault(); } return; }   // 總部：Esc/Backspace 回選單，其餘以滑鼠點選
@@ -5037,6 +5084,7 @@ function draw() {
   if (scene === 'SETTLE') { drawSettle(); return; }
   if (scene === 'EVENT') { drawEvent(); return; }
   if (scene === 'ARMORY') { drawArmory(); return; }
+  if (scene === 'TUTOR') { drawTutor(); return; }
   if (scene === 'RUNEND') { drawRunEnd(); return; }
   if (scene === 'RUNWIN') { drawRunWin(); return; }
 
@@ -6390,6 +6438,45 @@ function drawRestOffers() {
   ctx.textAlign = 'left';
 }
 // 軍械庫節點畫面（獨立場景；三選一）
+/* 導師畫面：每個學得會的術一列，直接把「你有幾張 / 要幾張」攤在臉上。
+   看得到但學不起的也列出來（灰掉）——玩家要知道「再撿一張就能學」才會去撿。 */
+function drawTutor() {
+  restRects = [];
+  ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#d9a0e8'; ctx.font = 'bold 30px Consolas'; ctx.fillText('導師', cv.width / 2, 78);
+  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '14px Consolas';
+  ctx.fillText('燒掉卷軸換永久習得：無限次使用，但要 CD、要耐力、前搖會被打斷', cv.width / 2, 104);
+  ctx.fillStyle = 'rgba(205,214,224,0.45)'; ctx.font = '12px Consolas';
+  ctx.fillText('卷軸留著＝即時、打不斷的救命按鈕。這是取捨，不是升級。', cv.width / 2, 126);
+
+  const list = tutorOffers || [];
+  const bw = 520, bh = 62, gap = 10, y0 = 168;
+  for (let i = 0; i < list.length; i++) {
+    const o = list[i], y = y0 + i * (bh + gap), x = cv.width / 2 - bw / 2, A = ARTS[o.artId];
+    ctx.fillStyle = o.ok ? 'rgba(26,34,46,0.97)' : 'rgba(18,22,28,0.9)';
+    ctx.fillRect(x, y, bw, bh);
+    ctx.lineWidth = 2; ctx.strokeStyle = o.ok ? '#c0a0ff' : 'rgba(120,130,145,0.35)'; ctx.strokeRect(x, y, bw, bh);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px Consolas'; ctx.fillStyle = o.ok ? '#c0a0ff' : '#5c646f'; ctx.fillText(`[${i + 1}]`, x + 14, y + 26);
+    ctx.fillStyle = o.ok ? '#e8eef5' : '#6b7580'; ctx.font = '15px Consolas'; ctx.fillText(o.name, x + 56, y + 26);
+    ctx.font = '11px Consolas'; ctx.fillStyle = o.ok ? '#8b97a5' : '#5c646f';
+    ctx.fillText(`CD ${A.cooldown}s · 前搖 ${A.castTime}s · 耐力 ${A.stamCost}`, x + 56, y + 46);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = o.known ? '#7fffa8' : (o.ok ? '#ffd27d' : '#6b7580');
+    ctx.font = 'bold 13px Consolas';
+    ctx.fillText(o.known ? '已學會' : `卷軸 ${o.held}/${o.need}`, x + bw - 16, y + 26);
+    ctx.fillStyle = '#5c646f'; ctx.font = '11px Consolas'; ctx.fillText(o.why, x + bw - 16, y + 46);
+    if (o.ok) pushRect(x, y, bw, bh, () => tutorPick(i));
+  }
+  ctx.textAlign = 'center';
+  if (tutorMsg) { ctx.fillStyle = '#ff9a6a'; ctx.font = '13px Consolas'; ctx.fillText(tutorMsg, cv.width / 2, y0 + list.length * (bh + gap) + 18); }
+  const by = cv.height - 64, bx = cv.width / 2 - 90;
+  ctx.fillStyle = 'rgba(24,30,40,0.97)'; ctx.fillRect(bx, by, 180, 40);
+  ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, 180, 40);
+  ctx.fillStyle = '#cdd6e0'; ctx.font = '14px Consolas'; ctx.fillText('什麼都不學（Enter）', cv.width / 2, by + 26);
+  pushRect(bx, by, 180, 40, () => tutorLeave());
+}
 function drawArmory() {
   restRects = [];
   ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -6653,7 +6740,7 @@ function drawRoadmap() {
     const isBravo = n.type === 'COMBAT' && (n.map === 'bravo');
     const isOutpost = n.type === 'COMBAT' && (n.map === 'outpost');
     const isLanes = n.type === 'COMBAT' && (n.map === 'lanes');
-    const base = n.type === 'REST' ? 150 : n.type === 'ARMORY' ? 48 : n.type === 'EVENT' ? 280 : (isBravo ? 35 : isOutpost ? 110 : isLanes ? 190 : 8);   // hue: 開闊紅、門禁橙、前哨綠、哨廊藍、軍械庫金、休息青、事件紫
+    const base = n.type === 'REST' ? 150 : n.type === 'ARMORY' ? 48 : n.type === 'TUTOR' ? 320 : n.type === 'EVENT' ? 280 : (isBravo ? 35 : isOutpost ? 110 : isLanes ? 190 : 8);   // hue: 開闊紅、門禁橙、前哨綠、哨廊藍、軍械庫金、休息青、事件紫
     let fill, stroke;
     if (done) { fill = 'rgba(70,80,90,0.5)'; stroke = 'rgba(120,130,140,0.6)'; }
     else if (isAvail) { fill = hsl(base, 65, hover ? 52 : 42); stroke = '#ffffff'; }
@@ -6662,8 +6749,8 @@ function drawRoadmap() {
     if (isAvail) { const a = 0.4 + 0.4 * Math.sin(simTime ? simTime * 5 : 0); ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 30, 0, Math.PI * 2); ctx.stroke(); }
     ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(p.x, p.y, hover ? 24 : 22, 0, Math.PI * 2); ctx.fill();
     ctx.lineWidth = isAvail ? 2.5 : 1.5; ctx.strokeStyle = stroke; ctx.beginPath(); ctx.arc(p.x, p.y, hover ? 24 : 22, 0, Math.PI * 2); ctx.stroke();
-    const glyph = done ? '✓' : n.boss ? '‼' : n.type === 'REST' ? '＋' : n.type === 'ARMORY' ? '★' : n.type === 'EVENT' ? '?' : (isBravo ? '⊟' : '⚔');
-    const sub = n.boss ? '最終 · ' + (MAPS[n.map] || MAPS.alpha).label : n.type === 'REST' ? '休息' : n.type === 'ARMORY' ? '軍械庫' : n.type === 'EVENT' ? '事件' : (MAPS[n.map] || MAPS.alpha).label;
+    const glyph = done ? '✓' : n.boss ? '‼' : n.type === 'REST' ? '＋' : n.type === 'ARMORY' ? '★' : n.type === 'TUTOR' ? '書' : n.type === 'EVENT' ? '?' : (isBravo ? '⊟' : '⚔');
+    const sub = n.boss ? '最終 · ' + (MAPS[n.map] || MAPS.alpha).label : n.type === 'REST' ? '休息' : n.type === 'ARMORY' ? '軍械庫' : n.type === 'TUTOR' ? '導師' : n.type === 'EVENT' ? '事件' : (MAPS[n.map] || MAPS.alpha).label;
     ctx.fillStyle = done ? '#aab' : '#ffffff'; ctx.font = 'bold 16px Consolas';
     ctx.fillText(glyph, p.x, p.y + 6);
     ctx.fillStyle = isAvail ? '#e8eef5' : 'rgba(180,190,200,0.6)'; ctx.font = '11px Consolas';
