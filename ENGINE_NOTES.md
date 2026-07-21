@@ -1,16 +1,30 @@
-# SLEEPER — 開發脈絡（現況版）
+# ENGINE_NOTES — 引擎脈絡（承襲自 SLEEPER）
 
-> 接手前先讀這份。**以現況架構為主、精簡可自足**；逐功能的歷史細節（含舊 §4.x 編號、時間線）封存在 `封存/開發進度與脈絡_v1封存_2026-06-24.md`，需要考古再翻。原始規格 `SLEEPER_開發計畫.md`。整理日：2026-06-24。
+> ⚠️ **本檔是原版 `darkbearlab/sleeper_roguelite` 的 `開發進度與脈絡.md` 原封搬入**，描述的是 **Homeward 所繼承的引擎**（AI／視界迷霧／撤離／追兵／地形／路線圖／事件／meta／編輯器）。
+> 改碼前先查這份——踩雷（§7）與系統接縫的說明**仍然完全適用**。
+>
+> **但下列部分已被 Homeward 取代，以 `PLAN.md` 為準，不要照本檔實作：**
+>
+> | 本檔所述（SLEEPER） | Homeward 現況 |
+> |---|---|
+> | 附身式小隊、`possess`/`autoPossess`、數字鍵切換 | **已移除**。只操作騎士（`players[KNIGHT_ID=0]`），扈從恆為 IDLE 的 AI 人格 |
+> | 「至少把一人帶到撤離點＝過關」 | **騎士親自抵達撤離點＝過關；騎士陣亡＝run 結束** |
+> | 機密檔案（`hasFile`／失敗條件） | `CONFIG.relicEnabled = false` 關閉，Phase 4 以歸鄉主題復活為「遺物」 |
+> | `knife`＝短射程投射物 | Phase 1 將改寫為真正的近接（扇形瞬間判定＋cleave＋盾格） |
+> | 間諜「沉睡者」敘事、HQ、The Patriot 致敬 | Phase 4 改寫為歸鄉・贖罪 |
+> | `extraction_arcade/` | 未複製進本 repo（Phase 6 候補，需要時自原版取回） |
+> | GitHub `darkbearlab/sleeper_roguelite` | **`darkbearlab/Homeward-`**（main） |
+>
+> 驗證方式不變（§1）：`node _check.js`。
 
-## 0. 一句話 + 檔案佈局
+---
+
+## 0. 一句話 + 檔案佈局（原版原文）
 俯視戰術射擊 × 附身式小隊操作 × Slay-the-Spire roguelite。一次只完整附身一名單位（FPS 滑鼠鎖定瞄準、WASD、Shift 奔跑），其餘隊員跑各自「待機個性」本能；每場在時間關門、追兵湧入前至少把一人帶到撤離點，撤出者帶入後續、陣亡永久損失。路線圖選路前進（戰鬥/休息/軍械庫節點），走到終點＝過關。美術全為幾何佔位，數值全為佔位待調。
 
 - **`index.html`** — 遊戲本體，單檔（原生 JS + Canvas 2D、零相依、開檔即玩）。所有可調數值/內容在檔頂目錄（見 §6）。
 - **`editor.html`** — 獨立地圖編輯器（多地圖庫 maps.json + 測試戰鬥往返）。與 index 分檔。
-- **`CLAUDE.md`** — 精簡常駐指示（每 session 自動載入）。
-- **`SLEEPER_開發計畫.md`** — 原始設計規格。`地圖編輯器規劃.md`、`舊地圖備份.md`、`封存/` — 參考/歷史。
-- **`extraction_arcade/`** — 2D 搜打撤 arcade 變體，**規劃中未動工**（只有設計文件，將由本遊戲複製分家、非共用引擎）。改 index 時可忽略。
-- GitHub：`darkbearlab/sleeper_roguelite`（main）。**每個完成且驗證過的更新都 commit+push**（GCM 認證；`_check.js`/`_edcheck.js` 為一次性測試檔，gitignored）。
+- GitHub：`darkbearlab/Homeward-`（main）。**每個完成且驗證過的更新都 commit+push**（GCM 認證；`_check.js` 為一次性測試檔，gitignored）。
 
 ## 1. 怎麼跑 / 怎麼驗證
 - **跑**：瀏覽器開 `index.html` → 主選單。戰鬥點畫面鎖滑鼠才開始推進（未鎖＝暫停、黑屏「點擊以開始」`drawCombatStart`）。

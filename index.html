@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SLEEPER — 垂直切片 (Vertical Slice)</title>
+<title>HOMEWARD — 戰敗騎士的歸鄉之路</title>
 <style>
   html,body{margin:0;height:100%;background:#06080d;overflow:hidden;
     font-family:Consolas,"Courier New",monospace;color:#cdd6e0;}
@@ -69,7 +69,7 @@
 <script>
 "use strict";
 /* =====================================================================
-   CODENAME: SLEEPER — Phase 1 垂直切片（戰術化 + 旋轉視角 + 戰爭迷霧）
+   CODENAME: HOMEWARD — 戰敗騎士的歸鄉之路（改編自 SLEEPER；單一英雄・無附身）
    原生 JS + Canvas 2D，零外部相依。
    分區： CONFIG / Math / Map / LoS+Vision / Camera / State /
           Possession / Combat(換彈/發散) / IdleAI / EnemyAI /
@@ -82,7 +82,7 @@
 const CONFIG = {
   // --- 規格指定值 ---
   devLootRack: true,        // 開發測試：第0關地上陳列所有武器/道具（一般掉落＝撿進背包，休息關配裝）。發佈前設 false
-  switchHandoverMs: 0,      // 切換附身交接延遲（0 = 無 CD）
+  relicEnabled: false,      // 「比自己性命更重要的東西」＝原版機密檔案機制。Phase 0 關閉（勝負只看騎士），Phase 4 以歸鄉主題復活（主君遺物/軍旗…）
   idleAccuracyMult: 0.5,    // 待機精度倍率（待機基礎發散 = spreadBase / 此值，越低越散）
   idleReactionDelay: 0.4,   // 待機：看到敵人到開火的延遲 (s)
   idleFireRateMult: 0.7,    // 待機射速倍率（越低越慢）
@@ -112,7 +112,7 @@ const CONFIG = {
   // 彈藥：每武器類別一個共用儲備（reserve）。本階段「不咬人」＝寬裕值，正常一場打不完。
   // pistol＝底線武器，彈藥視為無限、不納入分配。
   ammo: { stockStart: 600, defaultAlloc: 240, salvageAlly: 120, salvageEnemy: 60, subsonicStart: 18 },   // subsonicStart＝消音武器(silent)的稀少亞音速彈儲備（限制無聲擊殺頻率）
-  pickupRadius: 26,                // 被附身單位走到掉落物多近會撿進臨時背包
+  pickupRadius: 26,                // 騎士走到掉落物多近會撿進臨時背包
 
   // 地形 / 互動（門、按鈕、低矮牆）
   interactRadius: 40,             // 互動(開關門/按鈕)距離；門以「到門線段最近點」量距，整扇門寬都好按
@@ -167,7 +167,7 @@ const CONFIG = {
   },
   fog: { color: '#05070b', skeletonAlpha: 0.16 },
 
-  // 旋轉鏡頭（跟隨被附身單位、使其朝上）；anchorY＝單位在畫面的縱向位置(0.5置中, 越大越靠下→前方視野越長)
+  // 旋轉鏡頭（跟隨騎士、使其朝上）；anchorY＝單位在畫面的縱向位置(0.5置中, 越大越靠下→前方視野越長)
   camera: { scale: 1.0, followLerp: 9, rotateLerp: 8, anchorY: 0.66 },
   // 望遠/偵察（右鍵按住）：鏡頭往前帶(anchorY↓ 看更前)+微縮(scale)、降發散穩定、禁奔跑。
   // toggle＝改成切換模式(留給未來 option)；sensMul＝望遠時滑鼠靈敏度倍率(留給未來 option)。
@@ -391,7 +391,7 @@ const PASSIVES = {
   // 磐石 anchor — 固守
   dugin:     { name: '据守',     tree: 'anchor', tier: 1, desc: '貼掩體時 −受傷、+命中' },
   steady:    { name: '沉著',     tree: 'anchor', tier: 1, desc: '靜止/望遠時散布更小、bloom 回更快' },
-  overwatch: { name: '警戒待命', tree: 'anchor', tier: 2, desc: '待機(未附身)時對進視錐的敵 +命中、反應更快' },
+  overwatch: { name: '警戒待命', tree: 'anchor', tier: 2, desc: '扈從待機時對進視錐的敵 +命中、反應更快' },
   suppress:  { name: '壓制',     tree: 'anchor', tier: 2, desc: '持續射同一敵→其命中下降、更想找掩體' },
   bulwark:   { name: '不動如山', tree: 'anchor', tier: 3, desc: '本段未移動→再 −受傷、免一次暴擊' },
   laststand: { name: '死守',     tree: 'anchor', tier: 3, desc: '低血不退：+命中、−受傷' },
@@ -1280,7 +1280,7 @@ function canSee(observer, targetPos) {
 function isRevealed(enemy) { return enemy.revealT > 0 || activePlayers().some(p => canSee(p, enemy.pos)); }   // 開火現形 或 被任一我方看到
 
 /* =====================================================================
-   Camera — 旋轉視角（跟隨置中被附身單位、使其朝上）
+   Camera — 旋轉視角（跟隨置中騎士、使其朝上）
    ===================================================================== */
 let cam, camTarget;
 let camAnchorY = CONFIG.camera.anchorY;   // 現用畫面錨點縱比（望遠時 lerp 往下＝看更前方）
@@ -1299,7 +1299,7 @@ function updateCamera(dt) {
   if (!cam) return;   // 安全防護：非戰鬥場景 cam 可能尚未建立
   // 演出固定機位（cutscene.cam 非 null）：俯視框住場面，不跟單位
   if (cutscene && cutscene.cam) { camTarget.x = cutscene.cam.x; camTarget.y = cutscene.cam.y; camTarget.angle = cutscene.cam.angle; }
-  // 跟隨被附身單位：手動控制(CONTROLLED) 或 護送撤離中(EXTRACTING) 都跟（撤出/陣亡後 controlledId 會被清空，鏡頭定住）
+  // 跟隨騎士：手動控制(CONTROLLED) 或 自走撤離中(EXTRACTING) 都跟（撤出/陣亡後 controlledId 會被清空，鏡頭定住）
   else if (controlledId != null && (players[controlledId].state === 'CONTROLLED' || players[controlledId].state === 'EXTRACTING')) {
     const f = players[controlledId];
     camTarget.x = f.pos.x; camTarget.y = f.pos.y;
@@ -1329,6 +1329,11 @@ let players, enemies, bullets, particles;
 let grenades = [];           // 飛行中的手榴彈/煙霧彈 [{x,y,vx,vy,dist,max,faction,G|smoke,spin}]（手榴彈落點等引信炸開；煙霧落地即成煙）
 let smokes = [];             // 作用中的煙幕 [{x,y,r,t,max}]＝暫時草叢遮蔽（inSmoke 以落點視線截斷＝不穿牆）
 let flashFx = [];            // 閃光彈爆閃視覺 [{x,y,t,max}]（純特效；暈眩效果在 u.flash + canSee/移動/發散）
+// HOMEWARD：無附身。players[KNIGHT_ID] 恆為騎士＝唯一受控單位；players[1..] 恆為 AI 扈從（IDLE，跑 archetype 人格）。
+// controlledId 保留為讀取接縫（渲染/HUD/開火回饋等 20+ 處沿用），但只會是 KNIGHT_ID 或 null（騎士離場後）。
+const KNIGHT_ID = 0;
+const knight = () => (players && players[KNIGHT_ID]) || null;
+const knightAlive = () => { const k = knight(); return !!k && k.state !== 'DEAD' && k.state !== 'EXTRACTED'; };
 let controlledId, reservations, enemyIdSeq;
 let patrolClaims = new Map(), patrolPool = [];   // IDLE 巡邏：點認領集（node→enemyId）/ 本場巡邏點池
 let searchFocusNode = null, searchSet = null, searchCleared = null, searchFocusLeadT = -Infinity, searchConsumedT = -Infinity;   // 交戰後搜索焦點（最後已知位置那區）
@@ -1359,9 +1364,9 @@ let warehouse = [];          // 共用倉庫：未裝備物品 [{kind:'weapon'|'
 let backpack = [];           // 臨時背包：任務中撿到、待休息關處理 [{kind, id, ammo}]（無上限、任務中不可動用）
 let ammoStock = {};          // 共用彈藥儲備 {weaponId: number}（按武器類別）
 let drops = [];              // 戰鬥中地上的掉落物 [{pos, kind:'weapon', id, ammo}]
-let fileDrop = null;         // 機密檔案掉在地上時的位置 {x,y}（攜帶者陣亡→掉落，任一我方走過即拾起；穿迷霧永遠可見）
-let cacheGround = [];        // 地上的密封容器 [{x,y}]（任務配置/運搬者陣亡掉落；任一我方走過即拾起，比照機密檔案；撤離才開封）
-let loseReason = '';         // RUN FAILED 原因：'全滅' | '機密檔案遺失'
+let fileDrop = null;         // 遺物掉在地上時的位置 {x,y}（CONFIG.relicEnabled 關閉時恆為 null）
+let cacheGround = [];        // 地上的密封容器 [{x,y}]（任務配置/運搬者陣亡掉落；任一我方走過即拾起；撤離才開封）
+let loseReason = '';         // RUN FAILED 原因：'騎士陣亡'（Phase 4 遺物機制復活後可再增）
 let corpses = [];            // 陣亡標記 [{x,y,enemy}]（地上叉叉，整場保留）
 let decals = [];             // 地上血漬/痕跡 [{x,y,r,col}]（上限淘汰、整場保留）
 let soundPings = [];         // 視覺化聲音：[{x,y,life,max,r,col}]（控制角色視線外的聲音→畫面邊框朝該方向發光）
@@ -1373,7 +1378,7 @@ let restWslot = {};          // 各員配裝卡正在編輯的武器槽（mi→1
 let restRects = [];          // 休息關/軍械庫可點擊區域（每幀於 draw 重建）
 let armoryOffers = null;     // 軍械庫節點的三選一
 let roadCompleted, roadAvailable, roadCurrent;  // 路線圖狀態
-let hysteresisOn = true, debugView = false, lastSwitchT;
+let hysteresisOn = true, debugView = false;
 let aimDir = 0;              // 砲塔目標朝向（世界角，由滑鼠位移累積）
 let pointerLocked = false;  // 是否已鎖定滑鼠（FPS 式瞄準）
 // 第0關（序章/教學）：cutscene 導演 + 演出用 actor/標記。詳見 startIntro / cutsceneTick。
@@ -1384,7 +1389,7 @@ let introCast = null;        // 序章三人陣容 configs（主角+2守衛；�
 let introGuards = [];        // 演出中的守衛 actor [{pos,facing,hue,name}]（密語後轉真單位）
 let introConsole = null;     // 控制台互動點 {x,y,used}（取得機密檔案）
 let restTutorial = false;    // REST 是否顯示教學說明面板（僅序章休息）
-// 撤離護送＝controlledId 指向 EXTRACTING 單位（取代舊的鏡頭跟隨變數）：自走+滑鼠轉視野，任一指令奪回
+// 騎士自走撤離＝knight().state === 'EXTRACTING'：自動導航到撤離點 + 滑鼠仍可轉視野，任一指令奪回手動
 
 // 建一個武器槽（副武器/換槍用）：完整自帶彈藥/換彈/bloom 狀態
 function makeWeaponSlot(weaponId, reserve, fx) {
@@ -1430,13 +1435,13 @@ function makePlayer(i, cfg, pos) {
     coneHalfDeg: pCone,                    // 斥候＝視錐更寬（null＝用全域）
     buffT: 0, buffMove: 1, buffFire: 1,    // 道具（腎上腺素）短時 buff
     passBuffT: 0, passBuffMove: 1, passBuffFire: 1, stillT: 0, momentumT: 0, regenT: 0, suppressedT: 0,   // 被動時間態
-    hasFile: !!cfg.carriesFile,            // 是否身上帶著機密檔案（獨立攜帶格，跨關隨撤出者）
+    hasFile: !!cfg.carriesFile,            // 是否身上帶著遺物（獨立攜帶格，跨關隨撤出者；CONFIG.relicEnabled 關閉時恆 false）
     caches: 0,                             // 運搬中的密封容器數（每場撿取，撤離開封；不跨關）
     senseRadius: CONFIG.vision.senseRadius * (cfg.strength || 1) * (fx.senseMul || 1) * pSense,
     fireCooldown: 0, engageTimer: 0, alertTimer: 0, muzzle: 0, sprinting: false,
     idleAnchor: 0, sweepPhase: 0, sweepDir: 1, extractNode: null,   // idleAnchor＝進入閒置時的正前方
     burstLeft: CONFIG.idleTap.size, burstCd: 0, wanderTarget: 0, wanderTimer: 0,
-    stance: 'defend',   // 交戰姿態：'defend'(預設＝只對已交戰敵 overwatch) / 'engage'(對視野內任何敵 overwatch)。僅影響非附身單位自動開火
+    stance: 'defend',   // 交戰姿態：'defend'(預設＝只對已交戰敵 overwatch) / 'engage'(對視野內任何敵 overwatch)。僅影響 AI 扈從的自動開火
     lastSeenPos: null, lastSeenT: -Infinity, _seenNow: false,   // 敵人共享情報：此我方最後被任一敵人看到的位置/時間
   };
 }
@@ -1474,15 +1479,17 @@ const rosterFromPlayer = (p) => {
   const w2 = p.weapon2 || null;   // 副武器槽（換槍後 active/stowed 可能已對調，以當下 active 為 weaponId）
   return { name: p.name, hue: p.hue, strength: p.strength, weaponId: p.weaponId, abilityId: p.abilityId, archetypeId: p.archetypeId, tier: p.tier || 0, passives: (p.passives || []).slice(), weaponId2: w2 ? w2.weaponId : null, allocatedAmmo2: w2 ? (isInfiniteAmmo(w2.weaponId) ? 0 : w2.ammoReserve) : 0, bonusMaxHp: p.maxHp - CONFIG.unitHp - eqAdd, hp: p.hp, allocatedAmmo: isInfiniteAmmo(p.weaponId) ? CONFIG.ammo.defaultAlloc : p.ammoReserve, disciplineOverride: p.disciplineOverride || null, equipId: p.equipId || null, itemId: (p.itemCount > 0 ? p.itemId : null), itemCount: p.itemCount || 0, carriesFile: !!p.hasFile };
 };
-// 機密檔案恆有且只有一名攜帶者：跨關由撤出者保留旗標；若無（序章後首次/異常）給第一人，多於一名只留第一名
+// 遺物恆有且只有一名攜帶者：跨關由撤出者保留旗標；若無（序章後首次/異常）給騎士，多於一名只留第一名
+// CONFIG.relicEnabled 關閉（Phase 0）時整組清空＝配裝卡不顯示攜帶徽章、結算不檢查
 function ensureFileCarrier() {
   if (!roster || !roster.length) return;
+  if (!CONFIG.relicEnabled) { for (const r of roster) r.carriesFile = false; return; }
   let seen = false;
   for (const r of roster) { if (r.carriesFile) { if (seen) r.carriesFile = false; else seen = true; } }
-  if (!seen) roster[0].carriesFile = true;
+  if (!seen) roster[KNIGHT_ID].carriesFile = true;
 }
-// 休息關指派攜帶者（單選；點某員＝把檔案移到他身上）
-function assignFileCarrier(mi) { if (mi < 0 || mi >= roster.length) return; roster.forEach((r, i) => { r.carriesFile = (i === mi); }); restSel = null; }
+// 休息關指派攜帶者（單選；點某員＝把遺物移到他身上）
+function assignFileCarrier(mi) { if (!CONFIG.relicEnabled || mi < 0 || mi >= roster.length) return; roster.forEach((r, i) => { r.carriesFile = (i === mi); }); restSel = null; }
 function fileCarrierIndex() { return roster ? roster.findIndex(r => r.carriesFile) : -1; }
 // 我方重生點：圍著作用中地圖的進入點(ENTRY)成隊形展開，而非固定在地圖左邊（自訂地圖好設計）。
 // 隊形軸＝垂直於「ENTRY→地圖內部(EXTRACT)」方向；整體稍往內挪避免貼外牆（卡牆由 collide/separate 收尾）。
@@ -1550,16 +1557,16 @@ function startMission() {
   reservations = new Map(); patrolClaims = new Map(); enemyIdSeq = 1; drops = []; fileDrop = null;
   cacheGround = (MAP.caches || []).map(c => ({ x: c.x, y: c.y }));   // 密封容器：本場地圖配置的（撿走撤離才開封）
   for (const p of players) p.caches = 0;
-  if (!fromSandbox && !fromEditor && !finaleActive) {   // 機密檔案：本場由 roster 指定的攜帶者背上（保底＝沒人標記就給第一人，檔案不能憑空消失）
-    if (!players.some(p => p.hasFile) && players.length) players[0].hasFile = true;
-  } else { for (const p of players) p.hasFile = false; }   // 沙盒/編輯試玩/最終挑戰不啟用檔案機制（最終＝撤出≥1 即勝）
+  if (CONFIG.relicEnabled && !fromSandbox && !fromEditor && !finaleActive) {   // 遺物：本場由 roster 指定的攜帶者背上（保底＝沒人標記就給騎士，遺物不能憑空消失）
+    if (!players.some(p => p.hasFile) && players.length) players[KNIGHT_ID].hasFile = true;
+  } else { for (const p of players) p.hasFile = false; }   // Phase 0 恆走此路：遺物機制關閉（沙盒/編輯試玩/最終挑戰本來就不啟用）
   prisoners = (MAP.prisoners || []).map(o => ({ pos: { x: o.x, y: o.y }, freed: false }));   // 俘虜（每場重置）
   for (const s of MAP.enemySpawns) { const e = makeEnemy(s.nodeId, s.personality, false, s.facing, s.type, s.faction); enemies.push(e); commitReservation(e, e.currentNode); }
   // 每清一關多放幾名 rusher（暫定的上升張力，待路徑圖時再正式設計難度）
   if (!MAP.eventMap) for (let k = 0; k < missionIndex; k++) { const sp = MAP.enemySpawns[k % MAP.enemySpawns.length]; enemies.push(makeEnemy(sp.nodeId, 'rusher')); }   // 事件地圖不加難度遞增兵
   patrolPool = computePatrolPool();   // 本場巡邏點池（IDLE grunt 巡邏用）
   searchFocusNode = null; searchSet = null; searchCleared = null; searchConsumedT = -Infinity;   // 重置交戰後搜索
-  simTime = 0; reinforceTimer = 0; lastSwitchT = -Infinity;
+  simTime = 0; reinforceTimer = 0;
   extractedCount = 0; deadCount = 0; result = null;
   scene = 'COMBAT';
   Input.aim = players[controlledId].facing;
@@ -1572,14 +1579,16 @@ function endMission() {
   if (fromEditor) { fromEditor = false; forcedMap = null; scene = 'EDITOR'; editMsg = '試玩結束 — 回到編輯器'; releasePointer(); return; }
   if (introActive) { finishIntro(); return; }   // 第0關：撤離 → 序章休息（含教學），不走一般結算
   const survivors = players.filter(p => p.state === 'EXTRACTED');
-  const fileSafe = survivors.some(p => p.hasFile);   // 機密檔案必須由「撤出成功」的人帶出，否則整局失敗（躺地上/隨陣亡者沒了都算遺失）
-  const win = survivors.length >= 1 && (finaleActive || fileSafe);   // 最終挑戰不啟用檔案機制＝撤出≥1 即過關（繼續跑路線）
+  const fileSafe = CONFIG.relicEnabled ? survivors.some(p => p.hasFile) : true;   // 遺物須由撤出者帶出（Phase 0 機制關閉＝恆真）
+  // HOMEWARD 勝負判定：**騎士親自抵達撤離點＝過關；騎士陣亡＝run 結束**。扈從的生死不影響過關。
+  const kn = knight();
+  const win = !!kn && kn.state === 'EXTRACTED' && (finaleActive || fileSafe);
   const cacheReveal = [];   // 密封容器開封＝事後抽選（排除基本階、含未解鎖、run 限定進倉庫）：僅過關時開
   if (win) { const cachesOut = survivors.reduce((n, p) => n + (p.caches || 0), 0); for (let i = 0; i < cachesOut; i++) cacheReveal.push(rollMysteryLoot()); }
   lastSummary = { mission: missionIndex + 1, extracted: survivors.map(p => p.name), dead: players.filter(p => p.state === 'DEAD').map(p => p.name), fileSafe, cacheReveal };
   if (win) { roster = survivors.map(rosterFromPlayer); missionIndex++; enterSettle(); return; }   // 勝利→戰果結算(挑人升階)→路線圖
   if (finaleActive) { resolveFinale(false); return; }   // 最終挑戰全滅＝Bad End（不走一般 RUNEND）
-  scene = 'RUNEND'; result = 'LOSE'; loseReason = survivors.length === 0 ? '全滅' : '機密檔案遺失'; metaOnRunEnd(false); releasePointer();   // 一般 run 失敗：局外結算
+  scene = 'RUNEND'; result = 'LOSE'; loseReason = (kn && kn.state !== 'EXTRACTED' && !fileSafe) ? '遺物遺失' : '騎士陣亡'; metaOnRunEnd(false); releasePointer();   // 一般 run 失敗：局外結算
 }
 
 /* =====================================================================
@@ -1781,7 +1790,7 @@ function startIntro() {
   introGuards = []; introConsole = null;
   if (CONFIG.devLootRack) spawnDevRack();   // 開發測試：第0關陳列所有武器/道具（解鎖後走過即測）
   curTimeBudget = 1e9;   // 序章不要追兵打斷敘事
-  simTime = 0; reinforceTimer = 0; lastSwitchT = -Infinity;
+  simTime = 0; reinforceTimer = 0;
   extractedCount = 0; deadCount = 0; result = null;
   scene = 'COMBAT'; Input.aim = players[0].facing;
   initCamera(players[0]);
@@ -2095,63 +2104,34 @@ function allocAmmo(mi, dir, slot = 1) {
    ===================================================================== */
 const activePlayers = () => players.filter(p => p.state === 'CONTROLLED' || p.state === 'IDLE' || p.state === 'EXTRACTING');
 
-function possess(i) {
-  const u = players[i];
-  if (!u || u.state === 'DEAD' || u.state === 'EXTRACTED') return;
-  if (controlledId != null && controlledId !== i) {
-    const c = players[controlledId];
-    if (c.state === 'CONTROLLED') { c.idleAnchor = c.facing; c.state = 'IDLE'; }  // 記住交回待機時的正前方
-  }
-  controlledId = i;
-  if (u.state === 'EXTRACTING') {
-    Input.aim = u.facing;     // 護送：保持撤離自走、滑鼠可轉視野，任一指令才奪回（不中斷撤離）
-  } else {
-    u.state = 'CONTROLLED'; u.extractNode = null;
-    u.facing = u.idleAnchor;  // 接手時正面恢復到該單位「進入閒置時的正前方」
-    Input.aim = u.idleAnchor;
-  }
-}
-// 護送中（controlledId 指向 EXTRACTING 單位）收到任一指令 → 奪回手動、撤離中斷
+/* HOMEWARD — 無附身：本節只剩「騎士自走撤離」與「命令扈從先行撤離」。
+   已移除：possess()（切換附身）、autoPossess()（控制者離場後自動接手）、數字鍵切換、CONFIG.switchHandoverMs。
+   保留：自走撤離 EXTRACTING（＝自動導航到撤離點的便利機能，任一指令即奪回），Phase 3 的指令層由此擴充。 */
+
+// 騎士自走撤離中收到任一指令 → 奪回手動、撤離中斷
 function seizeIfEscorting() {
-  if (controlledId == null) return false;
-  const u = players[controlledId];
+  const u = knight();
   if (!u || u.state !== 'EXTRACTING') return false;
   u.state = 'CONTROLLED'; u.extractNode = null;
   return true;
 }
-function toggleExtract() {   // H：當前單位撤離↔取消（撤離後留在 controlledId＝進入護送）
-  if (controlledId == null) return;
-  const u = players[controlledId];
+function toggleExtract() {   // H：騎士自走撤離 ↔ 取消（自走期間滑鼠仍可轉視野）
+  const u = knight();
+  if (!u) return;
   if (u.state === 'CONTROLLED') {
     u.idleAnchor = u.facing;  // 撤離途中的 overwatch 也以當前正前方為錨
     u.state = 'EXTRACTING'; u.extractNode = null;
     Input.aim = u.facing;
   } else if (u.state === 'EXTRACTING') {
-    u.state = 'CONTROLLED'; u.extractNode = null;   // 護送中再按 H → 取消撤離回手動
+    u.state = 'CONTROLLED'; u.extractNode = null;   // 自走中再按 H → 取消撤離回手動
   }
 }
-function extractAll() {   // Shift+H：全體撤離（CONTROLLED/IDLE 全轉 EXTRACTING），挑一名護送
-  let escortId = controlledId;
+// Shift+H：命令扈從先行撤離（騎士不受影響，仍由玩家操作）。Phase 3「先行撤離」指令的雛形。
+function extractAll() {
   for (const p of players) {
-    if (p.state === 'CONTROLLED' || p.state === 'IDLE') { p.idleAnchor = p.facing; p.state = 'EXTRACTING'; p.extractNode = null; }
+    if (p.id === KNIGHT_ID) continue;
+    if (p.state === 'IDLE') { p.idleAnchor = p.facing; p.state = 'EXTRACTING'; p.extractNode = null; }
   }
-  if (escortId == null || !players[escortId] || players[escortId].state !== 'EXTRACTING') {
-    let best = -1, bd = Infinity;   // 沒有現成控制對象 → 護送最靠近撤離點者
-    for (const p of players) { if (p.state !== 'EXTRACTING') continue; const d = dist(p.pos, EXTRACT); if (d < bd) { bd = d; best = p.id; } }
-    escortId = best;
-  }
-  controlledId = (escortId >= 0) ? escortId : null;
-  if (controlledId != null) Input.aim = players[controlledId].facing;
-}
-function autoPossess(fromPos) {
-  // 非撤離(IDLE)單位優先，沒有才退而附身撤離中(EXTRACTING)單位（possess 會自動進入護送、不中斷撤離）
-  const pick = (state) => {
-    let best = -1, bd = Infinity;
-    for (const p of players) { if (p.state !== state) continue; const d = fromPos ? dist(p.pos, fromPos) : p.id; if (d < bd) { bd = d; best = p.id; } }
-    return best;
-  };
-  let id = pick('IDLE'); if (id < 0) id = pick('EXTRACTING');
-  if (id >= 0) possess(id); else controlledId = null;
 }
 
 /* =====================================================================
@@ -2365,7 +2345,7 @@ function drawSmoke() {
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
   }
 }
-// 交戰姿態（E=engage 主動 / Q=defend 防守）：設在指定單位，影響其非附身時的 overwatch 開火條件（idleTick）
+// 交戰姿態（E=engage 主動 / Q=defend 防守）：設在指定扈從，影響其待機時的 overwatch 開火條件（idleTick）
 function setStance(u, s) { if (u && (s === 'engage' || s === 'defend')) { u.stance = s; Sfx.play('stance'); } }
 
 // 手動：基礎+連射 bloom（玩家扳機紀律＝技巧）。敵人：同手動會 bloom。
@@ -2411,13 +2391,14 @@ function killUnit(u) {
   if (u.faction !== 'player') { spawnDrop(u, CONFIG.ammo.salvageEnemy); u.dead = true; releaseReservation(u); releasePatrol(u); }   // 任一 AI 陣營死亡（駐軍/暴民…）
   else {
     spawnDrop(u, CONFIG.ammo.salvageAlly);
-    if (u.hasFile) { u.hasFile = false; fileDrop = { x: u.pos.x, y: u.pos.y }; Sfx.play('death', u.pos); }   // 攜帶者陣亡→機密檔案掉在原地，待人回收（不回收就撤離＝任務失敗）
+    if (u.hasFile) { u.hasFile = false; fileDrop = { x: u.pos.x, y: u.pos.y }; Sfx.play('death', u.pos); }   // 攜帶者陣亡→遺物掉在原地，待人回收（CONFIG.relicEnabled 關閉時不會發生）
     if (u.caches > 0) { for (let i = 0; i < u.caches; i++) cacheGround.push({ x: u.pos.x + (Math.random() * 16 - 8), y: u.pos.y + (Math.random() * 16 - 8) }); u.caches = 0; Sfx.play('death', u.pos); }   // 運搬者陣亡→密封容器掉在原地，待人回收（比照機密檔案）
-    const wasControlled = (u.state === 'CONTROLLED') || controlledId === u.id;
     u.state = 'DEAD'; deadCount++;
     if (!fromSandbox && !playtestMode && !introActive) runStats.kia++;   // 戰役中陣亡才計入情報點扣分（序章/沙盒/試玩不算）
-    hitstop(CONFIG.juice.deathHitstop);   // 我方陣亡：只頓一下（不帶鏡頭去死亡點，激戰中不干擾操作）
-    if (wasControlled) { controlledId = null; autoPossess(u.pos); }
+    hitstop(CONFIG.juice.deathHitstop);   // 陣亡：只頓一下（不帶鏡頭去死亡點，激戰中不干擾操作）
+    // HOMEWARD：騎士陣亡＝唯一硬敗北。不再自動接手其他單位；controlledId 清空後，
+    // update() 尾端的離場判定會呼叫 endMission()（不在此直接呼叫＝避免在傷害計算途中換場景）。
+    if (u.id === KNIGHT_ID) controlledId = null;
   }
 }
 // 掉落：陣亡單位的武器落在原地（底線武器不掉、無回收價值）。彈藥折算量於休息關進儲備。
@@ -2431,7 +2412,7 @@ function spawnDevRack() {
   WEAPON_IDS.forEach((id, i) => drops.push({ pos: { x: 130 + i * 80, y: 150 }, kind: 'weapon', id, ammo: CONFIG.ammo.defaultAlloc, dev: true }));
   ITEM_IDS.forEach((id, i) => drops.push({ pos: { x: 170 + i * 150, y: 600 }, kind: 'item', id, dev: true }));   // dev＝只用於在地上標出名稱，撿取行為與一般掉落相同
 }
-// 拾取：僅被附身單位走到掉落物上即撿入臨時背包（任務中不可動用＝撿/不撿的時間/暴露取捨；到休息關處理）
+// 拾取：僅騎士走到掉落物上即撿入臨時背包（任務中不可動用＝撿/不撿的時間/暴露取捨；到休息關處理）
 function updateDrops() {
   if (controlledId == null) return;
   const u = players[controlledId]; if (!u || u.state !== 'CONTROLLED') return;
@@ -2486,12 +2467,12 @@ function rollMysteryLoot() {
 }
 
 /* =====================================================================
-   互動 — 開關門 / 按鈕（僅被附身單位；自走單位不會開門，§Q4）
+   互動 — 開關門 / 按鈕（僅騎士；自走單位不會開門，§Q4）
    ===================================================================== */
 const doorMid = (d) => ({ x: (d.x1 + d.x2) / 2, y: (d.y1 + d.y2) / 2 });
 // 到門「線段最近點」的距離（門很寬，量到中點會在門邊按不到）
 const distToDoor = (pos, d) => dist(pos, closestOnSeg(pos, { x: d.x1, y: d.y1 }, { x: d.x2, y: d.y2 }));
-// 回傳被附身單位 interactRadius 內最近的互動點（門/按鈕/俘虜），無則 null
+// 回傳騎士 interactRadius 內最近的互動點（門/按鈕/俘虜），無則 null
 function nearestInteractable(u) {
   if (!u) return null;
   let best = null, bd = CONFIG.interactRadius;
@@ -2603,7 +2584,7 @@ function idleTick(u, dt, lockFacing) {
   } // HOLD：維持閒置正前方
   if (u.alertTimer > 0) u.alertTimer -= dt;
 
-  // 交戰目標：感知到 + 在射程內。Defend(預設)＝只打已交戰敵(不破壞潛行)；Engage＝視野內任何敵都打(會主動開戰)。被附身單位手動開火不受此限
+  // 交戰目標：感知到 + 在射程內。Defend(預設)＝只打已交戰敵(不破壞潛行)；Engage＝視野內任何敵都打(會主動開戰)。騎士手動攻擊不受此限
   let target = null, td = Infinity;
   for (const e of enemies) {
     if (e.dead || st.targeting === 'NONE') continue;
@@ -2897,7 +2878,7 @@ function extractTick(u, dt) {
   }
   const goal = (u.extractNode === extractNodeId) ? EXTRACT : wp(u.extractNode).pos;
   const turn = (u.turnSpeed || u.weapon.turnSpeed) * Math.PI / 180 * dt;
-  if (u.id === controlledId) u.facing = rotToward(u.facing, Input.aim, turn);         // 護送：滑鼠自由轉視野（不中斷撤離）
+  if (u.id === controlledId) u.facing = rotToward(u.facing, Input.aim, turn);         // 騎士自走撤離：滑鼠自由轉視野（不中斷撤離）
   else u.facing = rotToward(u.facing, angTo(u.pos, goal), turn);                      // 自走：面向移動方向
   moveToward(u, goal, CONFIG.moveSpeed * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * dt);   // 低矮牆減速 + 裝備
   for (const d of MAP.doors) if (!d.open && distToDoor(u.pos, d) <= CONFIG.interactRadius) { d.open = true; Sfx.play('door'); }   // 自走撤離也會開路上的門（不被關門卡死＝softlock）
@@ -3001,7 +2982,7 @@ function canvasPos(ev) { const r = cv.getBoundingClientRect(); return { x: (ev.c
 
 /* =====================================================================
    ── I/O 接縫（PORT MAP，為將來可能搬遷到 Phaser 預留）──
-   架構分三層：① 純模擬（update(dt) 及其呼叫鏈：AI/彈道/附身/庫存/roadmap/cutscene…，
+   架構分三層：① 純模擬（update(dt) 及其呼叫鏈：AI/彈道/控制/庫存/roadmap/cutscene…，
    不碰 ctx/DOM，與引擎無關，搬遷時原樣保留）② 接縫（本區 Input/Sfx）③ 轉接器（DOM/canvas
    事件處理＝目前實作；Phaser 版改寫這層即可）。**模擬層只透過 Input/Sfx 取用輸入/音效**。
    - Input：模擬讀輸入的唯一介面（鍵盤/開火/鎖定/砲塔朝向）。背後狀態(keys/mouse/pointerLocked/
@@ -3147,19 +3128,15 @@ window.addEventListener('keydown', e => {
   }
   if (fromSandbox && k === 'backspace') { fromSandbox = false; forcedMap = null; sandboxLast = { aborted: true }; if (playtestMode) { playtestMode = false; try { location.href = 'editor.html'; } catch (e) {} } else enterSandbox(); e.preventDefault(); return; }
   if (fromEditor && k === 'backspace') { fromEditor = false; forcedMap = null; scene = 'EDITOR'; releasePointer(); editMsg = '已中止試玩，回到編輯器'; e.preventDefault(); return; }
-  if (k >= '1' && k <= '9') {
-    const i = parseInt(k, 10) - 1;
-    const handover = CONFIG.switchHandoverMs / 1000;
-    if (i < players.length && i !== controlledId && (simTime - lastSwitchT) >= handover) { possess(i); lastSwitchT = simTime; }  // 切到撤離中單位＝護送(不中斷)
-  }
-  if (k === 'h') { if (e.shiftKey) extractAll(); else toggleExtract(); }                  // H 撤離(進入護送) / Shift+H 全體撤離
+  // HOMEWARD：數字鍵附身切換已移除（只操作騎士本人）
+  if (k === 'h') { if (e.shiftKey) extractAll(); else toggleExtract(); }                  // H 騎士自走撤離 / Shift+H 命令扈從先行撤離
   if (k === ' ') { seizeIfEscorting(); if (controlledId != null) useAbility(players[controlledId]); }  // 空白鍵=技能（右鍵亦可）；護送中→奪回
   if (k === 'r') { seizeIfEscorting(); if (controlledId != null) startReload(players[controlledId]); } // 換彈；護送中→奪回
   if (k === 'x') { seizeIfEscorting(); if (controlledId != null) swapWeapon(players[controlledId]); }   // 換槍(主↔副)；護送中→奪回
   if (k === 'c') { seizeIfEscorting(); if (controlledId != null) useItem(players[controlledId]); }     // 道具(原 Q)；護送中→奪回
   if (k === 'f') { seizeIfEscorting(); tryInteract(); }                                                // 互動：開關門/按鈕(原 E)；護送中→奪回
-  if (k === 'e' && controlledId != null) setStance(players[controlledId], 'engage');                   // 姿態：主動清場（不奪回護送）
-  if (k === 'q' && controlledId != null) setStance(players[controlledId], 'defend');                   // 姿態：防守(現行閒置)（不奪回護送）
+  // 扈從交戰姿態（騎士恆為手動、stance 對他無意義）：E＝主動清場 / Q＝防守。Phase 3 指令層的雛形。
+  if (k === 'e' || k === 'q') { const s = (k === 'e') ? 'engage' : 'defend'; for (const p of players) if (p.id !== KNIGHT_ID) setStance(p, s); }
   if (k === 'g') debugView = !debugView;
   if (k === 'j') hysteresisOn = !hysteresisOn;   // (debug) 原 H，因 H 改作撤離而移位
   if ([' ', 'w', 'a', 's', 'd'].includes(k)) e.preventDefault();
@@ -3181,13 +3158,13 @@ function update(dt) {
   for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickAmmo(p, dt); tickPassives(p, dt); }
   for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); }
 
-  // 0) 護送 seize：護送(controlledId 指向 EXTRACTING)時，移動或開火 → 奪回手動、撤離中斷（滑鼠轉視野不算）
-  if (controlledId != null && players[controlledId].state === 'EXTRACTING') {
+  // 0) 自走撤離 seize：騎士自走撤離時，移動或開火 → 奪回手動、撤離中斷（滑鼠轉視野不算）
+  if (knight() && knight().state === 'EXTRACTING') {
     const moveCmd = Input.held('w') || Input.held('a') || Input.held('s') || Input.held('d');
     if (moveCmd || Input.fire) seizeIfEscorting();
   }
 
-  // 1) 被附身單位：滑鼠轉向(turnSpeed) + 相對角色移動 + 左鍵開火
+  // 1) 騎士（唯一受控單位）：滑鼠轉向(turnSpeed) + 相對角色移動 + 左鍵開火
   if (controlledId != null) {
     const u = players[controlledId];
     if (u.state === 'CONTROLLED') {
@@ -3210,7 +3187,7 @@ function update(dt) {
     }
   }
 
-  // 2) 待機 / 撤離
+  // 2) AI 扈從待機 / 自走撤離（扈從恆為 IDLE 人格；騎士只有按 H 自走時才進 EXTRACTING）
   for (const p of players) { if (p.state === 'IDLE') idleTick(p, dt); else if (p.state === 'EXTRACTING') extractTick(p, dt); }
 
   // 3) 敵人 AI（先更新共享情報/搜索焦點，再逐一行動）
@@ -3240,20 +3217,24 @@ function update(dt) {
   for (const u of movers) collideWalls(u);
   updateDrops(); updateFile(); updateCaches();
 
-  // 7) 撤離判定
+  // 7) 撤離判定：走到撤離點的人脫離戰場
   for (const p of players) {
     if ((p.state === 'CONTROLLED' || p.state === 'IDLE' || p.state === 'EXTRACTING') && dist(p.pos, EXTRACT) < CONFIG.extractRadius) {
       p.state = 'EXTRACTED'; extractedCount++;
-      if (controlledId === p.id) { controlledId = null; autoPossess(p.pos); }
+      if (controlledId === p.id) controlledId = null;   // 騎士脫離＝本場結束（見 8），鏡頭定住不再接手他人
     }
   }
 
-  // 7.5) 戰鬥中若沒被附身、又非刻意跟隨撤離中 → 自動接手場上其他單位（非撤離優先），不留空轉
-  if (controlledId == null && activePlayers().length > 0) autoPossess(null);
+  // 7.5) 騎士抵達撤離點 → 尚在場的扈從隨之脫離。
+  // Phase 3 加「跟隨」指令之前，扈從待機不會自己跟上；若判定為損失，等於每場都全滅扈從（永久死亡只該由陣亡觸發）。
+  if (knight() && knight().state === 'EXTRACTED') {
+    for (const p of activePlayers()) { p.state = 'EXTRACTED'; extractedCount++; }
+  }
 
-  // 8) 計時 + 結算（場上無我方 → 進休息關 或 run 結束）
+  // 8) 計時 + 結算。HOMEWARD：**騎士**離場即本場結束——抵達撤離點＝過關、陣亡＝run 結束。
+  // 扈從的生死不結束戰鬥（保底：騎士不存在的異常情況沿用原版「場上無我方」）。
   simTime += dt;
-  if (activePlayers().length === 0) endMission();
+  if (!knight() || !knightAlive() || activePlayers().length === 0) endMission();
 }
 
 /* =====================================================================
@@ -3515,7 +3496,7 @@ function drawFileDrop() {
   ctx.fillStyle = '#ffd27d'; ctx.fillRect(fileDrop.x - 6, fileDrop.y - 5, 12, 10);
   ctx.fillStyle = '#1a1208'; ctx.fillRect(fileDrop.x - 6, fileDrop.y - 5, 12, 3);   // 資料夾上緣
   ctx.fillStyle = '#ffd27d'; ctx.font = 'bold 10px Consolas'; ctx.textAlign = 'center';
-  ctx.fillText('機密檔案', fileDrop.x, fileDrop.y - 16); ctx.textAlign = 'left';
+  ctx.fillText('遺物', fileDrop.x, fileDrop.y - 16); ctx.textAlign = 'left';
   ctx.restore();
 }
 // 密封容器掉落標記：畫在迷霧之上＝永遠可見（比照機密檔案；?＝撤離才知是什麼）
@@ -3603,7 +3584,7 @@ function drawParticles() {
   for (const q of particles) { ctx.globalAlpha = Math.max(0, q.life / q.max); ctx.fillStyle = q.col; ctx.fillRect(q.x - 1.5, q.y - 1.5, 3, 3); }
   ctx.globalAlpha = 1;
 }
-// 地上掉落的武器（脈動小方塊 + 稀有度色，被附身單位走過即撿）
+// 地上掉落的武器（脈動小方塊 + 稀有度色，騎士走過即撿）
 function drawDrops() {
   const pulse = 0.6 + 0.4 * Math.sin(simTime * 6);
   for (const d of drops) {
@@ -3815,7 +3796,7 @@ function drawScreenOverlays() {
     const s = w2s(e.pos);
     screenBar(s, e.hp / e.maxHp, '#ff6b6b', -e.radius * cam.scale - 10);
   }
-  // 砲塔準星（沿被附身單位 facing；另畫一條較淡的目標朝向線顯示轉向延遲）
+  // 砲塔準星（沿騎士 facing；另畫一條較淡的目標朝向線顯示轉向延遲）
   if (controlledId != null && players[controlledId].state === 'CONTROLLED') {
     const u = players[controlledId], s = w2s(u.pos);
     const r1 = u.radius * cam.scale + 6;
@@ -3878,7 +3859,7 @@ function drawHUD() {
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(95,208,107,0.16)'; ctx.fillRect(cv.width / 2 - 200, 14, 400, 30);
     ctx.fillStyle = '#7fffa8'; ctx.font = 'bold 14px Consolas';
-    ctx.fillText('⟳ 護送撤離中 — 滑鼠轉視野 · 移動/開火/技能=奪回控制', cv.width / 2, 34);
+    ctx.fillText('⟳ 自走撤離中 — 滑鼠轉視野 · 移動/攻擊/技能=奪回控制', cv.width / 2, 34);
   }
 
   // 機密檔案掉落警示（公平性：醒目提示 + 螢幕邊框指向掉落點的箭頭）
@@ -3886,7 +3867,7 @@ function drawHUD() {
     const blink = Math.sin(simTime * 6) > -0.3;
     ctx.textAlign = 'center';
     ctx.fillStyle = blink ? 'rgba(255,180,60,0.96)' : 'rgba(255,120,60,0.96)'; ctx.font = 'bold 15px Consolas';
-    ctx.fillText('⚠ 機密檔案已掉落 — 回收後再撤離（遺失＝任務失敗）', cv.width / 2, 54);
+    ctx.fillText('⚠ 遺物已掉落 — 回收後再撤離（遺失＝歸途中斷）', cv.width / 2, 54);
     const sp = w2s(fileDrop), cx = cv.width / 2, cy = cv.height / 2;
     if (sp.x < 0 || sp.x > cv.width || sp.y < 0 || sp.y > cv.height) {   // 掉落點不在畫面內→邊框箭頭指引
       let dx = sp.x - cx, dy = sp.y - cy; const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
@@ -3920,7 +3901,7 @@ function drawHUD() {
 
   // 控制提示（卡片帶上方）
   ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(205,214,224,0.55)';
-  ctx.fillText('滑鼠=轉向 · 左鍵開火 · 右鍵=望遠 · 空白=技能 · WASD · Shift 奔跑 · R 換彈 · F 互動 · C 道具 · E/Q 姿態(主動/防守) · 1/2/3 附身 · H 撤離 · Shift+H 全體', cv.width / 2, cv.height - 94);
+  ctx.fillText('滑鼠=轉向 · 左鍵攻擊 · 右鍵=望遠 · 空白=技能 · WASD · Shift 奔跑 · R 換彈 · F 互動 · C 道具 · E/Q 扈從姿態(主動/防守) · H 自走撤離 · Shift+H 扈從先撤', cv.width / 2, cv.height - 94);
   if (debugView || !hysteresisOn) {
     ctx.fillStyle = hysteresisOn ? '#7fe3ff' : '#ff9b5a';
     ctx.fillText(`hysteresis: ${hysteresisOn ? 'ON' : 'OFF (觀察抖動)'}    debug(無迷霧): ${debugView ? 'ON' : 'OFF'}`, cv.width / 2, cv.height - 108);
@@ -3936,7 +3917,7 @@ function drawCards() {
   for (let i = 0; i < n; i++) drawCard(players[i], x0 + i * (cw + gap), y0, cw, ch, i);
 }
 function drawCard(p, x, y, w, h, i) {
-  const ctrl = (p.state === 'CONTROLLED');
+  const ctrl = (p.id === KNIGHT_ID);   // HOMEWARD：卡片高亮＝騎士本人（不再是「當前附身對象」）
   const inactive = (p.state === 'DEAD' || p.state === 'EXTRACTED');
   const pad = 9, bw = w - 2 * pad, bx = x + pad;
   // 面板
@@ -3949,7 +3930,7 @@ function drawCard(p, x, y, w, h, i) {
   // 名稱 + 編號 + 狀態
   ctx.textAlign = 'left'; ctx.font = 'bold 13px Consolas';
   ctx.fillStyle = inactive ? '#7a828c' : (ctrl ? '#ffffff' : hsl(p.hue, 60, 74));
-  ctx.fillText(`[${i + 1}] ${p.name}`, bx, y + 15);
+  ctx.fillText(`${p.id === KNIGHT_ID ? '⚔ ' : ''}${p.name}`, bx, y + 15);   // 騎士＝劍記；扈從無編號（已無附身切換熱鍵）
   ctx.textAlign = 'right'; ctx.font = '9px Consolas';
   ctx.fillStyle = p.state === 'EXTRACTED' ? '#5fd06b' : p.state === 'DEAD' ? '#8a6a6a' : 'rgba(205,214,224,0.65)';
   ctx.fillText(p.state === 'EXTRACTED' ? 'EXTRACTED' : p.state === 'EXTRACTING' ? 'EXTRACTING' : p.state, x + w - pad, y + 14);
@@ -4065,13 +4046,15 @@ function drawLoadoutCard(mi, x, y, w, h) {
   const pvNames = (r.passives || []).map(pid => PASSIVES[pid] ? PASSIVES[pid].name : pid);
   if (pvNames.length) { ctx.fillStyle = '#9fd0e0'; ctx.fillText('[' + pvNames.join('/') + ']', x + pad + 4 + ctx.measureText(archLabel).width + 8, y + 36); }
   else { ctx.fillStyle = '#8b97a5'; ctx.fillText(arch.desc, x + pad + 4 + ctx.measureText(archLabel).width + 8, y + 36); }
-  // 機密檔案攜帶者：右上角徽章（攜帶者＝金色實心；其餘在可管理階段＝可點指派）。獨立攜帶格、單選。
+  // 遺物攜帶者：右上角徽章（攜帶者＝金色實心；其餘在可管理階段＝可點指派）。獨立攜帶格、單選。
+  // Phase 0：CONFIG.relicEnabled 關閉＝整塊不畫（Phase 4 復活時開回來即可）
   const bw2 = 80, bx2 = x + w - bw2 - 6, by2 = y + 24;
-  if (r.carriesFile) {
+  if (!CONFIG.relicEnabled) { /* 遺物機制關閉：不顯示攜帶徽章 */ }
+  else if (r.carriesFile) {
     ctx.fillStyle = 'rgba(255,200,80,0.22)'; ctx.fillRect(bx2, by2, bw2, 15);
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,210,90,0.9)'; ctx.strokeRect(bx2, by2, bw2, 15);
     ctx.textAlign = 'center'; ctx.font = 'bold 10px Consolas'; ctx.fillStyle = '#ffd27d';
-    ctx.fillText('📁 攜帶機密', bx2 + bw2 / 2, by2 + 11); ctx.textAlign = 'left';
+    ctx.fillText('📁 攜帶遺物', bx2 + bw2 / 2, by2 + 11); ctx.textAlign = 'left';
     ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,210,90,0.55)'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);   // 卡片金邊
   } else if (manage) {
     ctx.fillStyle = 'rgba(255,210,125,0.06)'; ctx.fillRect(bx2, by2, bw2, 15);
@@ -4305,11 +4288,11 @@ function drawRunEnd() {
   ctx.fillStyle = 'rgba(8,10,14,0.95)'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ff5d5d'; ctx.font = 'bold 46px Consolas'; ctx.fillText('RUN FAILED', cv.width / 2, cv.height / 2 - 80);
-  const lostFile = loseReason === '機密檔案遺失';
+  const lostFile = loseReason === '遺物遺失';
   ctx.fillStyle = '#cdd6e0'; ctx.font = '18px Consolas';
-  ctx.fillText(`${lostFile ? '機密檔案遺失' : '全滅'} — 清掉 ${missionIndex} 場戰鬥`, cv.width / 2, cv.height / 2 - 40);
+  ctx.fillText(`${loseReason || '騎士陣亡'} — 走過 ${missionIndex} 段歸途`, cv.width / 2, cv.height / 2 - 40);
   ctx.fillStyle = '#9fb3c8'; ctx.font = '14px Consolas';
-  ctx.fillText(lostFile ? '（全員撤離時檔案不在身上 = 任務失敗）' : '（撤出 0 人 = run 結束）', cv.width / 2, cv.height / 2 - 16);
+  ctx.fillText(lostFile ? '（撤離時遺物不在身上 = 歸途中斷）' : '（騎士倒下 = 歸途中斷）', cv.width / 2, cv.height / 2 - 16);
   let y = drawIntelBreakdown(cv.width / 2, cv.height / 2 + 24);
   ctx.fillStyle = '#cdd6e0'; ctx.font = '16px Consolas'; ctx.fillText('按 R / 點擊 重新開始一輪 run', cv.width / 2, y + 40);
   ctx.textAlign = 'left';
@@ -4365,7 +4348,7 @@ function drawSettle() {
   ctx.textAlign = 'left'; ctx.font = '13px Consolas';
   ctx.fillStyle = '#5fd06b'; ctx.fillText('撤出: ' + (sum.extracted.join('、') || '—'), 90, 104);
   ctx.fillStyle = '#8a6a6a'; ctx.fillText('陣亡: ' + (sum.dead.join('、') || '—'), 90, 124);
-  if (sum.fileSafe) { ctx.fillStyle = '#ffd27a'; ctx.fillText('📁 機密檔案已帶出', cv.width - 260, 104); }
+  if (CONFIG.relicEnabled && sum.fileSafe) { ctx.fillStyle = '#ffd27a'; ctx.fillText('📁 遺物已帶出', cv.width - 260, 104); }
   if (sum.cacheReveal && sum.cacheReveal.length) {   // 密封容器開封結果（已進倉庫，本 run 可用）
     ctx.fillStyle = '#7fdce8'; ctx.fillText('📦 密封容器開啟：' + sum.cacheReveal.join('、') + '（已入倉庫）', 90, 144);
   }
@@ -4923,8 +4906,8 @@ function drawMenu() {
   menuRects = [];
   ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 54px Consolas'; ctx.fillText('SLEEPER', cv.width / 2, 116);
-  ctx.fillStyle = 'rgba(205,214,224,0.6)'; ctx.font = '15px Consolas'; ctx.fillText('俯視戰術 × 附身小隊 × roguelite', cv.width / 2, 148);
+  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 54px Consolas'; ctx.fillText('HOMEWARD', cv.width / 2, 116);
+  ctx.fillStyle = 'rgba(205,214,224,0.6)'; ctx.font = '15px Consolas'; ctx.fillText('戰敗騎士的歸鄉之路 — 單一英雄動作 roguelite', cv.width / 2, 148);
   const items = [
     { label: '戰役', desc: '序章 → 路線圖 run', fn: () => initRun() },
     { label: '自由戰鬥', desc: '自選小隊 + 地圖，打一場', fn: () => enterSandbox() },
@@ -4954,7 +4937,7 @@ function drawMenu() {
   ctx.fillText('內容　武器 ' + Object.keys(WEAPONS).length + '・幹員 ' + ARCHETYPE_IDS.length + '・被動 ' + Object.keys(PASSIVES).length + '・技能 ' + ABILITY_IDS.length + '・裝備 ' + Object.keys(EQUIPMENT).length + '・道具 ' + Object.keys(ITEMS).length + '・事件 ' + EVENTS.length + '・敵型 ' + Object.keys(ENEMY_TYPES).length + '・地圖 ' + Object.keys(MAPS).length, cv.width / 2, y);
   y += 24;
   ctx.fillStyle = 'rgba(95,208,107,0.6)'; ctx.font = '11px Consolas';
-  ctx.fillText('已完成系統　✓ 附身小隊　✓ 潛行/警覺　✓ 地形/破壞/區域　✓ 成長弧/被動樹　✓ 雙武器　✓ 事件/旗標/演出　✓ 局外解鎖', cv.width / 2, y);
+  ctx.fillText('已完成系統　✓ 單一英雄操作　✓ AI 扈從　✓ 潛行/警覺　✓ 地形/破壞/區域　✓ 成長弧/被動樹　✓ 雙武器　✓ 事件/旗標/演出　✓ 局外解鎖', cv.width / 2, y);
   ctx.textAlign = 'left';
 }
 
