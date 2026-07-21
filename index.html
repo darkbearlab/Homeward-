@@ -315,6 +315,15 @@ CONFIG.melee = {
   ringDist: 115,           // 沒有攻擊權時，與目標保持的距離
   ringStrafe: 0.55,        // 繞行時的橫移速度倍率
   hitstopHit: 0.035,       // 近接命中的頓幀（比槍擊有份量）
+  // ── 攻擊預告（telegraph）：AI 出手前先畫出「會打到哪」，填滿的瞬間就是攻擊落下的瞬間 ──
+  // 只畫非玩家單位、且只畫玩家看得見的（視線外不預告＝背後偷襲仍然成立）。
+  // 目前接近接的前搖；遠程之後在 telegraphOf() 加一個分支即可套用同一套視覺。
+  tgEnabled: true,
+  tgFill: 0.26,            // 填色不透明度
+  tgOutline: 0.30,         // 完整範圍輪廓的不透明度（一出手就看得到最終範圍）
+  tgEdge: 0.95,            // 推進中的前緣亮度
+  tgEdgeWidth: 3.5,        // 前緣線寬
+  tgFullFlash: 0.5,        // 填滿瞬間額外的閃白強度
   hitstopBlocked: 0.05,    // 被格擋時的頓幀（金屬撞擊感）
   shakeHit: 5,             // 近接命中的螢幕震動
   arcFadeT: 0.22,          // 揮斬弧特效殘留秒數
@@ -613,6 +622,38 @@ const FACTIONS = {
   rioter: { name: '暴民', hue: 320 },   // 暴動第三勢力（之後可隨意再加 gangA/gangB… 各成一勢力）
 };
 const hostile = (a, b) => a !== b;                 // 不同陣營＝互敵、同陣營＝友軍
+/* ── 友軍誤傷（HOMEWARD：原版沒有，本作全面開啟）──────────────────────
+   關鍵區分：**索敵**仍走 hostile()（沒有人會「瞄準」自己人），但**傷害判定**吃到誰就是誰。
+   配套 aiHoldFire：AI 開火前檢查射線上有沒有自己人擋著，否則敵人會互相掃射把自己打光。
+   （玩家手動攻擊不受此限＝自己的刀自己負責，斧的 cleave 會砍到扈從就是這個設計的張力。） */
+CONFIG.friendlyFire = {
+  enabled: true,
+  dmgMul: 1.0,        // 誤傷倍率（1＝與敵傷相同；想「有代價但不致命」可調低）
+  aiHoldFire: true,   // AI 射線被自己人擋住時不開火
+  holdFirePad: 6,     // 判定友軍是否擋線時，額外放寬的半徑（px）
+};
+// 傷害判定對象：除了攻擊者本人以外的所有人（FF 關閉時退回原本的「只打敵對陣營」）。
+// faction 參數給沒有 owner 的來源用（手榴彈/煙霧的散射彈丸只帶陣營，不帶投擲者）。
+const canHarm = (attacker, t, faction) => {
+  if (t === attacker) return false;
+  if (CONFIG.friendlyFire.enabled) return true;
+  const f = (faction != null) ? faction : (attacker && attacker.faction);
+  return (f == null) || hostile(f, t.faction);
+};
+const isFriendlyHit = (attackerFaction, t) => attackerFaction != null && !hostile(attackerFaction, t.faction);
+// AI 專用：射線上有自己人擋著嗎？（比目標更近、且落在射線上）
+function friendlyInLineOfFire(u, aimPos) {
+  const FF = CONFIG.friendlyFire;
+  if (!FF.enabled || !FF.aiHoldFire) return false;
+  const dTarget = dist(u.pos, aimPos);
+  for (const o of [...activePlayers(), ...enemies]) {
+    if (o === u || o.dead) continue;
+    if (hostile(u.faction, o.faction)) continue;        // 敵人擋在前面沒關係（本來就要打他）
+    if (dist(u.pos, o.pos) > dTarget) continue;          // 比目標還遠＝不擋
+    if (segCircle(u.pos, aimPos, o.pos, o.radius + FF.holdFirePad)) return true;
+  }
+  return false;
+}
 const factionHue = (fid, fb) => { const f = FACTIONS[fid]; return (f && f.hue != null) ? f.hue : fb; };
 
 // 招募隨機（全部都隨機、無固定基準）：名字/色相/感知/武器/個性
@@ -2487,7 +2528,7 @@ function meleeHitTest(u, s) {
   const hi = Math.max(s.prevOff, s.off) + bladeHalf;
   const reach = (W.reach || W.range) * Math.max(s.prevReachF, s.reachF);
   const cleave = W.cleave || 1;
-  const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => t !== u && hostile(u.faction, t.faction));
+  const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => canHarm(u, t));   // 友軍誤傷：揮到誰就是誰（斧的 cleave 會砍到自己的扈從）
   for (const t of targets) {
     if (s.n >= cleave) break;
     if (s.hits.has(t)) continue;
@@ -2503,6 +2544,7 @@ function meleeHitTest(u, s) {
     const back = Math.abs(angDiff(fromAng, t.facing)) > Math.PI / 2;   // 從目標背面砍＝短劍背刺加成
     let dmg = W.damage * (back ? (W.backstabMul || 1) : 1);
     if (u.faction !== 'player' && t.faction === 'player') dmg *= CONFIG.enemy.meleeDmgMul;   // 英雄 vs 群體：AI 近接對我方減傷
+    if (isFriendlyHit(u.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;                      // 誤傷倍率
     const hp0 = t.hp, stag0 = t.staggerT || 0, swing0 = !!t.swing;
     const blocked = damageUnit(t, dmg, W.pierce, fromAng, { melee: true, attacker: u, knock: W.knock || 0, stagger: W.stagger || 0, poiseDmg: W.poiseDmg || 0 });
     if (arenaMode) {   // 試作場即時數據：本次揮擊打中幾隻、實際扣多少血（含裝甲/格擋後的真值）
@@ -2575,7 +2617,7 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
       pierce: W.pierce || 0,      // 穿甲：對裝甲敵人的擋格率衰減
       tracer: isTracer,           // 曳光彈：火光色亮拖尾（否則極細淡線/隱形）
-      breacher: hasPassive(u, 'breacher'), suppress: hasPassive(u, 'suppress'), shooterId: isPlayer ? u.id : -1,   // 被動：命中時依距離/壓制套用、擊殺歸屬
+      breacher: hasPassive(u, 'breacher'), suppress: hasPassive(u, 'suppress'), shooterId: isPlayer ? u.id : -1, owner: u,   // 被動：命中時依距離/壓制套用、擊殺歸屬；owner＝射手本人（友軍誤傷判定用來排除自己）
     });
   }
   if (!W.infinite) u.ammoInMag--;   // infinite(Siren)＝彈夾不消耗、永不換彈
@@ -2757,7 +2799,9 @@ function setStance(u, s) { if (u && (s === 'engage' || s === 'defend')) { u.stan
 const manualFire = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (isScoping() ? CONFIG.scope.spreadMul : 1), 1, u.weapon.spreadPerShot);   // 望遠＝降發散穩定
 const enemyFire  = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) * (u.suppressedT > 0 ? CONFIG.passive.suppressSpread : 1) * (1 + flashF(u) * CONFIG.flash.spreadAdd), 1, u.weapon.spreadPerShot);   // 被壓制/閃光暈眩＝發散變大
 // 敵人攻擊分派：ranged＝持續射擊（霰彈靠武器 pellets 自動多發）；burst＝點放掃射（打 size 發→停 gap 秒）
+// 友軍誤傷：AI 的遠程攻擊在射線被自己人擋住時收火（近接是短距離掃擊，不套這條，否則 AI 會完全不敢動手）
 function enemyAttack(e, ang, dt) {
+  if (!e.weapon.melee && friendlyInLineOfFire(e, { x: e.pos.x + Math.cos(ang) * e.weapon.range, y: e.pos.y + Math.sin(ang) * e.weapon.range })) { e.holdFireT = 0.2; return; }
   if (e.attack !== 'burst') { enemyFire(e, ang); return; }
   if (e.burstCd > 0) { e.burstCd -= dt; return; }   // 連發後停頓（讓 bloom 回復＝掃射節奏）
   if (enemyFire(e, ang)) { e.burstLeft--; if (e.burstLeft <= 0) { e.burstLeft = e.weapon.burst.size; e.burstCd = e.weapon.burst.gap; } }
@@ -2822,7 +2866,7 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (u.faction !== 'player') {   // 任一 AI 陣營被打
     u.state = 'ENGAGED';   // 被攻擊（即使被甲擋下）也進入交戰（latch）
     if (fromAng != null) registerHitThreat(u, fromAng);   // 被擊中→把「來向」當局部脅威傳給：本人＋看得到本人的敵＋近隣（解側翼魚貫＝後續的人出來就朝來向）
-    if (!flanked && u.armor > 0 && Math.random() < u.armor * (1 - pierce)) { spawnBlock(u.pos); return; }   // 裝甲：整發擋下非穿甲（繞背無視）
+    if (!flanked && u.armor > 0 && Math.random() < u.armor * (1 - pierce)) { spawnBlock(u.pos); return blocked; }   // 裝甲：整發擋下非穿甲（繞背無視）
   }
   const resist = flanked ? 0 : (u.dmgResist || 0);   // 繞背無視所有裝甲（含玩家固定減傷＝甲只罩正面）
   u.hp -= dmg * mult * (1 - resist) * (u.faction === 'player' ? passiveDmgTakenMul(u) : 1);   // 被動減傷：据守/不動如山/死守
@@ -2991,11 +3035,12 @@ function updateBullets(dt) {
       }
     }
     if (!gone) {
-      const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => hostile(b.faction, t.faction));   // 多陣營：打所有與射手敵對的單位（玩家/駐軍/暴民…）
+      const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => canHarm(b.owner, t, b.faction));   // 友軍誤傷：子彈吃到誰就是誰（射手本人除外；手榴彈散射連投擲者都會炸到）
       for (const t of targets) if (segCircle(old, b, t.pos, t.radius)) {
         if (b.flash) { t.flash = Math.min(CONFIG.flash.max, (t.flash || 0) + b.flash); gone = true; break; }   // 閃光彈丸：累積暈眩、不造成傷害（中越多顆越暈）
         let dmg = b.dmg;
         if (b.breacher) dmg *= breacherMul(b.traveled);                                  // 破門手：命中時依距離
+        if (isFriendlyHit(b.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;              // 誤傷倍率
         const wasAlive = !t.dead && t.hp > 0;
         damageUnit(t, dmg, b.pierce || 0, angTo(t.pos, { x: b.ox, y: b.oy }));
         if (b.suppress && t.faction === 'enemy' && !t.dead) t.suppressedT = CONFIG.passive.suppressDur;   // 壓制：被射的敵發散變大
@@ -3055,6 +3100,8 @@ function idleTick(u, dt, lockFacing) {
   const reactDelay = CONFIG.idleReactionDelay * (hasPassive(u, 'overwatch') ? CONFIG.passive.overwatchReact : 1);   // 警戒待命：待機反應更快
   if (mayFire && u.engageTimer >= reactDelay) {
     const ang = angTo(u.pos, target.pos);
+    // 友軍誤傷：扈從的自動射擊也要看射線（別把騎士打死）。近接不套（短距離掃擊）
+    if (!u.weapon.melee && friendlyInLineOfFire(u, target.pos)) { u.holdFireT = 0.2; return; }
     if (st.discipline === 'AUTO') {
       idleEngageFire(u, ang);                              // 扣到底：持續噴、bloom 拉滿、耗彈快
     } else {                                               // TAP 點放：短 burst + 停頓讓 bloom 回復
@@ -4175,9 +4222,49 @@ function drawParticles() {
 }
 /* ---- 近接可讀性：揮斬扇形 / 盾格弧 / 硬直標記（世界座標，draw() 已套 applyCam）----
    前搖＝暗色細弧「預告」揮擊範圍；判定窗＝亮色實心扇形（就是實際判定的形狀）；後搖＝淡出。 */
+/* ── 攻擊預告 telegraph（AI 出手前的警示）────────────────────────────────
+   規格（使用者定）：出手前放出一個「會打到哪」的形狀，由中心擴散填滿到末端，
+   **填滿的瞬間＝攻擊落下的瞬間**；只對玩家視線內的敵人顯示。
+   telegraphOf() 是通用接縫：現在只回近接（讀前搖進度），將來遠程加一個分支即可共用同一套視覺。 */
+function telegraphOf(u) {
+  if (!CONFIG.melee.tgEnabled) return null;
+  if (u.faction === 'player') return null;            // 只預告 AI 的攻擊（玩家自己的刀不用預告）
+  const W = u.weapon, s = u.swing;
+  if (W && W.melee && s && s.t < s.windup) {          // 近接：前搖期間
+    return {
+      p: clamp(s.t / Math.max(0.001, s.windup), 0, 1),
+      reach: W.reach || W.range,
+      half: (W.arcDeg || 90) * Math.PI / 360,
+      thrust: W.swingStyle === 'thrust',
+    };
+  }
+  // TODO(遠程)：瞄準/舉弓期間回 { p: 蓄力進度, reach: 射程, half: 散布半角, thrust: true }
+  return null;
+}
+function drawTelegraph(u) {
+  const T = telegraphOf(u); if (!T) return;
+  const M = CONFIG.melee;
+  const a0 = u.facing - T.half, a1 = u.facing + T.half;
+  const r = T.reach * T.p;                              // 擴散半徑：填到末端＝攻擊落下
+  const full = T.p > 0.92;
+  const warn = full ? '255,238,190' : '255,110,90';     // 快打到時轉亮＝最後的警告
+  // ① 完整範圍的輪廓：一出手就看得到「最終會掃到哪」
+  ctx.strokeStyle = `rgba(255,110,90,${M.tgOutline})`; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y);
+  ctx.arc(u.pos.x, u.pos.y, T.reach, a0, a1); ctx.closePath(); ctx.stroke();
+  // ② 由中心擴散的填滿
+  ctx.fillStyle = `rgba(${warn},${M.tgFill + (full ? M.tgFullFlash * 0.3 : 0)})`;
+  ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y);
+  ctx.arc(u.pos.x, u.pos.y, Math.max(1, r), a0, a1); ctx.closePath(); ctx.fill();
+  // ③ 推進中的前緣（就是「還有多久打到」的那條線）
+  ctx.strokeStyle = `rgba(${warn},${M.tgEdge})`; ctx.lineWidth = M.tgEdgeWidth * (full ? 1.6 : 1);
+  ctx.beginPath(); ctx.arc(u.pos.x, u.pos.y, Math.max(1, r), a0, a1); ctx.stroke();
+}
+
 function drawMeleeFx(list) {
   for (const u of list) {
     if (u.dead || u.state === 'DEAD' || u.state === 'EXTRACTED') continue;
+    drawTelegraph(u);   // AI 的出手預告（畫在武器特效之前＝在最底層）
     const W = u.weapon; if (!W || !W.melee) continue;
     const reach = W.reach || W.range, half = (W.arcDeg || 90) * Math.PI / 360;
     const foe = (u.faction !== 'player');
@@ -4204,6 +4291,8 @@ function drawMeleeFx(list) {
       const edge = foe ? '255,140,120' : '255,246,215';
       const body = foe ? '255,90,80' : '255,228,170';
       const blade = (off, rf) => ({ a: u.facing + off, r: reach * rf });
+      // AI 的前搖已由 drawTelegraph 畫成「擴散填滿的預告」＝不再重複畫刀身預備動作
+      if (inWindup && foe) continue;
       if (thrust) {
         // 突刺：一條沿正前方推出去的刀（前搖時縮著、判定窗內刺滿）
         const b = blade(0, inWindup ? CONFIG.melee.thrustMinReachF * 0.8 : s.reachF);
