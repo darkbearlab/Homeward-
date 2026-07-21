@@ -161,9 +161,19 @@
 - [x] **格擋必須有盾**（補掉「雙手斧與劍盾防禦力完全一樣」的漏洞）；
       **無盾＝武器招架**（使用者定案）：點按右鍵、窗僅 `wpWindow`（比盾窄）、成功回報與盾招架同等，
       **但空招會自己硬直 `wpFailStagger`**——防禦從「按著就好」變成一次讀招。遠程武器不能招架。
-- [x] 敵種中世紀化＝**原地換皮、key 不動**（`grunt`→徒步兵、`dog`→戰狼、`heavy_lmg`→軍士(雙手斧)、
-      `heavy_shot`→披甲士(鎚)），所有手刻地圖與 editor 常數零改動；另新增 `levy` 農兵 / `spearman` 槍兵 /
-      `archer` 弓手 / `arbalest` 弩手。
+- [x] **敵種中世紀化＝正規 key + 對照表（使用者定案）**。
+      正規 key（**新地圖只能用這組**，`ENEMY_TYPE_IDS`／編輯器工具列也只提供這組）：
+      `levy 農兵 / footman 徒步兵 / footman_flank 包抄 / spearman 槍兵 / wolf 戰狼 /
+       archer 弓手 / arbalest 弩手 / manatarms 披甲士 / serjeant 軍士 / civilian 平民 / dummy*`
+      舊 key 靠 **`LEGACY_ENEMY_ALIAS`** 對照（`grunt→footman`、`dog→wolf`、`heavy_lmg→serjeant`、
+      `heavy_shot→manatarms`、`civ→civilian`），`resolveEnemyType()` 轉換，且**單位身上一律存正規 key**
+      （Hooks／統計／測試看到的都是新名字）。首次用到舊 key 會 console.warn 一次。
+      **phase out 機制**：`legacyEnemyUsage()` 盤點進度、地圖標 `medieval: true` 即由 `_check.js` 強制
+      只能用正規 key。目前 2/12 已中世紀化（arena、range），其餘 9 張舊圖待 Phase 4 手刻時汰換。
+      等全部改完，把 `LEGACY_ENEMY_ALIAS` 整張刪掉即可。
+- [x] **`EQUIPMENT` 中世紀化**（旅人斗篷/護手/箭袋/磨刀石/輕靴/聖物護符/鐵環襯裡）——
+      舊的 scope/quickmag/extmag/stabil 是槍械配件，槍已刪；這組沒有地圖依賴，直接改 key 不必對照表。
+- [x] **四槽位改成 1-4 直切**（使用者回饋：比 X 換手直覺）。試作場的主手輪盤讓位給槽位，改用 Tab／Shift+Tab。
 - **驗收**：`node _check.js` 209/209。
 
 **待辦（B 批）**

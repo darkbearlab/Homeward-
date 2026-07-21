@@ -454,15 +454,17 @@ const LOOT_ABILITY_IDS = ['medkit', 'firstaid', 'heal', 'surge']; // 搜刮可�
 
 // 裝備（持續被動，每單位 1 槽；效果於 makePlayer 套用）。fx 欄位皆為佔位倍率/加值。
 //   maxHpAdd / senseMul / reloadMul / magMul / dmgResist(0~1減傷) / spreadMul(發散×) / turnMul / moveMul
+// 中世紀化（Phase 2）：舊的 scope/quickmag/extmag/stabil 是槍械配件，槍已刪＝一併換掉。
+// 這組沒有地圖依賴（只出現在 roster/戰利品池），所以直接改 key，不需要對照表。
 const EQUIPMENT = {
-  armor:    { name: 'Armor',     rarity: 'uncommon', fx: { dmgResist: 0.15 } },
-  scope:    { name: 'Scope',     rarity: 'uncommon', fx: { senseMul: 1.4 } },
-  quickmag: { name: 'QuickMag',  rarity: 'uncommon', fx: { reloadMul: 0.7 } },
-  extmag:   { name: 'ExtMag',    rarity: 'uncommon', fx: { magMul: 1.5 } },
-  stabil:   { name: 'Stabilizer',rarity: 'rare',     fx: { spreadMul: 0.7 } },
-  light:    { name: 'LightFrame',rarity: 'common',   fx: { turnMul: 1.2, moveMul: 1.1 } },
-  plate:    { name: 'HeavyPlate',rarity: 'rare',     fx: { dmgResist: 0.3, moveMul: 0.9 } },
-};   // ※ 盾已移出 EQUIPMENT → 見 OFFHANDS（佔副手、決定能不能格擋）
+  cloak:     { name: '旅人斗篷', rarity: 'uncommon', fx: { senseMul: 1.4 } },                 // 感知更遠（斥候向）
+  gauntlets: { name: '護手',     rarity: 'uncommon', fx: { reloadMul: 0.7 } },                // 搭箭/絞弦更快
+  quiver:    { name: '箭袋',     rarity: 'uncommon', fx: { magMul: 2 } },                     // 弓弩多備一發（magazine 1 → 2）
+  whetstone: { name: '磨刀石',   rarity: 'rare',     fx: { spreadMul: 0.7 } },                // 投射更穩
+  boots:     { name: '輕靴',     rarity: 'common',   fx: { turnMul: 1.2, moveMul: 1.1 } },    // 轉向/移動更靈活
+  charm:     { name: '聖物護符', rarity: 'rare',     fx: { maxHpAdd: 25 } },                  // 體力上限
+  ringmail:  { name: '鐵環襯裡', rarity: 'uncommon', fx: { dmgResist: 0.12 } },               // 固定減傷（與 ARMORS 的機率擋格不同軸）
+};   // ※ 盾已移出 EQUIPMENT → 見 OFFHANDS（佔副手、決定能不能格擋）；身上的甲 → 見 ARMORS
 
 /* =====================================================================
    ARMORS — 身上的甲（HOMEWARD 新增，獨立於 EQUIPMENT 的槽位）
@@ -725,24 +727,52 @@ function tickPassives(u, dt) {
    ===================================================================== */
 const ENEMY_TYPES = {
   // poise＝體幹上限（未填＝CONFIG.melee 的預設）。雜兵低（兩三下就破）、重裝高（要正經對付）。
-  /* 中世紀化（Phase 2）＝**原地換皮，key 不動**。
-     所有手刻地圖的 enemySpawns.type、editor.html 的常數都在用這些 key，改名等於要改遍所有地圖。
+  /* ── 中世紀正規 key（Phase 2；**新地圖只能用這一組**）──────────────────
+     舊的原版 key（grunt / dog / heavy_lmg / heavy_shot / civ）改由下面的 LEGACY_ENEMY_ALIAS 對照過來，
+     只為了讓既有手刻地圖繼續能跑；`ENEMY_TYPE_IDS` 不含它們＝編輯器/新內容選不到，會自然 phase out。
      elite/boss 標記＝Hooks 的 kill 事件歸類（boss 型待 Phase 4）。 */
-  grunt:       { name: '徒步兵',      weaponId: 'sword',   hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
-  grunt_flank: { name: '徒步兵(包抄)', weaponId: 'sword',  hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'flanker', hue: 26,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 繞側後（佔 flank/vantage 點）
-  dog:         { name: '戰狼',        weaponId: 'fangs',   hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
-  heavy_lmg:   { name: '軍士',        weaponId: 'axe',     hp: CONFIG.enemy.hp, moveSpeed: 85,                     personality: 'rusher',  hue: 320, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋雙手斧：廣掃 cleave、hyperArmor 不怕打斷
-  heavy_shot:  { name: '披甲士',      weaponId: 'mace',    hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋破甲鎚：慢但你砍不動、他一下就把你打崩
-  civ:         { name: '平民',        weaponId: 'knife',   hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },              // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰
-  // ---- 新增敵種（新地圖可用；舊地圖不受影響）----
-  levy:        { name: '農兵',        weaponId: 'club',    hp: 45,              moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 40,  radius: CONFIG.unitRadius, patrols: true, poise: 25 },   // 雜兵：慢而弱，體幹兩下就破
-  spearman:    { name: '槍兵',        weaponId: 'spear',   hp: CONFIG.enemy.hp, moveSpeed: 95,                     personality: 'holder',  hue: 190, radius: CONFIG.unitRadius, patrols: true, poise: 55 },   // 長 reach：逼你繞側，正面很難進
-  archer:      { name: '弓手',        weaponId: 'longbow', hp: 60,              moveSpeed: 95,                     personality: 'holder',  hue: 100, radius: CONFIG.unitRadius, patrols: true, poise: 35 },   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
-  arbalest:    { name: '弩手',        weaponId: 'crossbow', hp: 70,             moveSpeed: 70,                     personality: 'holder',  hue: 260, radius: CONFIG.unitRadius, poise: 50 },                   // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
-  dummy:       { name: '訓練假人',    weaponId: 'knife',   hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 60,  radius: 13, dummy: true, poise: 70 },                     // 只挨打不還手（enemyTick 早退）
-  dummy_armor: { name: '披甲假人',    weaponId: 'knife',   hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance, poise: 130 },  // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
+  levy:         { name: '農兵',        weaponId: 'club',     hp: 45,              moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 40,  radius: CONFIG.unitRadius, patrols: true, poise: 25 },   // 雜兵：慢而弱，體幹兩下就破
+  footman:      { name: '徒步兵',      weaponId: 'sword',    hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
+  footman_flank:{ name: '徒步兵(包抄)', weaponId: 'sword',   hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'flanker', hue: 26,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 繞側後（佔 flank/vantage 點）
+  spearman:     { name: '槍兵',        weaponId: 'spear',    hp: CONFIG.enemy.hp, moveSpeed: 95,                     personality: 'holder',  hue: 190, radius: CONFIG.unitRadius, patrols: true, poise: 55 },   // 長 reach：逼你繞側，正面很難進
+  wolf:         { name: '戰狼',        weaponId: 'fangs',    hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
+  archer:       { name: '弓手',        weaponId: 'longbow',  hp: 60,              moveSpeed: 95,                     personality: 'holder',  hue: 100, radius: CONFIG.unitRadius, patrols: true, poise: 35 },   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
+  arbalest:     { name: '弩手',        weaponId: 'crossbow', hp: 70,              moveSpeed: 70,                     personality: 'holder',  hue: 260, radius: CONFIG.unitRadius, poise: 50 },                   // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
+  manatarms:    { name: '披甲士',      weaponId: 'mace',     hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋破甲鎚：慢但你砍不動、他一下就把你打崩
+  serjeant:     { name: '軍士',        weaponId: 'axe',      hp: CONFIG.enemy.hp, moveSpeed: 85,                     personality: 'rusher',  hue: 320, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋雙手斧：廣掃 cleave、hyperArmor 不怕打斷
+  civilian:     { name: '平民',        weaponId: 'knife',    hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },               // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰
+  dummy:        { name: '訓練假人',    weaponId: 'knife',    hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 60,  radius: 13, dummy: true, poise: 70 },                     // 只挨打不還手（enemyTick 早退）
+  dummy_armor:  { name: '披甲假人',    weaponId: 'knife',    hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance, poise: 130 },  // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
 };
-const ENEMY_TYPE_IDS = Object.keys(ENEMY_TYPES);
+const ENEMY_TYPE_IDS = Object.keys(ENEMY_TYPES);   // 正規 key（編輯器/新內容只能從這裡選）
+/* ── 舊 key → 中世紀 key 的對照（phase out 用）─────────────────────────
+   原版遺留地圖的 enemySpawns.type 仍在用左邊那組；resolveEnemyType 會轉成右邊的正規 key，
+   **並且單位身上存的 typeId 一律是正規 key**（Hooks/統計/測試看到的都是新名字）。
+   新地圖不得使用左邊那組——`_check.js` 會對標了 `medieval:true` 的地圖驗證。
+   等所有舊地圖都改寫完（Phase 4 手刻中世紀地圖），這張表整個刪掉即可。 */
+const LEGACY_ENEMY_ALIAS = {
+  grunt: 'footman', grunt_flank: 'footman_flank', dog: 'wolf',
+  heavy_lmg: 'serjeant', heavy_shot: 'manatarms', civ: 'civilian',
+};
+const _legacyWarned = new Set();
+function resolveEnemyType(id) {
+  if (ENEMY_TYPES[id]) return id;
+  const to = LEGACY_ENEMY_ALIAS[id];
+  if (to) {
+    if (!_legacyWarned.has(id)) { _legacyWarned.add(id); try { console.warn(`[HOMEWARD] 舊敵種 key「${id}」→「${to}」。新地圖請改用中世紀 key（見 ENEMY_TYPE_IDS）。`); } catch (e) {} }
+    return to;
+  }
+  return 'footman';
+}
+// 盤點：哪些地圖還在用舊 key（phase out 進度）。回傳 { 地圖: [舊key…] }
+function legacyEnemyUsage() {
+  const out = {};
+  for (const [mk, m] of Object.entries(MAPS)) {
+    const olds = [...new Set((m.enemySpawns || []).map(s => s.type).filter(t => t && !ENEMY_TYPES[t]))];
+    if (olds.length) out[mk] = olds;
+  }
+  return out;
+}
 // 陣營登錄（資料驅動，N 個易擴充）：要加新勢力＝在此加一條 + spawn 用其 id 即可，戰鬥/AI/繪製不必改碼。
 // hostile 預設「不同陣營即互敵、同陣營為友軍」→ 搜打撤的「多個抱團小組各自為一勢力(FFA + 組內結盟)」自然成立。
 const FACTIONS = {
@@ -1320,7 +1350,7 @@ const MAPS = {
   // ===== HOMEWARD 近接試作場（Phase 1 手感開發；?arena 或預設開機進入）=====
   // 設計刻意單純：開闊、少牆（不干擾扇形判定的觀察）、左排訓練假人、右側近接敵、中央幾根柱子測「牆擋近接」。
   arena: {
-    label: '近戰試作場', width: 1100, height: 760, eventMap: true,   // eventMap＝不召追兵、不加難度遞增兵
+    label: '近戰試作場', width: 1100, height: 760, eventMap: true, medieval: true,   // eventMap＝不召追兵、不加難度遞增兵
     // 踩雷：rectWalls(x1,y1,x2,y2) 吃的是**對角座標**，不是 (x,y,w,h)。
     // 中央兩根柱子之間留 140px 的通道，四周也全部通行＝敵人絕不會被封在牆後。
     walls: [
@@ -1349,7 +1379,7 @@ const MAPS = {
   // 「射線被自己人擋住＝收火」，弓手會永遠不放箭（實測抓到的）。
   // 中段兩道低矮牆（中央留 60px 通道）＝測「越牆機率擋彈」：下側弓手有一名隔牆射＝掩體示範。
   range: {
-    label: '射擊試作場', width: 1400, height: 700, eventMap: true,
+    label: '射擊試作場', width: 1400, height: 700, eventMap: true, medieval: true,
     walls: [...rectWalls(40, 40, 1360, 660)],
     doors: [],
     lowWalls: [ { x1: 760, y1: 260, x2: 760, y2: 380 }, { x1: 760, y1: 440, x2: 760, y2: 560 } ],
@@ -1787,8 +1817,9 @@ function makePlayer(i, cfg, pos) {
     lastSeenPos: null, lastSeenT: -Infinity, _seenNow: false,   // 敵人共享情報：此我方最後被任一敵人看到的位置/時間
   };
 }
-function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.PI, typeId = 'grunt', faction = 'enemy') {
-  const TYPE = ENEMY_TYPES[typeId] || ENEMY_TYPES.grunt;
+function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.PI, typeId = 'footman', faction = 'enemy') {
+  typeId = resolveEnemyType(typeId);                 // 舊 key 自動轉成中世紀正規 key（單位身上一律存正規 key）
+  const TYPE = ENEMY_TYPES[typeId];
   const W = WEAPONS[TYPE.weaponId];
   personalityName = personalityName || TYPE.personality;   // spawn 未指定個性 → 用類型預設
   return {
@@ -1975,7 +2006,7 @@ const arenaWeaponId = () => ARENA_WEAPON_IDS[((arenaWIdx % ARENA_WEAPON_IDS.leng
    U 鍵循環切換；?arena=melee / ?arena=ranged 直接開機進指定場。 */
 const ARENA_MODES = {
   melee: {
-    label: '近戰試作場', map: 'arena', weapon: 'sword',
+    label: '近戰試作場', map: 'arena', weapon: 'sword', medieval: true,
     desc: '揮斬 / 盾格 / 招架 / 體幹 / 擊退',
     detail: '左列訓練假人（緊排測 cleave、紫色的披甲測穿甲）· 右側三名劍兵會反擊',
     // 左列訓練假人（緊排測 cleave）+ 披甲假人（測穿甲）+ 右側三名劍兵（會反擊）
@@ -1983,11 +2014,11 @@ const ARENA_MODES = {
       { t: 'dummy', x: 470, y: 250, node: 6 }, { t: 'dummy', x: 470, y: 292, node: 6 },
       { t: 'dummy', x: 470, y: 334, node: 6 }, { t: 'dummy', x: 470, y: 376, node: 6 },
       { t: 'dummy_armor', x: 470, y: 418, node: 6 }, { t: 'dummy_armor', x: 470, y: 460, node: 6 },
-      { t: 'grunt', x: 780, y: 250, node: 3 }, { t: 'grunt', x: 860, y: 380, node: 5 }, { t: 'grunt', x: 780, y: 520, node: 4 },
+      { t: 'footman', x: 780, y: 250, node: 3 }, { t: 'footman', x: 860, y: 380, node: 5 }, { t: 'footman', x: 780, y: 520, node: 4 },
     ],
   },
   ranged: {
-    label: '射擊試作場', map: 'range', weapon: 'longbow',
+    label: '射擊試作場', map: 'range', weapon: 'longbow', medieval: true,
     desc: '弓弩彈道 / 射程 / 穿甲 / 掩體 / 盾擋箭',
     detail: '上半標靶區：假人在 300–900 距離檔 · 下半對射區：弓手×2 弩手×1 會還擊',
     // 上半標靶區：假人列 300/500/700/900 距離檔（900 那格要隔著上側低矮牆射＝測機率擋彈）
@@ -4140,7 +4171,8 @@ window.addEventListener('keydown', e => {
   }
   if (fromSandbox && k === 'backspace') { fromSandbox = false; forcedMap = null; sandboxLast = { aborted: true }; if (playtestMode) { playtestMode = false; try { location.href = 'editor.html'; } catch (e) {} } else enterSandbox(); e.preventDefault(); return; }
   if (fromEditor && k === 'backspace') { fromEditor = false; forcedMap = null; scene = 'EDITOR'; releasePointer(); editMsg = '已中止試玩，回到編輯器'; e.preventDefault(); return; }
-  // HOMEWARD：數字鍵附身切換已移除（只操作騎士本人）
+  // 1-4＝四槽位直切（使用者定：比 X 換手直覺）。1/2＝手部 set、3/4＝自由位（道具/技能）
+  if (k >= '1' && k <= '4') { const kn = knight(); if (kn && kn.state === 'CONTROLLED') { selectSlot(kn, parseInt(k, 10) - 1); e.preventDefault(); } }
   if (k === 'h') { if (e.shiftKey) extractAll(); else toggleExtract(); }                  // H 騎士自走撤離 / Shift+H 命令扈從先行撤離
   if (k === ' ') { seizeIfEscorting(); if (controlledId != null) useAbility(players[controlledId]); }  // 空白鍵=技能（右鍵亦可）；護送中→奪回
   if (k === 'r') { seizeIfEscorting(); if (controlledId != null) startReload(players[controlledId]); } // 換彈；護送中→奪回
@@ -4151,11 +4183,11 @@ window.addEventListener('keydown', e => {
   if (k === 'e' || k === 'q') { const s = (k === 'e') ? 'engage' : 'defend'; for (const p of players) if (p.id !== KNIGHT_ID) setStance(p, s); }
   // --- 近戰試作場專用熱鍵（只在 arenaMode 生效，不影響戰役）---
   if (arenaMode) {
-    if (k >= '1' && k <= '9') { const i = parseInt(k, 10) - 1; if (i < ARENA_WEAPON_IDS.length) arenaSetWeapon(i); }
+    // 試作場的主手輪盤讓位給 1-4 槽位 → 改用 Tab / Shift+Tab 循環（見下），數字鍵不再選武器
     if (k === 'o') { arenaSetOff(arenaOffIdx + 1); e.preventDefault(); return; }   // O 換副手（空手/小圓盾/圓盾/鳶盾/雙持短劍）
     if (k === 'v') { if (knightRelics.has('secondwind')) knightRelics.delete('secondwind'); else knightRelics.add('secondwind'); applyRelicHooks(); }   // V 切換示範聖物「不屈」
     if (k === 'u') { enterArena(arenaNextMode()); e.preventDefault(); return; }   // U 切換試作場（近戰 ↔ 射擊；之後的 gimmick 場照樣循環）
-    if (k === 'tab') { arenaSetWeapon(arenaWIdx + (e.shiftKey ? -1 : 1)); e.preventDefault(); }   // Tab 循環近接武器
+    if (k === 'tab') { arenaSetWeapon(arenaWIdx + (e.shiftKey ? -1 : 1)); e.preventDefault(); }   // Tab／Shift+Tab 循環主手武器
     if (k === 't') arenaResetFight();                                    // T 重來
     if (k === 'y') for (const e of enemies) if (!e.dead && !e.dummy) { e.state = 'ENGAGED'; e.detect = 1; }   // Y 叫敵人立刻開戰（不用走過去引怪）
     if (k === 'c') { arenaSetArmor(arenaArmorIdx + 1); e.preventDefault(); return; }   // C 換身上的甲（蓋掉道具鍵；試作場用不到道具）
@@ -4436,7 +4468,14 @@ function drawArenaHUD() {
   const line1 = `Esc 換場地選單 · U 直接切到[${(ARENA_MODES[arenaNextMode()] || {}).label}] · M 主選單 · T 重來 · Y 敵人開戰`;
   const st2 = activeSet(k), off2 = st2 ? st2.off : null;
   const offName = isShield(off2) ? OFFHANDS[off2].name : (off2 ? WEAPONS[off2].name : '空手');
-  const line2 = `1-${ARENA_WEAPON_IDS.length}/Tab 主手（${ARENA_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · O 副手[${offName}] · C 甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · X 換手 set · V 不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板`;
+  const slotLine = (k.slots || []).map((s, i) => {
+    const on = (i === k.slotIdx && s.kind === 'hands');
+    const nm = s.kind === 'hands'
+      ? (s.main ? WEAPONS[s.main.weaponId].name + (s.off ? '+' + (isShield(s.off) ? OFFHANDS[s.off].name : WEAPONS[s.off].name) : '') : '—')
+      : (s.id ? ((s.type === 'item' ? ITEMS[s.id].name + '×' + (s.count || 0) : ABILITIES[s.id].name)) : '—');
+    return `${on ? '▶' : ''}${i + 1}:${nm}`;
+  }).join('  ');
+  const line2 = `槽位 ${slotLine}　·　Tab 換主手 · O 副手[${offName}] · C 甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · V 不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板`;
   ctx.textAlign = 'center'; ctx.font = '11px Consolas';
   ctx.fillStyle = 'rgba(255,210,122,0.9)'; ctx.fillText(line1, cv.width / 2, cv.height - 126);
   ctx.fillStyle = 'rgba(160,180,200,0.85)'; ctx.fillText(line2, cv.width / 2, cv.height - 112);
