@@ -419,6 +419,8 @@ CONFIG.melee = {
   parryHealFrac: 0,        // （預留）招架回復比例
   windupMoveMul: 0.7,      // 前搖中的移動倍率
   castMoveMul: 0.45,       // **施法**前搖中的移動倍率（比揮擊更慢＝唸咒要站得住）
+  reactBlockDur: 1.10,     // 盾兵反射式舉盾的時長（挨打後舉起來多久）
+  reactBlockCd: 0.50,       // 放下後的冷卻＝一定有空檔可以打，不會變成永久龜盾（舉:冷卻 ≈ 69% 在架上）
   activeMoveMul: 0.35,     // 判定窗中的移動倍率（揮擊瞬間幾乎定身）
   recoverMoveMul: 0.6,     // 後搖中的移動倍率
   swingTurnMul: 0.4,       // 前搖之後（判定+後搖）的轉向倍率＝揮出去就不能大幅修正方向（太低＝完全跟不上走動的敵人）
@@ -904,6 +906,7 @@ const UNIT_CLASSES = {
   levy:        { name: '農兵',     hp: 45,            poise: 25,  moveSpeed: CONFIG.enemy.moveSpeed, radius: CONFIG.unitRadius },
   footman:     { name: '徒步兵',   hp: CONFIG.enemy.hp, poise: 45, moveSpeed: 105, radius: CONFIG.unitRadius },
   spearman:    { name: '槍兵',     hp: CONFIG.enemy.hp, poise: 55, moveSpeed: 95,  radius: CONFIG.unitRadius },
+  shieldman:   { name: '盾兵',     hp: CONFIG.enemy.hp, poise: 60, moveSpeed: 90,  radius: CONFIG.unitRadius },
   wolf:        { name: '戰狼',     hp: 45,            poise: 25,  moveSpeed: 165, radius: 9  },
   archer:      { name: '弓手',     hp: 60,            poise: 35,  moveSpeed: 95,  radius: CONFIG.unitRadius },
   arbalest:    { name: '弩手',     hp: 70,            poise: 50,  moveSpeed: 70,  radius: CONFIG.unitRadius },
@@ -944,6 +947,7 @@ const ENEMY_TYPES = {
   footman:      enemyType('footman',     { weaponId: 'sword',    personality: 'rusher',  hue: 12,  patrols: true }),   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
   footman_flank:enemyType('footman',     { name: '徒步兵(包抄)', weaponId: 'sword',      personality: 'flanker', hue: 26, patrols: true }),   // 同一副身體，只換性格：繞側後（佔 flank/vantage 點）
   spearman:     enemyType('spearman',    { weaponId: 'spear',    personality: 'holder',  hue: 190, patrols: true }),   // 長 reach：逼你繞側，正面很難進
+  shieldman:    enemyType('shieldman',   { weaponId: 'sword',    personality: 'holder',  hue: 210, patrols: true, offId: 'shield' }),   // 持圓盾：挨一下就舉盾（反射式，不預判）＝正面硬砍最沒效率的敵人
   wolf:         enemyType('wolf',        { weaponId: 'fangs',    personality: 'rusher',  hue: 45,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false }),  // 快、脆、貼臉連咬、視野廣；動物不會開門
   archer:       enemyType('archer',      { weaponId: 'longbow',  personality: 'holder',  hue: 100, patrols: true }),   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
   arbalest:     enemyType('arbalest',    { weaponId: 'crossbow', personality: 'holder',  hue: 260 }),                  // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
@@ -2069,6 +2073,8 @@ function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.P
     basePersonality: CONFIG.ai[personalityName],   // 士氣恢復時換回來的那一組
     burstLeft: (W.burst ? W.burst.size : 0), burstCd: 0,   // 重機槍點放節奏
     currentNode: nodeId, targetNode: nodeId, reservedNode: null,
+    offId: TYPE.offId || null,   // 副手（盾兵）：敵人沒有槽位系統，盾直接掛在單位上
+    reactBlockT: 0, reactBlockCd: 0,   // 反射式格擋：舉著的剩餘時間 / 放下後的冷卻
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接（敵人拿近接武器時同樣走揮斬管線）
     aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（＝預告長方形的填滿進度）
     poiseMax: TYPE.poise || CONFIG.melee.poiseDefault, poise: TYPE.poise || CONFIG.melee.poiseDefault, poiseHitT: -99,
@@ -2252,7 +2258,7 @@ const ARENA_MODES = {
       { t: 'dummy', x: 470, y: 250, node: 6 }, { t: 'dummy', x: 470, y: 292, node: 6 },
       { t: 'dummy', x: 470, y: 334, node: 6 }, { t: 'dummy', x: 470, y: 376, node: 6 },
       { t: 'dummy_armor', x: 470, y: 418, node: 6 }, { t: 'dummy_armor', x: 470, y: 460, node: 6 },
-      { t: 'footman', x: 780, y: 250, node: 3 }, { t: 'footman', x: 860, y: 380, node: 5 }, { t: 'footman', x: 780, y: 520, node: 4 },
+      { t: 'footman', x: 780, y: 250, node: 3 }, { t: 'shieldman', x: 860, y: 380, node: 5 }, { t: 'footman', x: 780, y: 520, node: 4 },
     ],
   },
   ranged: {
@@ -3030,13 +3036,39 @@ const SLOT_COUNT = 4;
 const setOf = (u, i) => (u.slots && u.slots[i] && u.slots[i].kind === 'hands') ? u.slots[i] : null;
 const activeSet = (u) => setOf(u, u.slotIdx || 0);
 // 副手拿的是盾嗎？（＝能不能按住右鍵格擋）
-function shieldOf(u) { const s = activeSet(u); return s && isShield(s.off) ? OFFHANDS[s.off] : null; }
+// 副手的盾：玩家走四槽位的 active set，敵人沒有槽位系統 → 直接掛在單位上（ENEMY_TYPES.offId）
+function shieldOf(u) {
+  const s = activeSet(u);
+  const off = s ? s.off : (u && u.offId);
+  return isShield(off) ? OFFHANDS[off] : null;
+}
 const canBlock = (u) => !!shieldOf(u) && !!(u.weapon && u.weapon.melee);
 // 盾的參數（沒盾則回 CONFIG.melee 的預設，供非玩家單位沿用）
 const blockArcOf = (u) => { const sh = shieldOf(u); return (sh ? sh.blockArcDeg : CONFIG.melee.blockArcDeg); };
 const blockResistOf = (u) => { const sh = shieldOf(u); return (sh ? sh.blockResist : CONFIG.melee.blockResist); };
 const parryWindowOf = (u) => { const sh = shieldOf(u); return CONFIG.melee.parryWindow * (sh ? sh.parryWinMul : 1); };
 const blockStamMulOf = (u) => { const sh = shieldOf(u); return sh ? sh.stamMul : 1; };
+/* ── 盾兵的反射式格擋（使用者定案：不做預判、不做 AI）─────────────────────
+   挨打 → 體幹沒破 → 舉盾 reactBlockDur 秒 → 放下，並進 reactBlockCd 冷卻。
+   **刻意不給招架窗**：招架是讀招，是玩家的技巧；讓一個純反射的 AI 每次挨打就白送一次
+   招架（反推體幹 + 硬直攻擊者），近戰打盾兵會變成純粹的懲罰而不是攻防。
+   所以 blockT 直接設在窗外＝擋得住，但招架不了。 */
+function raiseReactiveBlock(u) {
+  const M = CONFIG.melee;
+  if (!u || u.dead || u.id === controlledId) return false;        // 玩家操作的騎士自己舉盾，不代勞
+  if (!shieldOf(u) || !(u.weapon && u.weapon.melee)) return false;
+  if (u.blocking || (u.reactBlockCd || 0) > 0 || u.staggerT > 0) return false;
+  u.blocking = true;
+  u.blockT = simTime - parryWindowOf(u) - 0.001;                  // 招架窗已過（見上面的理由）
+  u.reactBlockT = M.reactBlockDur;
+  return true;
+}
+function tickReactiveBlock(u, dt) {
+  if (u.reactBlockCd > 0) u.reactBlockCd = Math.max(0, u.reactBlockCd - dt);
+  if (!(u.reactBlockT > 0)) return;
+  u.reactBlockT -= dt;
+  if (u.reactBlockT <= 0) { u.reactBlockT = 0; u.blocking = false; u.blockT = null; u.reactBlockCd = CONFIG.melee.reactBlockCd; }
+}
 
 // 把某個 set 的主手狀態鏡像到 u 上（既有戰鬥碼只認得 u.weapon*）
 function equipActiveSet(u) {
@@ -3715,6 +3747,9 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
     const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng, opts && opts.attacker);
     // 打斷：前搖中被命中＝這一刀直接被打斷（重武器 hyperArmor 免疫）＝搶到先手的人贏整次交鋒
     if (!broke && inWindup && !hyper) { u.swing = null; u.flinchFxT = 0.18; Hooks.fire('interrupt', { u, by: (opts && opts.attacker) || null }); }
+    // **盾兵（使用者定案）：不預判、純反射**——挨了一下而體幹沒破，就舉盾一小段時間再放下。
+    // 不需要 AI：想擋住他就別在他舉盾的窗內硬砍，繞側或等他放下。
+    if (!broke) raiseReactiveBlock(u);
     // **施法前搖同理**：習得的術被打斷＝這一發沒了，但不進 CD、不扣耐力（成本在 tickCast 收尾才付）。
     // 卷軸沒有前搖，所以打不斷——這就是卷軸作為「救命按鈕」的價值。
     if (u.cast) {
@@ -4941,8 +4976,8 @@ function update(dt) {
 
   const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
   const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
-  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
-  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
+  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickReactiveBlock(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
+  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickReactiveBlock(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
   tickFactionMorale(dt); pruneMomentum();   // 陣營士氣的恢復 + 氣勢衰退
   pruneAttackTokens();   // 攻擊權：過期的釋放出來給別隻
   if (cmdFlashT > 0) cmdFlashT -= dt;

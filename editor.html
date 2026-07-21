@@ -156,12 +156,13 @@ const EDITOR_HELP = [
 // 中世紀正規 key（與 index.html 的 ENEMY_TYPES 同步；改一邊要改另一邊）。
 // **編輯器只提供這組**——舊的 grunt/dog/heavy_* 仍能載入舊地圖（index 的 LEGACY_ENEMY_ALIAS 會轉），
 // 但放置工具選不到，新地圖自然只會用到中世紀 key。
-const ENEMY_TYPE_IDS = ['levy', 'footman', 'footman_flank', 'spearman', 'wolf', 'archer', 'arbalest', 'manatarms', 'serjeant', 'civilian'];
+const ENEMY_TYPE_IDS = ['levy', 'footman', 'footman_flank', 'spearman', 'shieldman', 'wolf', 'archer', 'arbalest', 'manatarms', 'serjeant', 'civilian'];
 const ENEMY_META = {
   levy:          { name: '農兵',        hue: 40,  cone: 45, range: 54 },
   footman:       { name: '徒步兵',      hue: 12,  cone: 45, range: 66 },
   footman_flank: { name: '徒步兵(包抄)', hue: 26,  cone: 45, range: 66 },
   spearman:      { name: '槍兵',        hue: 190, cone: 45, range: 104 },
+  shieldman:     { name: '盾兵',        hue: 210, cone: 45, range: 66 },
   wolf:          { name: '戰狼',        hue: 45,  cone: 80, range: 34 },
   archer:        { name: '弓手',        hue: 100, cone: 45, range: 1200 },
   arbalest:      { name: '弩手',        hue: 260, cone: 45, range: 1300 },
