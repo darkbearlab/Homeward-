@@ -215,20 +215,22 @@ const WEAPONS = {
   // silpistol＝消音手槍（潛行）：silent＝不發槍聲(不驚動)；高單發(繞背×2 可一槍斃 70hp)、短程、彈藥＝有限亞音速彈
   silpistol:{ name:'Silenced Pistol',rarity:'uncommon', weight: 0.6, damage: 40, fireRate: 2, range: 900, projSpeed: 700, spreadBase: 1.2, spreadPerShot: 1.0, spreadMax: 6, spreadRecover: 9, magazine: 6, reloadTime: 1.4, turnSpeed: 560, pierce: 0, silent: true },
   // ===== HOMEWARD 近接武器（melee:true → 走揮斬管線 meleeSwing，不生子彈）=====
-  // 近接專屬欄位：arcDeg 扇形總角度 / reach 觸及(px，另加目標半徑) / windup 前搖 / activeT 判定窗 / recover 後搖
+  // 近接專屬欄位：arcDeg 揮動總角度 / reach 觸及(px，另加目標半徑) / windup 前搖 / activeT 判定窗 / recover 後搖
   //   cleave 單次最多命中數 / knock 擊退力(px/s) / stagger 命中造成的硬直秒 / backstabMul 繞背額外倍率
+  //   swingStyle：'sweep'＝刀刃在判定窗內**由一側掃到另一側**（左右交替），只有刀刃掃過的瞬間才判定；
+  //               'thrust'＝突刺，刀尖沿正前方由近推到遠（arcDeg 只是刺擊的容錯寬度）。
   // range 仍填 reach＝敵 AI 的接近距離判斷(CONFIG.enemy.meleeApproach)與扈從索敵沿用同一欄位。
   // 節奏＝windup+activeT+recover（fireRate 不再決定攻速，但保留給 fireCooldown 相容）。
-  sword: { name: '長劍',  rarity: 'common',   weight: 1.5, damage: 34, fireRate: 6, range: 66, turnSpeed: 520, pierce: 0.35, melee: true,
-           arcDeg: 100, reach: 66, windup: 0.10, activeT: 0.07, recover: 0.20, cleave: 3, knock: 150, stagger: 0,    backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  axe:   { name: '戰斧',  rarity: 'common',   weight: 2.2, damage: 46, fireRate: 4, range: 62, turnSpeed: 380, pierce: 0.30, melee: true,
-           arcDeg: 150, reach: 62, windup: 0.20, activeT: 0.09, recover: 0.30, cleave: 5, knock: 190, stagger: 0,    backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  mace:  { name: '戰鎚',  rarity: 'uncommon', weight: 2.4, damage: 40, fireRate: 3.5, range: 58, turnSpeed: 360, pierce: 0.95, melee: true,
-           arcDeg: 70,  reach: 58, windup: 0.24, activeT: 0.08, recover: 0.32, cleave: 1, knock: 330, stagger: 0.55, backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  spear: { name: '長槍',  rarity: 'common',   weight: 1.8, damage: 32, fireRate: 5, range: 104, turnSpeed: 440, pierce: 0.55, melee: true,
-           arcDeg: 40,  reach: 104, windup: 0.14, activeT: 0.06, recover: 0.24, cleave: 2, knock: 120, stagger: 0,   backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
-  dagger:{ name: '短劍',  rarity: 'common',   weight: 0.4, damage: 20, fireRate: 9, range: 44, turnSpeed: 640, pierce: 0.20, melee: true,
-           arcDeg: 60,  reach: 44, windup: 0.05, activeT: 0.05, recover: 0.10, cleave: 1, knock: 60,  stagger: 0,    backstabMul: 2.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  sword: { name: '長劍',  rarity: 'common',   weight: 1.5, damage: 34, fireRate: 6, range: 66, turnSpeed: 520, pierce: 0.35, melee: true, swingStyle: 'sweep',
+           arcDeg: 100, reach: 66, windup: 0.10, activeT: 0.09, recover: 0.20, cleave: 3, knock: 150, stagger: 0,    backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  axe:   { name: '戰斧',  rarity: 'common',   weight: 2.2, damage: 46, fireRate: 4, range: 62, turnSpeed: 380, pierce: 0.30, melee: true, swingStyle: 'sweep',
+           arcDeg: 160, reach: 62, windup: 0.20, activeT: 0.14, recover: 0.30, cleave: 5, knock: 190, stagger: 0,    backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  mace:  { name: '戰鎚',  rarity: 'uncommon', weight: 2.4, damage: 40, fireRate: 3.5, range: 58, turnSpeed: 360, pierce: 0.95, melee: true, swingStyle: 'sweep',
+           arcDeg: 80,  reach: 58, windup: 0.24, activeT: 0.09, recover: 0.32, cleave: 1, knock: 330, stagger: 0.55, backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  spear: { name: '長槍',  rarity: 'common',   weight: 1.8, damage: 32, fireRate: 5, range: 104, turnSpeed: 440, pierce: 0.55, melee: true, swingStyle: 'thrust',
+           arcDeg: 16,  reach: 104, windup: 0.14, activeT: 0.08, recover: 0.24, cleave: 2, knock: 120, stagger: 0,   backstabMul: 1.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  dagger:{ name: '短劍',  rarity: 'common',   weight: 0.4, damage: 20, fireRate: 9, range: 44, turnSpeed: 640, pierce: 0.20, melee: true, swingStyle: 'sweep',
+           arcDeg: 60,  reach: 44, windup: 0.05, activeT: 0.06, recover: 0.10, cleave: 1, knock: 60,  stagger: 0,    backstabMul: 2.0, magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
   // 局外解鎖武器（情報點；解鎖後才進招募/loot 池，仍 RNG 取得）
   ar:      { name: 'Assault Rifle', rarity: 'uncommon', weight: 1.6, damage: 18, fireRate: 9, range: 1500, projSpeed: 820, spreadBase: 1.8, spreadPerShot: 1.8, spreadMax: 12, spreadRecover: 9, magazine: 30, reloadTime: 1.7, turnSpeed: 460, pierce: 0.6 },   // 穩定中距、過半穿甲
   revolver:{ name: 'Revolver',      rarity: 'uncommon', weight: 0.7, damage: 30, fireRate: 3, range: 1500,  projSpeed: 760, spreadBase: 1.6, spreadPerShot: 1.2, spreadMax: 8,  spreadRecover: 9, magazine: 6,  reloadTime: 1.6, turnSpeed: 540, pierce: 0.7 },   // 副武器級、單發高穿甲
@@ -263,6 +265,8 @@ CONFIG.melee = {
   activeMoveMul: 0.35,     // 判定窗中的移動倍率（揮擊瞬間幾乎定身）
   recoverMoveMul: 0.6,     // 後搖中的移動倍率
   swingTurnMul: 0.25,      // 前搖之後（判定+後搖）的轉向倍率＝揮出去就不能大幅修正方向
+  bladeHalfDeg: 9,         // 刀刃的角度厚度（判定容錯）：掃過的角度帶再往兩側各放寬這麼多
+  thrustMinReachF: 0.35,   // 突刺起手時刀尖伸出的比例（判定窗內由此推到 1.0＝刺出去）
   knockDecay: 9,           // 擊退速度的指數衰減率（越大停得越快）
   hitstopHit: 0.035,       // 近接命中的頓幀（比槍擊有份量）
   hitstopBlocked: 0.05,    // 被格擋時的頓幀（金屬撞擊感）
@@ -1100,10 +1104,12 @@ const MAPS = {
   // 設計刻意單純：開闊、少牆（不干擾扇形判定的觀察）、左排訓練假人、右側近接敵、中央幾根柱子測「牆擋近接」。
   arena: {
     label: '近戰試作場', width: 1100, height: 760, eventMap: true,   // eventMap＝不召追兵、不加難度遞增兵
+    // 踩雷：rectWalls(x1,y1,x2,y2) 吃的是**對角座標**，不是 (x,y,w,h)。
+    // 中央兩根柱子之間留 140px 的通道，四周也全部通行＝敵人絕不會被封在牆後。
     walls: [
-      ...rectWalls(40, 40, 1060, 720),
-      ...rectWalls(520, 250, 60, 60),    // 中央柱：測「牆後打不到」
-      ...rectWalls(520, 450, 60, 60),
+      ...rectWalls(40, 40, 1060, 720),      // 外牆
+      ...rectWalls(540, 250, 600, 310),     // 中央柱（60×60）：測「牆後打不到」
+      ...rectWalls(540, 450, 600, 510),     // 中央柱（60×60）
     ],
     doors: [], lowWalls: [], bushes: [], destructibles: [], areas: [], buttons: [],
     waypoints: [
@@ -2310,36 +2316,66 @@ function startSwing(u, fireRateMult) {
   const W = u.weapon;
   if (u.swing || u.staggerT > 0 || u.swapT > 0) return false;   // 揮擊中/硬直中/換武器中不能再揮
   const rm = 1 / Math.max(0.05, (fireRateMult || 1) * (u.buffFire || 1) * passiveFireMul(u));   // 攻速 buff＝縮短全段
-  u.swing = { t: 0, windup: W.windup * rm, active: W.activeT * rm, recover: W.recover * rm, hits: new Set(), n: 0, ang: u.facing };
+  u.swingDir = -(u.swingDir || -1);   // 左右交替：連續揮擊會是 →、←、→…（不是每次都同一邊）
+  u.swing = {
+    t: 0, windup: W.windup * rm, active: W.activeT * rm, recover: W.recover * rm,
+    hits: new Set(), n: 0,
+    dir: u.swingDir,          // +1＝順時針掃、-1＝逆時針掃（thrust 不用）
+    off: 0, prevOff: 0,       // 刀刃相對 facing 的角度（本幀 / 上一幀）＝判定用的角度帶
+    reachF: 1, prevReachF: 1, // 刀尖伸出比例（thrust 用）
+  };
   u.blocking = false;   // 揮擊即放下盾
   if (u.faction === 'player') u.regenT = 0;
   if (arenaMode && u.id === KNIGHT_ID && u.faction === 'player') { arenaStats.swings++; arenaStats.lastHits = 0; arenaStats.lastDmg = 0; }
   Sfx.play('swing', u.pos);
   return true;
 }
-// 每幀推進揮斬狀態機；ACTIVE 段做扇形判定。回傳 true 表示本幀仍在揮擊中（呼叫端據此鎖移動/轉向）。
+// 判定窗內的進度 0→1（前搖期間為 0＝刀停在起始側，後搖期間為 1＝刀停在收尾側）
+const swingProgress = (s, t) => clamp((t - s.windup) / Math.max(0.0001, s.active), 0, 1);
+// 每幀推進揮斬狀態機。**刀刃會在判定窗內移動**（sweep＝掃過角度、thrust＝刀尖推出去），
+// 判定只吃「刀刃這一幀掃過的那條角度帶」＝不是整個扇形同時生效。
 function tickMelee(u, dt) {
   if (u.staggerT > 0) { u.staggerT -= dt; if (u.staggerT <= 0) { u.staggerT = 0; u.swing = null; } }
   const s = u.swing;
   if (!s) return false;
+  const W = u.weapon;
+  const half = (W.arcDeg || 90) * Math.PI / 360;
+  const thrust = W.swingStyle === 'thrust';
   const prev = s.t; s.t += dt;
+  const p0 = swingProgress(s, prev), p1 = swingProgress(s, s.t);
+  if (thrust) {   // 突刺：角度不動，刀尖由 thrustMinReachF 推到滿
+    const f = CONFIG.melee.thrustMinReachF;
+    s.prevOff = 0; s.off = 0;
+    s.prevReachF = f + (1 - f) * p0; s.reachF = f + (1 - f) * p1;
+  } else {        // 橫掃：刀刃由一側掃到另一側（dir 決定左→右或右→左）
+    s.prevOff = s.dir * (-half + 2 * half * p0);
+    s.off     = s.dir * (-half + 2 * half * p1);
+    s.prevReachF = 1; s.reachF = 1;
+  }
   const aStart = s.windup, aEnd = s.windup + s.active;
   if (s.t > aStart && prev < aEnd) meleeHitTest(u, s);   // 判定窗（跨幀也算，低 FPS 不漏判）
   if (s.t >= aEnd + s.recover) u.swing = null;
   return true;
 }
-// 扇形判定：facing 為中心、arcDeg 總角、reach + 目標半徑內、且視線不被牆擋。同一目標每次揮擊只吃一下。
+// 刀刃掃過的角度帶判定：只有「上一幀→本幀」之間掃過的角度算命中（再各放寬 bladeHalfDeg＝刀刃厚度）。
+// 距離吃 reach × 當下刀尖伸出比例；視線被牆擋則打不到。同一目標每次揮擊只吃一下。
 function meleeHitTest(u, s) {
   const W = u.weapon;
-  const half = (W.arcDeg || 90) * Math.PI / 360;
+  const bladeHalf = CONFIG.melee.bladeHalfDeg * Math.PI / 180;
+  const lo = Math.min(s.prevOff, s.off) - bladeHalf;   // 本幀刀刃掃過的角度帶（相對 facing）
+  const hi = Math.max(s.prevOff, s.off) + bladeHalf;
+  const reach = (W.reach || W.range) * Math.max(s.prevReachF, s.reachF);
   const cleave = W.cleave || 1;
   const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => t !== u && hostile(u.faction, t.faction));
   for (const t of targets) {
     if (s.n >= cleave) break;
     if (s.hits.has(t)) continue;
     const d = dist(u.pos, t.pos);
-    if (d > (W.reach || W.range) + t.radius) continue;
-    if (Math.abs(angDiff(angTo(u.pos, t.pos), u.facing)) > half) continue;
+    if (d > reach + t.radius) continue;
+    // 目標有體積：把半徑換算成角度寬容，否則貼身的大個子會從刀刃縫隙溜掉
+    const slack = Math.asin(clamp(t.radius / Math.max(t.radius, d), 0, 1));
+    const rel = angDiff(angTo(u.pos, t.pos), u.facing);
+    if (rel + slack < lo || rel - slack > hi) continue;
     if (!clearLine(u.pos, t.pos)) continue;               // 牆/門後打不到
     s.hits.add(t); s.n++;
     const fromAng = angTo(t.pos, u.pos);                  // 目標→攻擊者＝來向（damageUnit 用來判繞背/格擋）
@@ -3414,6 +3450,7 @@ window.addEventListener('keydown', e => {
     if (k >= '1' && k <= '9') { const i = parseInt(k, 10) - 1; if (i < MELEE_WEAPON_IDS.length) arenaSetWeapon(i); }
     if (k === 'tab') { arenaSetWeapon(arenaWIdx + (e.shiftKey ? -1 : 1)); e.preventDefault(); }   // Tab 循環近接武器
     if (k === 't') arenaResetFight();                                    // T 重來
+    if (k === 'y') for (const e of enemies) if (!e.dead && !e.dummy) { e.state = 'ENGAGED'; e.detect = 1; }   // Y 叫敵人立刻開戰（不用走過去引怪）
     if (k === 'n') arenaNoFog = !arenaNoFog;                             // N 迷霧開關
     if (k === 'b') { arenaAllies = !arenaAllies; enterArena(); }         // B 有無扈從（重建）
     if (k === 'm') { arenaMode = false; goMenu(); e.preventDefault(); return; }   // M 回主選單（戰役等原有功能）
@@ -3596,7 +3633,8 @@ function drawArenaHUD() {
   const pad = 10;
   // 左上：武器參數
   const rows = W.melee ? [
-    ['傷害', W.damage], ['扇形角', W.arcDeg + '°'], ['觸及', W.reach], ['穿甲', W.pierce],
+    ['揮法', W.swingStyle === 'thrust' ? '突刺' : '橫掃(左右交替)'],
+    ['傷害', W.damage], [W.swingStyle === 'thrust' ? '刺擊寬容' : '揮動角', W.arcDeg + '°'], ['觸及', W.reach], ['穿甲', W.pierce],
     ['前搖', W.windup.toFixed(2) + 's'], ['判定', W.activeT.toFixed(2) + 's'], ['後搖', W.recover.toFixed(2) + 's'],
     ['一擊間隔', (W.windup + W.activeT + W.recover).toFixed(2) + 's'],
     ['cleave', W.cleave], ['擊退', W.knock], ['硬直', W.stagger + 's'], ['背刺', '×' + (W.backstabMul || 1)],
@@ -3634,7 +3672,7 @@ function drawArenaHUD() {
     ctx.fillStyle = '#cdd6e0'; ctx.textAlign = 'right'; ctx.fillText(String(r[1]), sx + sw - 9, y); ctx.textAlign = 'left';
   });
   // 底部：熱鍵
-  const keysLine = `1-${MELEE_WEAPON_IDS.length}/Tab 換近接武器（${MELEE_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · T 重來 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 數值面板 · M 主選單`;
+  const keysLine = `1-${MELEE_WEAPON_IDS.length}/Tab 換近接武器（${MELEE_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 數值面板 · M 主選單`;
   ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(160,180,200,0.85)';
   ctx.fillText(keysLine, cv.width / 2, cv.height - 112);
   ctx.fillStyle = 'rgba(127,227,255,0.8)';
@@ -3963,22 +4001,45 @@ function drawMeleeFx(list) {
     }
     const s = u.swing;
     if (s) {
+      const thrust = W.swingStyle === 'thrust';
       const inWindup = s.t < s.windup;
       const inActive = !inWindup && s.t < s.windup + s.active;
-      const a0 = u.facing - half, a1 = u.facing + half;
-      if (inWindup) {   // 前搖：細弧預告 + 依進度收緊＝蓄力感
-        const p = s.t / Math.max(0.001, s.windup);
-        ctx.strokeStyle = foe ? `rgba(255,120,110,${0.25 + 0.5 * p})` : `rgba(255,225,170,${0.25 + 0.5 * p})`;
-        ctx.lineWidth = 1.5 + 2 * p;
-        ctx.beginPath(); ctx.arc(u.pos.x, u.pos.y, reach * (0.75 + 0.25 * p), a0, a1); ctx.stroke();
-      } else {   // 判定窗 + 後搖：實心扇形淡出（判定窗全亮＝所見即所中）
-        const after = s.t - s.windup - s.active;
-        const f = inActive ? 1 : Math.max(0, 1 - after / Math.max(0.001, CONFIG.melee.arcFadeT));
-        if (f > 0) {
-          ctx.fillStyle = foe ? `rgba(255,90,80,${0.30 * f})` : `rgba(255,236,190,${0.34 * f})`;
-          ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y); ctx.arc(u.pos.x, u.pos.y, reach, a0, a1); ctx.closePath(); ctx.fill();
-          ctx.strokeStyle = foe ? `rgba(255,140,120,${0.7 * f})` : `rgba(255,255,225,${0.8 * f})`; ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.arc(u.pos.x, u.pos.y, reach, a0, a1); ctx.stroke();
+      const after = s.t - s.windup - s.active;
+      const fade = inActive || inWindup ? 1 : Math.max(0, 1 - after / Math.max(0.001, CONFIG.melee.arcFadeT));
+      const edge = foe ? '255,140,120' : '255,246,215';
+      const body = foe ? '255,90,80' : '255,228,170';
+      const blade = (off, rf) => ({ a: u.facing + off, r: reach * rf });
+      if (thrust) {
+        // 突刺：一條沿正前方推出去的刀（前搖時縮著、判定窗內刺滿）
+        const b = blade(0, inWindup ? CONFIG.melee.thrustMinReachF * 0.8 : s.reachF);
+        const tipX = u.pos.x + Math.cos(b.a) * b.r, tipY = u.pos.y + Math.sin(b.a) * b.r;
+        ctx.strokeStyle = inWindup ? `rgba(${edge},${0.30 + 0.4 * (s.t / Math.max(0.001, s.windup))})` : `rgba(${edge},${0.95 * fade})`;
+        ctx.lineWidth = inWindup ? 2 : 4;
+        ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y); ctx.lineTo(tipX, tipY); ctx.stroke();
+        if (!inWindup) {   // 刀尖的一點光＝看得出刺到哪
+          ctx.fillStyle = `rgba(${edge},${0.9 * fade})`;
+          ctx.beginPath(); ctx.arc(tipX, tipY, 4.5, 0, Math.PI * 2); ctx.fill();
+        }
+      } else {
+        // 橫掃：畫「已經掃過的那段」＝尾跡，前緣是刀身本體 → 讀得出方向與速度
+        const startOff = s.dir * -half;
+        const a0 = u.facing + startOff, a1 = u.facing + s.off;
+        if (inWindup) {   // 前搖：刀停在起始側 + 淡淡的整段預告弧（告訴你要從哪邊掃過來）
+          const p = s.t / Math.max(0.001, s.windup);
+          ctx.strokeStyle = `rgba(${edge},0.18)`; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(u.pos.x, u.pos.y, reach, u.facing - half, u.facing + half); ctx.stroke();
+          ctx.strokeStyle = `rgba(${edge},${0.45 + 0.5 * p})`; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y);
+          ctx.lineTo(u.pos.x + Math.cos(a0) * reach * (0.8 + 0.2 * p), u.pos.y + Math.sin(a0) * reach * (0.8 + 0.2 * p));
+          ctx.stroke();
+        } else {
+          const ccw = s.dir < 0;
+          ctx.fillStyle = `rgba(${body},${0.26 * fade})`;   // 尾跡（起始側 → 目前刀刃位置）
+          ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y); ctx.arc(u.pos.x, u.pos.y, reach, a0, a1, ccw); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = `rgba(${edge},${0.55 * fade})`; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(u.pos.x, u.pos.y, reach, a0, a1, ccw); ctx.stroke();
+          ctx.strokeStyle = `rgba(${edge},${0.95 * fade})`; ctx.lineWidth = 4;   // 刀身：目前這一幀的位置
+          ctx.beginPath(); ctx.moveTo(u.pos.x, u.pos.y); ctx.lineTo(u.pos.x + Math.cos(a1) * reach, u.pos.y + Math.sin(a1) * reach); ctx.stroke();
         }
       }
     }
