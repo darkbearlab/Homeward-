@@ -140,7 +140,8 @@ const CONFIG = {
   //   knownGrace＝失去視線後仍視為「已知」的緩衝秒（避免一閃就重置）。修「交戰後視野穿牆、永遠找得到你」。
   hunt: { searchHops: 3, knownGrace: 0.5, threatGrace: 4, threatShareRadius: 240, threatDist: 320 },   // 被擊中來向脅威：記憶秒數 / 近隣傳播半徑 / 沿來向放置脅威點的距離
   // 打擊感（juice）：子彈近 hitscan(速度×mul)＋曳光、開火後座/相機踢、命中/擊殺螢幕震動、擊殺頓幀。皆可即時調。
-  juice: { bulletSpeedMul: 4, tracer: 1.0, bulletAlpha: 0.16, tracerEvery: 5, recoil: 4, recoilDecay: 60, camKick: 0, shakeFire: 0, shakeHit: 0, shakeKill: 0, shakeMax: 12, shakeDecay: 16, hitstopKill: 0.04,   // 一般彈＝極細淡線(bulletAlpha,0＝隱形)；曳光彈＝火光色、每 tracerEvery 發一發(現實 4:1≈第5發)、只有 W.tracer 的槍有
+  // bulletSpeedMul：原版 4＝為了讓槍戰接近 hitscan。HOMEWARD 中世紀化後箭矢要「看得見在飛、能預判走位」→ 1.5
+  juice: { bulletSpeedMul: 1.5, tracer: 1.0, bulletAlpha: 0.16, tracerEvery: 5, recoil: 4, recoilDecay: 60, camKick: 0, shakeFire: 0, shakeHit: 0, shakeKill: 0, shakeMax: 12, shakeDecay: 16, hitstopKill: 0.04,   // 一般彈＝極細淡線(bulletAlpha,0＝隱形)；曳光彈＝火光色、每 tracerEvery 發一發(現實 4:1≈第5發)、只有 W.tracer 的槍有
     hitFlash: 0.12, flinch: 5,                                              // 受擊：閃白時長 / 後仰位移(px)
     deathHitstop: 0.06 },   // 我方陣亡：只保留短頓幀「頓一下」（已取消死亡鏡頭＝相機不轉去死亡點，激戰中不干擾操作）
   // 視覺化聲音：控制角色「視線外」方向有聲音時，畫面邊框朝該方向發光（無音效的替代提示；arcade 亦沿用）。
@@ -2845,7 +2846,7 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
     const a = angle + (Math.random() * 2 - 1) * spreadDeg * spreadF * Math.PI / 180;
     bullets.push({
       x: u.pos.x + Math.cos(angle) * (u.radius + 2), y: u.pos.y + Math.sin(angle) * (u.radius + 2),
-      vx: Math.cos(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul, vy: Math.sin(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul,   // 近 hitscan（碰撞已是掃描式、不穿透）
+      vx: Math.cos(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul, vy: Math.sin(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul,   // 碰撞是掃描式（不穿透），所以放慢彈速不會漏判
       dmg: W.damage * dmgF, faction: u.faction, range: W.range, traveled: 0,
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
       pierce: W.pierce || 0,      // 穿甲：對裝甲敵人的擋格率衰減
