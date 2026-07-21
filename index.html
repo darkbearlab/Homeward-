@@ -696,8 +696,10 @@ const ENEMY_TYPES = {
   heavy_lmg:  { name: '重機槍兵', weaponId: 'lmg',   hp: CONFIG.enemy.hp, moveSpeed: 55,                     personality: 'holder',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, attack: 'burst', poise: 110, elite: true },  // 慢、帶甲、點放掃射
   heavy_shot: { name: '霰彈兵', weaponId: 'shotgun', hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 200, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },                   // 中速、帶甲、推進貼臉
   civ:        { name: '平民',   weaponId: 'pistol',  hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },                                  // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰。之後有 asset 換皮、邏輯不變
-  // ---- HOMEWARD 近接測試用 ----
+  // ---- HOMEWARD 中世紀敵種（試作場測試用；Phase 2 戰役中世紀化直接沿用）----
   footman:    { name: '徒步兵(劍)', weaponId: 'sword', hp: CONFIG.enemy.hp, moveSpeed: 105,                  personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },              // 近接敵：走同一條揮斬管線；體幹 45＝長劍兩擊打破
+  archer:     { name: '弓手',   weaponId: 'longbow', hp: 60,              moveSpeed: 95,                     personality: 'holder',  hue: 100, radius: CONFIG.unitRadius, patrols: true, poise: 35 },              // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
+  arbalest:   { name: '弩手',   weaponId: 'crossbow', hp: 70,             moveSpeed: 70,                     personality: 'holder',  hue: 260, radius: CONFIG.unitRadius, poise: 50 },                              // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
   dummy:      { name: '訓練假人', weaponId: 'pistol',  hp: 400,             moveSpeed: 0,                     personality: 'holder',  hue: 60,  radius: 13, dummy: true, poise: 70 },                               // 只挨打不還手（enemyTick 早退）
   dummy_armor:{ name: '披甲假人', weaponId: 'pistol',  hp: 400,             moveSpeed: 0,                     personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance, poise: 130 },  // 測穿甲（鎚 pierce 0.95 vs 劍 0.35）與高體幹
 };
@@ -1303,6 +1305,30 @@ const MAPS = {
     enemySpawns: [],                           // 由 arenaSpawn() 依當下設定動態生成
     prisoners: [],
   },
+  // 射擊試作場：長走廊。**上半＝標靶區**（假人列在 300/500/700/900 距離檔）、**下半＝對射區**
+  // （弓手/弩手在遠端）——分開是必要的：假人與敵人同陣營，擺在對射走廊上會觸發 AI 的
+  // 「射線被自己人擋住＝收火」，弓手會永遠不放箭（實測抓到的）。
+  // 中段兩道低矮牆（中央留 60px 通道）＝測「越牆機率擋彈」：下側弓手有一名隔牆射＝掩體示範。
+  range: {
+    label: '射擊試作場', width: 1400, height: 700, eventMap: true,
+    walls: [...rectWalls(40, 40, 1360, 660)],
+    doors: [],
+    lowWalls: [ { x1: 760, y1: 260, x2: 760, y2: 380 }, { x1: 760, y1: 440, x2: 760, y2: 560 } ],
+    bushes: [], destructibles: [], areas: [], buttons: [],
+    waypoints: [
+      { id: 0, pos: { x: 220, y: 350 }, tags: ['spawn'] },
+      { id: 1, pos: { x: 500, y: 360 }, tags: [] },
+      { id: 2, pos: { x: 760, y: 410 }, tags: [] },        // 低矮牆之間的通道
+      { id: 3, pos: { x: 1020, y: 400 }, tags: [] },
+      { id: 4, pos: { x: 1240, y: 430 }, tags: [] },
+      { id: 5, pos: { x: 1240, y: 560 }, tags: [] },
+    ],
+    edges: [[0, 1], [1, 2], [2, 3], [3, 4], [3, 5]],
+    entryPoints: [{ x: 200, y: 350 }],
+    extractionPoints: [{ x: 1320, y: 350 }],
+    enemySpawns: [],   // 由 ARENA_MODES.ranged.spawn 動態生成
+    prisoners: [],
+  },
   meet: {   // 路上相遇：開闊小空地，男孩站右側面向玩家(在玩家視野內、和平談話)
     label: '路上相遇', width: 880, height: 520, eventMap: true,
     walls: [...rectWalls(40, 40, 840, 480)],
@@ -1866,14 +1892,44 @@ let arenaMode = false;          // true＝試作場（update 跳過撤離/結算
 let arenaNoFog = true;          // 試作場預設關迷霧（看得見扇形判定才調得動數值）
 let arenaAllies = false;        // 是否放兩名 AI 扈從（預設關＝孤騎，先感覺自己的手感）
 let arenaWIdx = 0;              // 目前武器在 ARENA_WEAPON_IDS 的索引
-let arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0 };
-const ARENA_WEAPON_IDS = [...MELEE_WEAPON_IDS, 'longbow', 'crossbow'];   // 近接 5 + 中世紀遠程 2（測穿甲軸/未來遠程 telegraph）
+let arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0, lastShotDist: 0 };
+const ARENA_WEAPON_IDS = [...MELEE_WEAPON_IDS, 'longbow', 'crossbow'];   // 近接 5 + 中世紀遠程 2
 const arenaWeaponId = () => ARENA_WEAPON_IDS[((arenaWIdx % ARENA_WEAPON_IDS.length) + ARENA_WEAPON_IDS.length) % ARENA_WEAPON_IDS.length];
+
+/* 試作場登錄表（使用者定：依用途分場）：一個場地＝一條資料（地圖 + 配置 + 預設武器）。
+   之後要加 gimmick 測試場（門/按鈕/破壞物/煙霧…）＝照樣加一條 + 手刻一張小圖，不必改碼。
+   U 鍵循環切換；?arena=melee / ?arena=ranged 直接開機進指定場。 */
+const ARENA_MODES = {
+  melee: {
+    label: '近戰試作場', map: 'arena', wIdx: 0,
+    // 左列訓練假人（緊排測 cleave）+ 披甲假人（測穿甲）+ 右側三名劍兵（會反擊）
+    spawn: [
+      { t: 'dummy', x: 470, y: 250, node: 6 }, { t: 'dummy', x: 470, y: 292, node: 6 },
+      { t: 'dummy', x: 470, y: 334, node: 6 }, { t: 'dummy', x: 470, y: 376, node: 6 },
+      { t: 'dummy_armor', x: 470, y: 418, node: 6 }, { t: 'dummy_armor', x: 470, y: 460, node: 6 },
+      { t: 'footman', x: 780, y: 250, node: 3 }, { t: 'footman', x: 860, y: 380, node: 5 }, { t: 'footman', x: 780, y: 520, node: 4 },
+    ],
+  },
+  ranged: {
+    label: '射擊試作場', map: 'range', wIdx: 5,   // 預設長弓
+    // 上半標靶區：假人列 300/500/700/900 距離檔（900 那格要隔著上側低矮牆射＝測機率擋彈）
+    // 下半對射區：弓手×2 弩手×1（最下面那名弓手與你之間隔著下側低矮牆＝敵方掩體示範）
+    spawn: [
+      { t: 'dummy', x: 520, y: 130, node: 1 }, { t: 'dummy_armor', x: 520, y: 210, node: 1 },
+      { t: 'dummy', x: 720, y: 130, node: 2 },
+      { t: 'dummy', x: 920, y: 130, node: 3 }, { t: 'dummy_armor', x: 920, y: 210, node: 3 },
+      { t: 'dummy', x: 1120, y: 130, node: 3 },
+      { t: 'archer', x: 1240, y: 430, node: 4, facing: Math.PI }, { t: 'archer', x: 1240, y: 560, node: 5, facing: Math.PI },
+      { t: 'arbalest', x: 1320, y: 500, node: 5, facing: Math.PI },
+    ],
+  },
+};
+let arenaModeKey = 'melee';
 
 let arenaArmorIdx = 2;          // 試作場預設鎖子甲（C 鍵循環布衣→厚襖→鎖子甲→胸甲→板甲）
 const arenaMember = (name, hue, wid, arch) => ({
   name, hue, strength: 1, weaponId: wid, weaponId2: 'dagger', abilityId: 'heal', archetypeId: arch,
-  tier: 0, passives: [], bonusMaxHp: 0, allocatedAmmo: 0, allocatedAmmo2: 0,
+  tier: 0, passives: [], bonusMaxHp: 0, allocatedAmmo: 999, allocatedAmmo2: 999,   // 試作場彈藥管夠（弓弩要備箭）
   equipId: 'shield', itemId: null, itemCount: 0, carriesFile: false, armorId: ARMOR_IDS[arenaArmorIdx] || 'none',
 });
 // 換甲（試作場熱鍵）：重建 makePlayer 太重，直接改活值（armor/移速/耐力回復/負重全部即時生效）
@@ -1892,39 +1948,36 @@ function arenaRoster() {
   if (arenaAllies) { r.push(arenaMember('扈從·磐石', 185, 'sword', 'anchor')); r.push(arenaMember('扈從·先鋒', 35, 'axe', 'spearhead')); }
   return r;
 }
-// 配置測試對象：左列訓練假人（不還手，量傷害/cleave/穿甲）＋右側近接敵（會反擊，測盾格/招架/硬直）
+// 配置測試對象：讀 ARENA_MODES[arenaModeKey].spawn（資料驅動＝加新場地不改此函式）
 function arenaSpawn() {
   enemies = []; enemyIdSeq = 1; reservations = new Map(); patrolClaims = new Map(); attackTokens = new Map();
-  const put = (typeId, x, y, facing, node) => {
-    const e = makeEnemy(node, null, false, facing, typeId);
-    e.pos = { x, y };
-    e.homePos = { x, y };   // 假人被擊退後會慢慢飄回原位＝維持整齊的一列，方便反覆測 cleave
+  const M = ARENA_MODES[arenaModeKey] || ARENA_MODES.melee;
+  for (const s of M.spawn) {
+    const e = makeEnemy(s.node, null, false, s.facing != null ? s.facing : Math.PI, s.t);
+    e.pos = { x: s.x, y: s.y };
+    e.homePos = { x: s.x, y: s.y };   // 假人被擊退後會慢慢飄回原位＝維持整齊，方便反覆測
     if (!e.dummy) commitReservation(e, e.currentNode);
-    enemies.push(e); return e;
-  };
-  // 訓練假人：橫向緊排＝一刀掃過去可直接看出 cleave 命中幾隻
-  for (let i = 0; i < 4; i++) put('dummy', 470, 250 + i * 42, Math.PI, 6);
-  put('dummy_armor', 470, 250 + 4 * 42, Math.PI, 6);   // 披甲假人：測 pierce（鎚 0.95 vs 劍 0.35）
-  put('dummy_armor', 470, 250 + 5 * 42, Math.PI, 6);
-  // 近接敵：右側三名劍兵（會衝上來砍＝盾格/招架的練習對象）
-  put('footman', 780, 250, Math.PI, 3);
-  put('footman', 860, 380, Math.PI, 5);
-  put('footman', 780, 520, Math.PI, 4);
+    enemies.push(e);
+  }
 }
-function enterArena() {
+function enterArena(modeKey) {
+  if (modeKey && ARENA_MODES[modeKey]) arenaModeKey = modeKey;
+  const M = ARENA_MODES[arenaModeKey] || ARENA_MODES.melee;
   arenaMode = true;
   fromSandbox = false; fromEditor = false; playtestMode = false;
   introActive = false; cutscene = null; finaleActive = false; eventActive = false;
-  forcedMap = 'arena'; roadCurrent = null; missionIndex = 0;
+  forcedMap = M.map; roadCurrent = null; missionIndex = 0;
+  arenaWIdx = M.wIdx;                                    // 各場地的預設武器（近戰場＝劍、射擊場＝長弓）
   warehouse = warehouse || []; backpack = backpack || []; drops = [];
   ammoStock = ammoStock || {}; for (const id of WEAPON_IDS) if (ammoStock[id] == null) ammoStock[id] = CONFIG.ammo.stockStart;
   runStats = { events: 0, kia: 0 };
   roster = arenaRoster();
-  startMission();          // 沿用一般開場流程（建地圖衍生表/我方單位/相機），arena 的 enemySpawns 為空
+  startMission();          // 沿用一般開場流程（建地圖衍生表/我方單位/相機），試作場地圖的 enemySpawns 為空
   arenaSpawn();            // 再放測試對象
   forcedMap = null;
-  arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0 };
+  arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0, lastShotDist: 0 };
 }
+const arenaNextMode = () => { const keys = Object.keys(ARENA_MODES); return keys[(keys.indexOf(arenaModeKey) + 1) % keys.length]; };
 function arenaSetWeapon(i) {
   if (!arenaMode) return;
   arenaWIdx = ((i % ARENA_WEAPON_IDS.length) + ARENA_WEAPON_IDS.length) % ARENA_WEAPON_IDS.length;
@@ -3190,6 +3243,7 @@ function updateBullets(dt) {
         const hpB0 = t.hp;
         const bBlocked = damageUnit(t, dmg, b.pierce || 0, angTo(t.pos, { x: b.ox, y: b.oy }), { attacker: b.owner || null });   // attacker＝擊殺歸屬/Hooks（無 melee 旗標＝不觸發近戰限定效果）
         if (b.owner) Hooks.fire('attackHit', { u: b.owner, t, dealt: Math.max(0, hpB0 - t.hp), melee: false, blocked: bBlocked, backstab: false, armorDeflect: (hpB0 === t.hp && !bBlocked) });
+        if (arenaMode && b.owner === knight()) arenaStats.lastShotDist = Math.round(b.traveled);   // 射擊試作場：顯示這發打了多遠
         if (b.suppress && t.faction === 'enemy' && !t.dead) t.suppressedT = CONFIG.passive.suppressDur;   // 壓制：被射的敵發散變大
         if (wasAlive && (t.dead || t.hp <= 0) && b.faction === 'player' && b.shooterId >= 0) onKillPassive(players[b.shooterId]);   // 斬首/戰場急救
         gone = true; break;
@@ -3820,6 +3874,7 @@ window.addEventListener('keydown', e => {
   if (arenaMode) {
     if (k >= '1' && k <= '9') { const i = parseInt(k, 10) - 1; if (i < ARENA_WEAPON_IDS.length) arenaSetWeapon(i); }
     if (k === 'v') { if (knightRelics.has('secondwind')) knightRelics.delete('secondwind'); else knightRelics.add('secondwind'); applyRelicHooks(); }   // V 切換示範聖物「不屈」
+    if (k === 'u') { enterArena(arenaNextMode()); e.preventDefault(); return; }   // U 切換試作場（近戰 ↔ 射擊；之後的 gimmick 場照樣循環）
     if (k === 'tab') { arenaSetWeapon(arenaWIdx + (e.shiftKey ? -1 : 1)); e.preventDefault(); }   // Tab 循環近接武器
     if (k === 't') arenaResetFight();                                    // T 重來
     if (k === 'y') for (const e of enemies) if (!e.dead && !e.dummy) { e.state = 'ENGAGED'; e.detect = 1; }   // Y 叫敵人立刻開戰（不用走過去引怪）
@@ -4053,6 +4108,7 @@ function drawArenaHUD() {
     ['總傷害', Math.round(S.dmg)],
     ['平均傷害/揮', S.swings ? Math.round(S.dmg / S.swings) : '—'],
     ['上一擊', `${S.lastHits} 目標 / ${Math.round(S.lastDmg)} 傷`],
+    ['上次命中距離', S.lastShotDist ? S.lastShotDist + 'px' : '—'],
     ['被格擋', S.blocked],
     ['打破敵體幹', S.brokeFoe], ['打斷敵前搖', S.interrupted],
     ['耐力不足次數', S.noStam],
@@ -4064,7 +4120,7 @@ function drawArenaHUD() {
   const sw = 230, sh = 30 + stats.length * 15, sx = cv.width - sw - pad;
   ctx.fillStyle = 'rgba(10,14,20,0.82)'; ctx.fillRect(sx, pad, sw, sh);
   ctx.strokeStyle = 'rgba(160,180,200,0.35)'; ctx.strokeRect(sx, pad, sw, sh);
-  ctx.font = 'bold 13px Consolas'; ctx.fillStyle = '#7fe3ff'; ctx.fillText('近戰試作場', sx + 9, pad + 19);
+  ctx.font = 'bold 13px Consolas'; ctx.fillStyle = '#7fe3ff'; ctx.fillText((ARENA_MODES[arenaModeKey] || ARENA_MODES.melee).label, sx + 9, pad + 19);
   ctx.font = '11px Consolas';
   stats.forEach((r, i) => {
     const y = pad + 34 + i * 15;
@@ -4072,7 +4128,7 @@ function drawArenaHUD() {
     ctx.fillStyle = '#cdd6e0'; ctx.textAlign = 'right'; ctx.fillText(String(r[1]), sx + sw - 9, y); ctx.textAlign = 'left';
   });
   // 底部：熱鍵
-  const keysLine = `1-${ARENA_WEAPON_IDS.length}/Tab 換武器（${ARENA_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 換甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · V 聖物不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板 · M 選單`;
+  const keysLine = `U 切換場地[${(ARENA_MODES[arenaNextMode()] || {}).label}] · 1-${ARENA_WEAPON_IDS.length}/Tab 換武器（${ARENA_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 換甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · V 不屈[${knightRelics.has('secondwind') ? '有' : '無'}] · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板 · M 選單`;
   ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(160,180,200,0.85)';
   ctx.fillText(keysLine, cv.width / 2, cv.height - 112);
   ctx.fillStyle = 'rgba(127,227,255,0.8)';
@@ -6179,11 +6235,11 @@ function bootPlaytest() {
 loadMeta();   // 載入局外進度（解鎖/情報點）
 let __q = ''; try { __q = (typeof location !== 'undefined' && location.search) || ''; } catch (e) {}
 // HOMEWARD Phase 1：開機預設進「近戰試作場」（手感開發中）。原本的主選單/戰役走 `?campaign`，
-// 或在試作場按 M。等近接手感定案、戰役中世紀化之後，再把預設改回 goMenu()。
+// 或在試作場按 M。`?arena=ranged` 直接進射擊試作場。等手感定案、戰役中世紀化之後，再把預設改回 goMenu()。
 if (/[?&]playtest\b/.test(__q)) bootPlaytest();
 else if (/[?&]sandbox\b/.test(__q) && sandboxEl) enterSandbox();
 else if (/[?&]campaign\b/.test(__q) || /[?&]menu\b/.test(__q)) goMenu();
-else enterArena();
+else { const am = /[?&]arena=(\w+)/.exec(__q); enterArena(am && ARENA_MODES[am[1]] ? am[1] : 'melee'); }
 requestAnimationFrame(frame);
 </script>
 </body>
