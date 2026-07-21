@@ -197,6 +197,9 @@ const CONFIG = {
     rusher:  { tags: { rush: 20, choke: 10, patrol: 5 },               wRush: 700, wFlank: 0,   wExpose: 5,  wSight: 25 },
     flanker: { tags: { flank: 30, vantage: 15, cover: 25, patrol: 5 }, wRush: 500, wFlank: 120, wExpose: 70, wSight: 25 },
     holder:  { tags: { vantage: 25, cover: 30, choke: 12, patrol: 5 }, wRush: 200, wFlank: 0,   wExpose: 55, wSight: 35 },  // 弩手/重裝：守點壓制、不愛推進/暴露
+    // 動搖（士氣）性格：負的 wRush ＝主動拉開距離；高 wExpose ＝極度不想被看到。
+    // 整套「崩潰行為」就是換這一筆資料——scoreNode 是資料驅動的，所以零新程式碼。
+    shaken:  { tags: { cover: 45, vantage: 15, patrol: 0 },            wRush: -260, wFlank: 0, wExpose: 130, wSight: 8 },
     exposeCheckRange: 700,   // 算「暴露」時只看這個距離內的敵對單位（省 canSee 射線）
     allySpeedMul: 1.0,       // 扈從移動速度倍率（相對 CONFIG.moveSpeed）
     closeInMinRush: 400,     // 近接扈從「衝完最後一段」的門檻：wRush ≥ 此值才貼上去（holder 200 不衝＝固守）
@@ -220,6 +223,43 @@ CONFIG.command = {
   followRegroup: 260,   // 跟隨時離騎士超過這個距離＝優先歸隊（先不打）
   engageRangeMul: 1.15, // 交戰判定：目標要在「繩長 × 此值」內才理會（專注指令不受限）
 };
+/* =====================================================================
+   士氣（HOMEWARD，使用者提案）— **雙向**：扈從與敵人都有。
+   這不是「AI 自己判斷危險就後撤」（那會繞過你的指令），而是**一個失敗狀態**：
+   由看得見的事件觸發、由你的操作決定會不會發生。扈從崩潰不是「他救了自己」，
+   是「你把他逼到崩潰了」——死生仍然是指令的責任，只是後果多了一階。
+   兩段：堅定 → 動搖（換 CONFIG.ai.shaken 性格：拉開距離、躲掩體、不進攻）→ 潰逃（不接指令、跑）。
+   觸發全部沿用既有的 Hooks（hurt / poiseBroken / death / kill），引擎幾乎不用動。
+   **敵人也有士氣＝「孤騎對軍團」第一次在數學上成立**：你殺不完十個人，但可以嚇散他們。
+   ===================================================================== */
+CONFIG.morale = {
+  max: 100,
+  shakenAt: 35,            // 跌破＝動搖
+  rallyHysteresis: 14,     // 回到 shakenAt+此值 才脫離動搖（避免在門檻上抖動）
+  // ── 衝擊（扣士氣）──
+  perDamage: 0.35,         // 每點實際傷害扣多少
+  onPoiseBroken: 12,       // 被打崩＝很動搖
+  onAllyDeath: 18,         // 半徑內看到同陣營陣亡
+  allyDeathRadius: 380,
+  eliteDeathMul: 1.8,      // 死的是菁英 → 對同陣營的衝擊更大
+  outnumberPerFoe: 2.2,    // 被包圍：近身敵人每多一個，每秒扣這麼多
+  outnumberRadius: 150,
+  // ── 恢復 ──
+  regenDelay: 2.5,         // 最後一次衝擊後多久開始回
+  baseRegen: 2,            // /s
+  knightAura: 260,         // 騎士的「將領光環」半徑（我方限定）
+  knightRegen: 9,          // 光環內的額外回復 /s
+  onKill: 14,              // 擊殺回士氣（自己 + 半徑內同陣營）
+  onKillElite: 30,
+  killShareRadius: 320,
+  regenSafeRange: 420,     // 這個距離內還有敵人＝不會自己回士氣（騎士光環不受此限）
+  routAuraMul: 0.6,        // 已經潰逃的人，光環把他拉回來的效率打折
+  fleeAwayDist: 560,       // 潰逃的敵人跑到離我方這麼遠＝脫離戰場（不算擊殺、不掉落）
+  routSpeedMul: 1.25,      // 潰逃時的移動倍率（逃命跑得比較快）
+  restRestore: 1.0,        // 休息關恢復比例（1＝全滿）
+  interMissionRestore: 0.5,// 一般過關後恢復比例（沒進休息關也回一些）
+};
+const MORALE_STATE = { steady: '堅定', shaken: '動搖', routed: '潰逃' };
 const CMD_LIST = ['follow', 'hold', 'focus', 'extract'];
 const CMD_META = {
   follow:  { name: '跟隨',     hint: '待在騎士身邊，只打靠近的敵人', col: '#7fe3ff' },
@@ -629,9 +669,10 @@ function giveItemStack(id) { warehouse.push({ kind: 'item', id, count: ITEM_STAC
 // aiPersonality＝**與敵人共用的那套性格**（CONFIG.ai）。scoreNode 已陣營中立化，
 // 加上指令層給的錨點/繩長，同一份性格在扈從身上就是「在騎士附近怎麼站」。
 const ARCHETYPES = {
-  anchor:    { name: '磐石', facing: 'HOLD',  discipline: 'TAP',  fireMode: 'AGGRESSIVE', tree: 'anchor', aiPersonality: 'holder',  desc: '持盾固守 · 佔掩體不推進' },
-  spearhead: { name: '先鋒', facing: 'SWEEP', discipline: 'AUTO', fireMode: 'AGGRESSIVE', tree: 'spear',  aiPersonality: 'rusher',  desc: '陷陣 · 直線壓上' },
-  ranger:    { name: '遊獵', facing: 'TRACK', discipline: 'TAP',  fireMode: 'DEFENSIVE',  tree: 'ranger', aiPersonality: 'flanker', desc: '斥候散兵 · 繞側翼' },
+  // moraleMul＝士氣上限倍率：磐石扛得住、遊獵容易動搖
+  anchor:    { name: '磐石', facing: 'HOLD',  discipline: 'TAP',  fireMode: 'AGGRESSIVE', tree: 'anchor', aiPersonality: 'holder',  moraleMul: 1.3,  desc: '持盾固守 · 佔掩體不推進' },
+  spearhead: { name: '先鋒', facing: 'SWEEP', discipline: 'AUTO', fireMode: 'AGGRESSIVE', tree: 'spear',  aiPersonality: 'rusher',  moraleMul: 1.0,  desc: '陷陣 · 直線壓上' },
+  ranger:    { name: '遊獵', facing: 'TRACK', discipline: 'TAP',  fireMode: 'DEFENSIVE',  tree: 'ranger', aiPersonality: 'flanker', moraleMul: 0.85, desc: '斥候散兵 · 繞側翼' },
 };
 const ARCHETYPE_IDS = Object.keys(ARCHETYPES);
 const TIER_COLOR = ['#9fb3c8', '#e0b050', '#9fd0e0', '#7fffa8']; // 升階等級 0(白板)→3(★★★) 名稱色
@@ -761,16 +802,16 @@ const ENEMY_TYPES = {
      舊的原版 key（grunt / dog / heavy_lmg / heavy_shot / civ）改由下面的 LEGACY_ENEMY_ALIAS 對照過來，
      只為了讓既有手刻地圖繼續能跑；`ENEMY_TYPE_IDS` 不含它們＝編輯器/新內容選不到，會自然 phase out。
      elite/boss 標記＝Hooks 的 kill 事件歸類（boss 型待 Phase 4）。 */
-  levy:         { name: '農兵',        weaponId: 'club',     hp: 45,              moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 40,  radius: CONFIG.unitRadius, patrols: true, poise: 25 },   // 雜兵：慢而弱，體幹兩下就破
-  footman:      { name: '徒步兵',      weaponId: 'sword',    hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
-  footman_flank:{ name: '徒步兵(包抄)', weaponId: 'sword',   hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'flanker', hue: 26,  radius: CONFIG.unitRadius, patrols: true, poise: 45 },   // 繞側後（佔 flank/vantage 點）
-  spearman:     { name: '槍兵',        weaponId: 'spear',    hp: CONFIG.enemy.hp, moveSpeed: 95,                     personality: 'holder',  hue: 190, radius: CONFIG.unitRadius, patrols: true, poise: 55 },   // 長 reach：逼你繞側，正面很難進
-  wolf:         { name: '戰狼',        weaponId: 'fangs',    hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
-  archer:       { name: '弓手',        weaponId: 'longbow',  hp: 60,              moveSpeed: 95,                     personality: 'holder',  hue: 100, radius: CONFIG.unitRadius, patrols: true, poise: 35 },   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
-  arbalest:     { name: '弩手',        weaponId: 'crossbow', hp: 70,              moveSpeed: 70,                     personality: 'holder',  hue: 260, radius: CONFIG.unitRadius, poise: 50 },                   // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
-  manatarms:    { name: '披甲士',      weaponId: 'mace',     hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋破甲鎚：慢但你砍不動、他一下就把你打崩
-  serjeant:     { name: '軍士',        weaponId: 'axe',      hp: CONFIG.enemy.hp, moveSpeed: 85,                     personality: 'rusher',  hue: 320, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, elite: true },  // 重裝＋雙手斧：廣掃 cleave、hyperArmor 不怕打斷
-  civilian:     { name: '平民',        weaponId: 'knife',    hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20 },               // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰
+  levy:         { name: '農兵',        weaponId: 'club',     hp: 45,              moveSpeed: CONFIG.enemy.moveSpeed, personality: 'rusher',  hue: 40,  radius: CONFIG.unitRadius, patrols: true, poise: 25, morale: 45 },   // 雜兵：慢而弱，體幹兩下就破
+  footman:      { name: '徒步兵',      weaponId: 'sword',    hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'rusher',  hue: 12,  radius: CONFIG.unitRadius, patrols: true, poise: 45, morale: 80 },   // 主力近接：體幹 45＝長劍三擊/鎚一擊打破
+  footman_flank:{ name: '徒步兵(包抄)', weaponId: 'sword',   hp: CONFIG.enemy.hp, moveSpeed: 105,                    personality: 'flanker', hue: 26,  radius: CONFIG.unitRadius, patrols: true, poise: 45, morale: 80 },   // 繞側後（佔 flank/vantage 點）
+  spearman:     { name: '槍兵',        weaponId: 'spear',    hp: CONFIG.enemy.hp, moveSpeed: 95,                     personality: 'holder',  hue: 190, radius: CONFIG.unitRadius, patrols: true, poise: 55, morale: 85 },   // 長 reach：逼你繞側，正面很難進
+  wolf:         { name: '戰狼',        weaponId: 'fangs',    hp: 45,              moveSpeed: 165,                    personality: 'rusher',  hue: 45,  radius: 9,  coneHalfDeg: 80, senseMul: 1.5, opensDoors: false, poise: 25, morale: 60 },  // 快、脆、貼臉連咬、視野廣；動物不會開門
+  archer:       { name: '弓手',        weaponId: 'longbow',  hp: 60,              moveSpeed: 95,                     personality: 'holder',  hue: 100, radius: CONFIG.unitRadius, patrols: true, poise: 35, morale: 65 },   // 遠程敵：站樁放箭（holder＝幾乎不主動推進）
+  arbalest:     { name: '弩手',        weaponId: 'crossbow', hp: 70,              moveSpeed: 70,                     personality: 'holder',  hue: 260, radius: CONFIG.unitRadius, poise: 50, morale: 70 },                   // 破甲遠程：裝填慢、單發重（對玩家的甲也一樣）
+  manatarms:    { name: '披甲士',      weaponId: 'mace',     hp: CONFIG.enemy.hp, moveSpeed: 70,                     personality: 'rusher',  hue: 280, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, morale: 140, elite: true },  // 重裝＋破甲鎚：慢但你砍不動、他一下就把你打崩
+  serjeant:     { name: '軍士',        weaponId: 'axe',      hp: CONFIG.enemy.hp, moveSpeed: 85,                     personality: 'rusher',  hue: 320, radius: 14, armor: CONFIG.armor.blockChance, poise: 110, morale: 140, elite: true },  // 重裝＋雙手斧：廣掃 cleave、hyperArmor 不怕打斷
+  civilian:     { name: '平民',        weaponId: 'knife',    hp: 30,              moveSpeed: 95,                     personality: 'holder',  hue: 150, radius: 11, opensDoors: false, poise: 20, morale: 25 },               // 事件演員(小男孩等)；演出鎖控制時不行動、開打才交戰
   dummy:        { name: '訓練假人',    weaponId: 'knife',    hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 60,  radius: 13, dummy: true, poise: 70 },                     // 只挨打不還手（enemyTick 早退）
   dummy_armor:  { name: '披甲假人',    weaponId: 'knife',    hp: 400,             moveSpeed: 0,                      personality: 'holder',  hue: 285, radius: 15, dummy: true, armor: CONFIG.armor.blockChance, poise: 130 },  // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
 };
@@ -1822,6 +1863,10 @@ function makePlayer(i, cfg, pos) {
     idleStrategy: { fireMode: arch.fireMode, targeting: 'NEAREST_IN_LOS', facing: arch.facing, discipline: disc },
     cmd: { mode: 'follow', pos: null, target: null },   // 指令層：預設跟隨騎士
     personality: CONFIG.ai[arch.aiPersonality || 'flanker'],   // **與敵人共用性格**（scoreNode 已陣營中立）
+    basePersonality: CONFIG.ai[arch.aiPersonality || 'flanker'],   // 士氣恢復時要換回來的那一組
+    moraleMax: Math.round(CONFIG.morale.max * (arch.moraleMul || 1)),
+    morale: Math.round(CONFIG.morale.max * (arch.moraleMul || 1) * (cfg.moraleFrac != null ? cfg.moraleFrac : 1)),
+    moraleState: 'steady', moraleT: -99, moraleFxT: 0,
     currentNode: null, targetNode: null,                       // 節點導航（與敵人同一套）
     // 以下是「當前主手」的鏡像（既有戰鬥碼只認得這些欄位；換 set 由 equipActiveSet 重寫）
     weaponId: mainSlot.weaponId, weapon: mainSlot.weapon, magazine: mainSlot.magazine, ammoInMag: mainSlot.ammoInMag, ammoReserve: mainSlot.ammoReserve, reloadT: 0, reloadDur: 0, bloom: 0,
@@ -1865,6 +1910,8 @@ function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.P
     senseRadius: CONFIG.vision.senseRadius * CONFIG.enemy.strength * (TYPE.senseMul || 1),
     coneHalfDeg: TYPE.coneHalfDeg || CONFIG.vision.coneHalfDeg,   // 逐單位視錐（警犬更寬）
     moveSpeed: TYPE.moveSpeed, armor: TYPE.armor || 0, attack: TYPE.attack || 'ranged', dummy: !!TYPE.dummy,
+    moraleMax: TYPE.morale || 0, morale: TYPE.morale || 0, moraleState: 'steady', moraleT: -99, moraleFxT: 0,
+    basePersonality: CONFIG.ai[personalityName],   // 士氣恢復時換回來的那一組
     burstLeft: (W.burst ? W.burst.size : 0), burstCd: 0,   // 重機槍點放節奏
     currentNode: nodeId, targetNode: nodeId, reservedNode: null,
     swing: null, blocking: false, blockT: null, staggerT: 0, kbx: 0, kby: 0, parryFxT: 0,   // 近接（敵人拿近接武器時同樣走揮斬管線）
@@ -1900,6 +1947,7 @@ const rosterFromPlayer = (p) => {
     bonusMaxHp: p.maxHp - CONFIG.unitHp - eqAdd, hp: p.hp,
     allocatedAmmo: m0 ? (isInfiniteAmmo(m0.weaponId) ? CONFIG.ammo.defaultAlloc : m0.ammoReserve) : CONFIG.ammo.defaultAlloc,
     disciplineOverride: p.disciplineOverride || null, equipId: p.equipId || null, armorId: p.armorId || 'none',
+    moraleFrac: clamp((p.morale || 0) / (p.moraleMax || 1) + CONFIG.morale.interMissionRestore, 0, 1),   // 過關後回一些；休息關全回
     itemId: (free2.count > 0 ? free2.id : null), itemCount: free2.count || 0, carriesFile: !!p.hasFile };
 };
 // 遺物恆有且只有一名攜帶者：跨關由撤出者保留旗標；若無（序章後首次/異常）給騎士，多於一名只留第一名
@@ -2600,7 +2648,8 @@ function enterRest(tutorial = false) {
     else if (it.kind === 'equip') warehouse.push({ kind: 'equip', id: it.id });   // 撿到的裝備進倉庫
   }
   backpack = [];
-  ensureFileCarrier();   // 機密檔案：序章後首次進休息＝主角(第一人)背上；之後維持單一攜帶者（可在配裝卡重新指派）
+  for (const r of (roster || [])) r.moraleFrac = CONFIG.morale.restRestore;   // 休息/野營＝士氣回復（使用者選的恢復槓桿之一）
+  ensureFileCarrier();   // 遺物：序章後首次進休息＝騎士背上；之後維持單一攜帶者（可在配裝卡重新指派）
 }
 
 // --- 搜刮＝純整補（零風險、無抉擇；風險集中在事件格）---
@@ -3423,6 +3472,14 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (u.hp <= 0) killUnit(u, (opts && opts.attacker) || null);
   return blocked;   // 近接判定用：true＝被盾格擋下（決定火花顏色/頓幀種類）
 }
+/* 潰逃脫離戰場：**不是擊殺**——不觸發 death/kill、不掉落、不計 KIA、不給士氣回饋。
+   「把敵人嚇跑」與「把敵人殺光」是兩種不同的解決方式，統計上也不該混為一談。 */
+function fleeUnit(e) {
+  if (e.dead) return;
+  e.dead = true; e.fled = true;
+  releaseReservation(e); releasePatrol(e); releaseAttackToken(e);
+  Hooks.fire('flee', { u: e });
+}
 function killUnit(u, killer) {
   // beforeDeath＝可攔截的死亡（roguelite 復活通道）：handler 設 prevented=true → 以 reviveHp 保命
   const bd = Hooks.fire('beforeDeath', { u, killer: killer || null, prevented: false, reviveHp: 1 });
@@ -3611,11 +3668,105 @@ function updateBullets(dt) {
 /* =====================================================================
    IdleAI — 待機策略（套懲罰、僅對「感知到」的敵人反應）
    ===================================================================== */
+/* ── 士氣：計量 → 兩段狀態 → 換性格 ───────────────────────────────────
+   騎士本人免疫（玩家的決心是玩家的事）；假人免疫。 */
+const hasMorale = (u) => !!u.moraleMax && !u.dummy && !(u.faction === 'player' && u.id === KNIGHT_ID);
+const isShaken = (u) => u.moraleState === 'shaken' || u.moraleState === 'routed';
+const isRouted = (u) => u.moraleState === 'routed';
+// 扣士氣（來源事件都走這裡）
+function hitMorale(u, amt) {
+  if (!hasMorale(u) || amt <= 0) return;
+  u.morale = Math.max(0, (u.morale || 0) - amt);
+  u.moraleT = simTime;
+  refreshMoraleState(u);
+}
+function healMorale(u, amt) {
+  if (!hasMorale(u) || amt <= 0) return;
+  u.morale = Math.min(u.moraleMax, (u.morale || 0) + amt);
+  refreshMoraleState(u);
+}
+// 狀態切換＋**換性格**（動搖＝CONFIG.ai.shaken：負 wRush 拉開距離、躲掩體）
+function refreshMoraleState(u) {
+  if (!hasMorale(u)) return;
+  const M = CONFIG.morale, prev = u.moraleState;
+  if (u.morale <= 0) u.moraleState = 'routed';
+  else if (u.moraleState === 'routed') { if (u.morale >= M.shakenAt) u.moraleState = 'shaken'; }
+  else if (u.morale < M.shakenAt) u.moraleState = 'shaken';
+  else if (u.moraleState === 'shaken' && u.morale >= M.shakenAt + M.rallyHysteresis) u.moraleState = 'steady';
+  if (u.moraleState !== prev) {
+    u.moraleFxT = 1.0;
+    u.personality = isShaken(u) ? CONFIG.ai.shaken : (u.basePersonality || u.personality);
+    if (isRouted(u)) { u.swing = null; u.blocking = false; u.blockT = null; releaseAttackToken(u); }
+    Hooks.fire('morale', { u, state: u.moraleState, prev });
+  }
+}
+// 每幀：包圍壓力 + 恢復（騎士光環／基礎回復）
+function tickMorale(u, dt) {
+  if (!hasMorale(u)) return;
+  const M = CONFIG.morale;
+  let foes = 0;
+  for (const o of [...activePlayers(), ...enemies]) {
+    if (o === u || o.dead || o.state === 'DEAD' || o.state === 'EXTRACTED') continue;
+    if (!hostile(u.faction, o.faction)) continue;
+    if (dist(o.pos, u.pos) <= M.outnumberRadius) foes++;
+  }
+  if (foes >= 2) { u.morale = Math.max(0, u.morale - (foes - 1) * M.outnumberPerFoe * dt); u.moraleT = simTime; }   // 一對一不算被圍
+  else if (simTime - (u.moraleT || -99) >= M.regenDelay) {
+    /* 恢復：**打鬥中不會自己回神**——否則潰逃只是短暫一�耷，逃一逃就回滿殺回來
+       （實測：農兵 5s 全潰逃，15s 後士氣全回、又衝上來，等於這個系統沒發生過）。
+       唯一能在戰鬥中回士氣的是**騎士的將領光環**＝玩家的槓桿。 */
+    let nearFoe = false;
+    for (const o of [...activePlayers(), ...enemies]) {
+      if (o === u || o.dead || o.state === 'DEAD' || o.state === 'EXTRACTED') continue;
+      if (!hostile(u.faction, o.faction)) continue;
+      if (dist(o.pos, u.pos) <= M.regenSafeRange) { nearFoe = true; break; }
+    }
+    let rg = nearFoe ? 0 : M.baseRegen;
+    if (u.faction === 'player') {   // 將領光環：即使在交火中也有效（這是騎士「重新聚攏部下」的手段）
+      const k = knight();
+      if (k && k.state === 'CONTROLLED' && dist(k.pos, u.pos) <= M.knightAura) rg += M.knightRegen * (isRouted(u) ? M.routAuraMul : 1);
+    }
+    if (rg > 0) u.morale = Math.min(u.moraleMax, u.morale + rg * dt);
+  }
+  // 潰逃者跑得夠遠＝真的脫離戰場（敵人：離場不算擊殺、不掉落；我方：已由 EXTRACTING 處理）
+  if (isRouted(u) && u.faction !== 'player' && !u.dead) {
+    let nearest = Infinity;
+    for (const o of activePlayers()) nearest = Math.min(nearest, dist(o.pos, u.pos));
+    if (nearest > M.fleeAwayDist) fleeUnit(u);
+  }
+  refreshMoraleState(u);
+  if (u.moraleFxT > 0) u.moraleFxT -= dt;
+}
+/* 士氣的觸發全部掛在既有的 Hooks 上（引擎不必為士氣開新洞）。 */
+Hooks.on('hurt', 'morale', (c) => hitMorale(c.u, c.dealt * CONFIG.morale.perDamage));
+Hooks.on('poiseBroken', 'morale', (c) => hitMorale(c.u, CONFIG.morale.onPoiseBroken));
+Hooks.on('death', 'morale', (c) => {
+  const M = CONFIG.morale, dead = c.u;
+  const mul = (dead.type && dead.type.elite) ? M.eliteDeathMul : 1;
+  for (const o of [...activePlayers(), ...enemies]) {   // 同陣營、看得到範圍內＝士氣衝擊
+    if (o === dead || o.dead) continue;
+    if (hostile(dead.faction, o.faction)) continue;
+    if (dist(o.pos, dead.pos) > M.allyDeathRadius) continue;
+    hitMorale(o, M.onAllyDeath * mul);
+  }
+});
+Hooks.on('kill', 'morale', (c) => {
+  const M = CONFIG.morale, amt = c.elite ? M.onKillElite : M.onKill;
+  const src = c.killer; if (!src) return;
+  for (const o of [...activePlayers(), ...enemies]) {   // 擊殺者 + 半徑內同陣營一起回士氣
+    if (o.dead) continue;
+    if (hostile(src.faction, o.faction)) continue;
+    if (o !== src && dist(o.pos, src.pos) > M.killShareRadius) continue;
+    healMorale(o, amt);
+  }
+});
+
 /* ── 指令：錨點解析 + 下令 ─────────────────────────────────────────────
    anchorOf(u) 回 { pos, leash } 或 null（null＝不受繩長約束，例如敵人）。 */
 function anchorOf(u) {
   if (!u || u.faction !== 'player' || !u.cmd) return null;   // 目前只有扈從吃指令；敵人維持原本的自由行動
   const C = CONFIG.command, c = u.cmd;
+  if (isRouted(u)) return null;                              // 潰逃：不再接受指令（由 extractTick 帶他跑）
   if (c.mode === 'hold') return c.pos ? { pos: c.pos, leash: C.holdLeash } : null;
   if (c.mode === 'focus') { const t = c.target; return (t && !t.dead && t.hp > 0) ? { pos: t.pos, leash: C.focusLeash } : { pos: (knight() || u).pos, leash: C.followLeash }; }
   if (c.mode === 'follow') { const k = knight(); return k ? { pos: k.pos, leash: C.followLeash } : null; }
@@ -3943,6 +4094,18 @@ function huntStep(e, dt) {   // 沒有已知目標：有焦點區→清查；否
 function enemyTick(e, dt) {
   if (e.staggerT > 0) return;   // 硬直（被戰鎚打中/招架失敗）：完全不行動
   if (e.dummy) return;          // 訓練假人（近戰試作場）：只挨打，不思考
+  // 士氣潰逃：丟下戰鬥往入口方向跑（不還手）。**這是「孤騎對軍團」的解**——
+  // 你殺不完十個人，但砍倒兩個雜兵、再殺掉他們的菁英，剩下的就散了。
+  if (isRouted(e)) {
+    releaseAttackToken(e);
+    const away = ENTRY || { x: e.pos.x, y: e.pos.y };
+    const f0 = nearestFriendly(e.pos);
+    const goal = f0 ? { x: e.pos.x + (e.pos.x - f0.pos.x), y: e.pos.y + (e.pos.y - f0.pos.y) } : away;   // 背向最近的敵人逃
+    moveToward(e, goal, e.moveSpeed * CONFIG.morale.routSpeedMul * dt);
+    e.facing = rotToward(e.facing, angTo(e.pos, goal), e.weapon.turnSpeed * Math.PI / 180 * dt);
+    openDoorsNear(e, false);
+    return;
+  }
   const f = nearestFriendly(e.pos);
   const aiFoe = nearestHostileAI(e);   // 多陣營：看得到的他陣營 AI
   // 識別空窗（潛行）：IDLE 時看到玩家不立刻交戰，先累積 detect；滿才 ENGAGED。快速閃過＝累不滿。
@@ -4397,8 +4560,8 @@ function update(dt) {
 
   const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
   const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
-  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickResources(p, dt); meleeFxDecay(p); }
-  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickResources(e, dt); meleeFxDecay(e); }
+  for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickAmmo(p, dt); tickPassives(p, dt); tickMelee(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
+  for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.suppressedT > 0) e.suppressedT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
   pruneAttackTokens();   // 攻擊權：過期的釋放出來給別隻
   if (cmdFlashT > 0) cmdFlashT -= dt;
 
@@ -4450,7 +4613,11 @@ function update(dt) {
   }
 
   // 2) AI 扈從待機 / 自走撤離（扈從恆為 IDLE 人格；騎士只有按 H 自走時才進 EXTRACTING）
-  for (const p of players) { if (p.state === 'IDLE') idleTick(p, dt); else if (p.state === 'EXTRACTING') extractTick(p, dt); }
+  // 士氣潰逃的扈從：**不再接受指令**，直接轉成自走撤離＝往撤離點跑（活著離場，但這一場你失去他）
+  for (const p of players) {
+    if (p.id !== KNIGHT_ID && isRouted(p) && p.state === 'IDLE') { p.idleAnchor = p.facing; p.state = 'EXTRACTING'; p.extractNode = null; }
+    if (p.state === 'IDLE') idleTick(p, dt); else if (p.state === 'EXTRACTING') extractTick(p, dt);
+  }
 
   // 3) 敵人 AI（先更新共享情報/搜索焦點，再逐一行動）
   updateThreatKnowledge();
@@ -5363,6 +5530,30 @@ function drawCommandWheel() {
   ctx.fillText('滑鼠左右轉動選擇 · 放開 G 下令', cx, cy + R + 74);
   ctx.textAlign = 'left';
 }
+/* 士氣旗標（使用者要的「旗標點亮」）：動搖＝琥珀色搖晃的旗、潰逃＝紅旗+「潰逃」。
+   士氣是**看得見的失敗狀態**，玩家必須讀得出來，否則行為突然改變會像是遊戲在耍你。 */
+function drawMoraleFlag(u, s) {
+  if (!hasMorale(u) || u.moraleState === 'steady') return;
+  if (u.dead || u.state === 'DEAD' || u.state === 'EXTRACTED') return;
+  const routed = isRouted(u);
+  const y = s.y - u.radius * cam.scale - 16;
+  const wob = Math.sin(simTime * (routed ? 16 : 9)) * (routed ? 3 : 1.6);   // 旗在抖
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${routed ? 15 : 13}px Consolas`;
+  const a = 0.6 + 0.4 * Math.sin(simTime * (routed ? 14 : 7));
+  ctx.fillStyle = routed ? `rgba(255,80,80,${a})` : `rgba(255,190,80,${a})`;
+  ctx.fillText('⚑', s.x + wob, y);
+  if (routed) { ctx.font = 'bold 10px Consolas'; ctx.fillText('潰逃', s.x, y - 12); }
+  // 剛切換狀態時的強調（短暫放大提示）
+  if (u.moraleFxT > 0) {
+    ctx.font = 'bold 12px Consolas';
+    ctx.globalAlpha = Math.min(1, u.moraleFxT);
+    ctx.fillStyle = routed ? '#ff8080' : '#ffd27a';
+    ctx.fillText(MORALE_STATE[u.moraleState], s.x, y - (routed ? 26 : 14));
+    ctx.globalAlpha = 1;
+  }
+  ctx.textAlign = 'left';
+}
 function drawScreenOverlays() {
   // 區域標記（永遠正立、離場時夾到邊緣）
   const reinforcing = simTime > curTimeBudget;
@@ -5396,6 +5587,7 @@ function drawScreenOverlays() {
       ctx.fillStyle = `rgba(255,90,90,${0.55 + 0.45 * Math.sin(simTime * 12)})`;
       ctx.fillText('⚠ 重傷', s.x, s.y - p.radius * cam.scale - 26);
     }
+    drawMoraleFlag(p, s);
     ctx.textAlign = 'left';
     // 離場(畫面外)的我方 → 邊緣箭頭
     edgeMarker(p.pos, hsl(p.hue, 60, 65), null, true);
@@ -5411,6 +5603,7 @@ function drawScreenOverlays() {
       const f = clamp((e.poise || 0) / e.poiseMax, 0, 1);
       screenBar(s, f, f < 0.34 ? '#ffd24a' : 'rgba(210,170,90,0.85)', -e.radius * cam.scale - 5);
     }
+    drawMoraleFlag(e, s);
   }
   drawKnightResources();
   drawCommandWheel();
