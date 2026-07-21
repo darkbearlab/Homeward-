@@ -291,6 +291,8 @@ CONFIG.melee = {
   poiseBreakKnockMul: 2.5, // 體幹破當下的擊退倍率
   blockPoiseMul: 0.5,      // 舉盾擋下時，體幹只吃這個比例（擋得住傷害，擋不住全部衝擊）
   hyperPoiseMul: 0.5,      // hyperArmor 武器在判定窗中，體幹傷害只吃這個比例
+  armorPoiseMul: 1.7,      // **被裝甲整發彈開的那一擊，體幹傷害加成**（刀滑開了，力道全變成衝擊）
+                           // ＝裝甲讓你砍不動他、但更容易把他砸崩。重裝的解法是鈍器，不是硬砍。
 
   /* ── 耐力（stamina）：解決「攻擊沒有成本」────────────────────────────
      揮擊/格擋/奔跑都要錢。歸零＝揮不動；**舉盾時耐力不足擋下 → 直接破防**（＝體幹破）。
@@ -356,6 +358,22 @@ const EQUIPMENT = {
   shield:   { name: '圓盾',      rarity: 'common',   fx: { dmgResist: 0.12, moveMul: 0.95 } },
   kite:     { name: '鳶盾',      rarity: 'uncommon', fx: { dmgResist: 0.2,  moveMul: 0.88, turnMul: 0.9 } },
 };
+
+/* =====================================================================
+   ARMORS — 身上的甲（HOMEWARD 新增，獨立於 EQUIPMENT 的槽位）
+   走的是與重裝敵人**完全相同**的機制：機率「整發擋下」非穿甲攻擊（有效擋格率 = armor × (1−pierce)）。
+   代價是移動與耐力回復——穿得越重越挨得住，但揮不了幾刀、跑不動、久戰必竭。
+   （呼應主題：疲憊的敗軍騎士。裝甲不是純加值，是「安全 vs 續戰力」的取捨。）
+   ※ 繞背(flank)無視裝甲；被彈開的那一擊體幹傷害 ×CONFIG.melee.armorPoiseMul ＝重甲更怕鈍器。
+   ===================================================================== */
+const ARMORS = {
+  none:    { name: '布衣',   rarity: 'common',   armor: 0,    moveMul: 1.00, stamRegenMul: 1.00, weight: 0 },
+  gambeson:{ name: '厚襖',   rarity: 'common',   armor: 0.18, moveMul: 0.98, stamRegenMul: 0.95, weight: 0.5 },
+  mail:    { name: '鎖子甲', rarity: 'common',   armor: 0.35, moveMul: 0.95, stamRegenMul: 0.90, weight: 1.2 },
+  cuirass: { name: '胸甲',   rarity: 'uncommon', armor: 0.55, moveMul: 0.90, stamRegenMul: 0.80, weight: 2.0 },
+  plate:   { name: '板甲',   rarity: 'rare',     armor: 0.75, moveMul: 0.82, stamRegenMul: 0.65, weight: 3.2 },
+};
+const ARMOR_IDS = Object.keys(ARMORS);
 const EQUIP_IDS = Object.keys(EQUIPMENT);
 const LOOT_EQUIP_IDS = EQUIP_IDS.slice();
 
@@ -1564,6 +1582,7 @@ function makePlayer(i, cfg, pos) {
   const ab = ABILITIES[cfg.abilityId];
   const arch = ARCHETYPES[cfg.archetypeId];
   const fx = (cfg.equipId && EQUIPMENT[cfg.equipId]) ? EQUIPMENT[cfg.equipId].fx : {};   // 裝備持續被動
+  const AR = ARMORS[cfg.armorId] || ARMORS.none;                                         // 身上的甲（獨立槽位）
   const maxHp = CONFIG.unitHp + (cfg.bonusMaxHp || 0) + (fx.maxHpAdd || 0);
   // 跨關回復：以攜帶的當前血量為底，回復「缺口 × interMissionHealFrac」（frac=1 → 滿血，與舊行為一致）
   const carried = clamp(cfg.hp != null ? cfg.hp : maxHp, 0, maxHp);
@@ -1594,7 +1613,8 @@ function makePlayer(i, cfg, pos) {
     abilityId: cfg.abilityId, ability: ab, abilityCd: 0,
     equipId: cfg.equipId || null, itemId: cfg.itemId || null, itemCount: cfg.itemId ? (cfg.itemCount || 1) : 0,   // 裝備槽 / 道具槽(itemCount 充能)
     dmgResist: fx.dmgResist || 0, reloadMul: (fx.reloadMul || 1) * pReload, spreadMul: fx.spreadMul || 1,
-    turnSpeed: W.turnSpeed * (fx.turnMul || 1) * pTurn, moveMul: fx.moveMul || 1,
+    turnSpeed: W.turnSpeed * (fx.turnMul || 1) * pTurn, moveMul: (fx.moveMul || 1) * AR.moveMul,
+    armorId: cfg.armorId || 'none', armor: AR.armor, stamRegenMul: AR.stamRegenMul,   // 身上的甲：與重裝敵人同一套機率擋格機制（代價＝移速/耐力回復）
     coneHalfDeg: pCone,                    // 斥候＝視錐更寬（null＝用全域）
     buffT: 0, buffMove: 1, buffFire: 1,    // 道具（腎上腺素）短時 buff
     passBuffT: 0, passBuffMove: 1, passBuffFire: 1, stillT: 0, momentumT: 0, regenT: 0, suppressedT: 0,   // 被動時間態
@@ -1648,7 +1668,7 @@ const baseRoster = () => { const used = new Set(); return Array.from({ length: C
 const rosterFromPlayer = (p) => {
   const eqAdd = (p.equipId && EQUIPMENT[p.equipId] && EQUIPMENT[p.equipId].fx.maxHpAdd) || 0;  // 裝備加的 maxHp 不算進 bonusMaxHp
   const w2 = p.weapon2 || null;   // 副武器槽（換槍後 active/stowed 可能已對調，以當下 active 為 weaponId）
-  return { name: p.name, hue: p.hue, strength: p.strength, weaponId: p.weaponId, abilityId: p.abilityId, archetypeId: p.archetypeId, tier: p.tier || 0, passives: (p.passives || []).slice(), weaponId2: w2 ? w2.weaponId : null, allocatedAmmo2: w2 ? (isInfiniteAmmo(w2.weaponId) ? 0 : w2.ammoReserve) : 0, bonusMaxHp: p.maxHp - CONFIG.unitHp - eqAdd, hp: p.hp, allocatedAmmo: isInfiniteAmmo(p.weaponId) ? CONFIG.ammo.defaultAlloc : p.ammoReserve, disciplineOverride: p.disciplineOverride || null, equipId: p.equipId || null, itemId: (p.itemCount > 0 ? p.itemId : null), itemCount: p.itemCount || 0, carriesFile: !!p.hasFile };
+  return { name: p.name, hue: p.hue, strength: p.strength, weaponId: p.weaponId, abilityId: p.abilityId, archetypeId: p.archetypeId, tier: p.tier || 0, passives: (p.passives || []).slice(), weaponId2: w2 ? w2.weaponId : null, allocatedAmmo2: w2 ? (isInfiniteAmmo(w2.weaponId) ? 0 : w2.ammoReserve) : 0, bonusMaxHp: p.maxHp - CONFIG.unitHp - eqAdd, hp: p.hp, allocatedAmmo: isInfiniteAmmo(p.weaponId) ? CONFIG.ammo.defaultAlloc : p.ammoReserve, disciplineOverride: p.disciplineOverride || null, equipId: p.equipId || null, armorId: p.armorId || 'none', itemId: (p.itemCount > 0 ? p.itemId : null), itemCount: p.itemCount || 0, carriesFile: !!p.hasFile };
 };
 // 遺物恆有且只有一名攜帶者：跨關由撤出者保留旗標；若無（序章後首次/異常）給騎士，多於一名只留第一名
 // CONFIG.relicEnabled 關閉（Phase 0）時整組清空＝配裝卡不顯示攜帶徽章、結算不檢查
@@ -1775,11 +1795,23 @@ let arenaWIdx = 0;              // 目前近接武器在 MELEE_WEAPON_IDS 的索
 let arenaStats = { swings: 0, hits: 0, blocked: 0, parried: 0, dmg: 0, lastHits: 0, lastDmg: 0, tookHits: 0, tookBlocked: 0, tookParried: 0, brokeFoe: 0, interrupted: 0, noStam: 0, tookBreak: 0 };
 const arenaWeaponId = () => MELEE_WEAPON_IDS[((arenaWIdx % MELEE_WEAPON_IDS.length) + MELEE_WEAPON_IDS.length) % MELEE_WEAPON_IDS.length];
 
+let arenaArmorIdx = 2;          // 試作場預設鎖子甲（C 鍵循環布衣→厚襖→鎖子甲→胸甲→板甲）
 const arenaMember = (name, hue, wid, arch) => ({
   name, hue, strength: 1, weaponId: wid, weaponId2: 'dagger', abilityId: 'heal', archetypeId: arch,
   tier: 0, passives: [], bonusMaxHp: 0, allocatedAmmo: 0, allocatedAmmo2: 0,
-  equipId: 'shield', itemId: null, itemCount: 0, carriesFile: false,
+  equipId: 'shield', itemId: null, itemCount: 0, carriesFile: false, armorId: ARMOR_IDS[arenaArmorIdx] || 'none',
 });
+// 換甲（試作場熱鍵）：重建 makePlayer 太重，直接改活值（armor/移速/耐力回復/負重全部即時生效）
+function arenaSetArmor(i) {
+  if (!arenaMode) return;
+  arenaArmorIdx = ((i % ARMOR_IDS.length) + ARMOR_IDS.length) % ARMOR_IDS.length;
+  const k = knight(); if (!k) return;
+  const id = ARMOR_IDS[arenaArmorIdx], AR = ARMORS[id];
+  const eqFx = (k.equipId && EQUIPMENT[k.equipId]) ? EQUIPMENT[k.equipId].fx : {};
+  k.armorId = id; k.armor = AR.armor; k.stamRegenMul = AR.stamRegenMul;
+  k.moveMul = (eqFx.moveMul || 1) * AR.moveMul;
+  Sfx.play('swap', k.pos);
+}
 function arenaRoster() {
   const r = [arenaMember('騎士', 205, arenaWeaponId(), 'anchor')];
   if (arenaAllies) { r.push(arenaMember('扈從·磐石', 185, 'sword', 'anchor')); r.push(arenaMember('扈從·先鋒', 35, 'axe', 'spearhead')); }
@@ -2426,7 +2458,7 @@ function tickResources(u, dt) {
   }
   if (u.stamMax) {
     if (simTime - (u.stamT || -99) >= M.stamRegenDelay)
-      u.stam = Math.min(u.stamMax, (u.stam || 0) + M.stamRegen * (u.blocking ? M.stamBlockRegenMul : 1) * dt);
+      u.stam = Math.min(u.stamMax, (u.stam || 0) + M.stamRegen * (u.blocking ? M.stamBlockRegenMul : 1) * (u.stamRegenMul || 1) * dt);   // 重甲＝耐力回得慢
   }
 }
 function spendStam(u, n) { if (!u.stamMax) return true; u.stam = Math.max(0, (u.stam || 0) - n); u.stamT = simTime; return true; }
@@ -2844,6 +2876,25 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
     }
     if (opts) opts = Object.assign({}, opts, { knock: (opts.knock || 0) * 0.35, stagger: 0 });   // 擋下＝擊退大減
   }
+  // ---- 繞背/突襲判定（裝甲擲骰與傷害倍率都要用）----
+  const coneHalf = (u.coneHalfDeg || CONFIG.vision.coneHalfDeg) * Math.PI / 180;
+  let flanked = (fromAng != null) && Math.abs(angDiff(fromAng, u.facing)) > coneHalf;   // 錐外＝繞背
+  if (blocked) flanked = false;                                                            // 擋下來的那一擊不算繞背
+  if (flanked && passiveNegateCrit(u)) flanked = false;                                    // 眼觀四面/不動如山(靜止)：玩家不吃暴擊加成（仍有正面減傷）
+  const surprise = (u.faction !== 'player' && u.state === 'IDLE');                          // 閒置 AI 被突襲（任一 AI 陣營）
+  const mult = flanked ? CONFIG.flank.flankMult : (surprise ? CONFIG.flank.surpriseMult : 1);  // 取較高、不相乘
+  if (u.faction !== 'player') {   // 任一 AI 陣營被打（不論後續有沒有被甲彈開）
+    u.state = 'ENGAGED';   // 被攻擊（即使被甲擋下）也進入交戰（latch）
+    if (fromAng != null) registerHitThreat(u, fromAng);   // 被擊中→把「來向」當局部脅威傳給：本人＋看得到本人的敵＋近隣（解側翼魚貫＝後續的人出來就朝來向）
+  }
+  /* ---- 裝甲：機率「整發擋下」非穿甲攻擊（繞背無視）。有效擋格率 = armor × (1 − pierce)。
+     **擋下 ≠ 沒事**：刀砍在板甲上不會流血，但力道全部變成衝擊 → 體幹傷害改為 ×armorPoiseMul（>1）。
+     所以裝甲的意義是「砍不動他，但更容易把他砸崩」＝重裝的解法是鈍器/破甲，而不是硬砍。
+     這也讓穿重甲的騎士有真實代價：不容易受傷，但更容易被打崩。
+     ※ 必須排在體幹之前，因為體幹傷害要看這一擊有沒有被甲彈開。 ---- */
+  // ※ 盾格已擋下的攻擊不再擲甲（盾攔住的刀根本沒碰到甲＝不做雙重防禦）
+  const armorBlocked = !blocked && !flanked && (u.armor > 0) && Math.random() < u.armor * (1 - pierce);
+  if (armorBlocked) { spawnBlock(u.pos); poiseDmg *= M.armorPoiseMul; }
   // ---- 體幹：扣光＝大硬直＋處決窗。hyperArmor（斧/鎚判定窗中）只吃一半 ----
   if (poiseDmg > 0 && u.poiseMax) {
     const wasSwinging = !!u.swing, inWindup = wasSwinging && u.swing.t < u.swing.windup;
@@ -2856,18 +2907,8 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
     applyKnock(u, fromAng + Math.PI, opts.knock || 0);                                   // 往「背離攻擊者」的方向推
     if (opts.stagger) { u.staggerT = Math.max(u.staggerT || 0, opts.stagger); u.swing = null; }
   }
+  if (armorBlocked) return blocked;   // 被甲彈開：不流血（體幹/擊退已在上面結算過了）
   if (u.staggerT > 0 && !blocked) dmg *= M.poiseBreakDmgMul;   // 處決窗：硬直中的人挨打特別痛
-  const coneHalf = (u.coneHalfDeg || CONFIG.vision.coneHalfDeg) * Math.PI / 180;
-  let flanked = (fromAng != null) && Math.abs(angDiff(fromAng, u.facing)) > coneHalf;   // 錐外＝繞背
-  if (blocked) flanked = false;                                                            // 擋下來的那一擊不算繞背
-  if (flanked && passiveNegateCrit(u)) flanked = false;                                    // 眼觀四面/不動如山(靜止)：玩家不吃暴擊加成（仍有正面減傷）
-  const surprise = (u.faction !== 'player' && u.state === 'IDLE');                          // 閒置 AI 被突襲（任一 AI 陣營）
-  const mult = flanked ? CONFIG.flank.flankMult : (surprise ? CONFIG.flank.surpriseMult : 1);  // 取較高、不相乘
-  if (u.faction !== 'player') {   // 任一 AI 陣營被打
-    u.state = 'ENGAGED';   // 被攻擊（即使被甲擋下）也進入交戰（latch）
-    if (fromAng != null) registerHitThreat(u, fromAng);   // 被擊中→把「來向」當局部脅威傳給：本人＋看得到本人的敵＋近隣（解側翼魚貫＝後續的人出來就朝來向）
-    if (!flanked && u.armor > 0 && Math.random() < u.armor * (1 - pierce)) { spawnBlock(u.pos); return blocked; }   // 裝甲：整發擋下非穿甲（繞背無視）
-  }
   const resist = flanked ? 0 : (u.dmgResist || 0);   // 繞背無視所有裝甲（含玩家固定減傷＝甲只罩正面）
   u.hp -= dmg * mult * (1 - resist) * (u.faction === 'player' ? passiveDmgTakenMul(u) : 1);   // 被動減傷：据守/不動如山/死守
   if (u.faction === 'player') { u.alertTimer = CONFIG.ghostAlertTime; u.regenT = 0; }   // 受傷＝在戰鬥（清戰場急救脫戰計時）
@@ -3413,7 +3454,7 @@ function extractTick(u, dt) {
    Movement helpers
    ===================================================================== */
 // Shift 奔跑倍率：隨武器重量遞減（夾在 minMult..base）
-const carriedWeight = (u) => (u.weapon.weight || 0) + (u.weapon2 ? (u.weapon2.weapon.weight || 0) : 0);   // 主+副總重（雙武器的負重代價）
+const carriedWeight = (u) => (u.weapon.weight || 0) + (u.weapon2 ? (u.weapon2.weapon.weight || 0) : 0) + ((ARMORS[u.armorId] || ARMORS.none).weight || 0);   // 主+副+身上的甲（負重代價：影響奔跑）
 const sprintMult = (u) => clamp(CONFIG.sprint.base - (carriedWeight(u) - 1) * CONFIG.sprint.weightPenalty, CONFIG.sprint.minMult, CONFIG.sprint.base);
 
 function moveToward(u, goal, step) {
@@ -3675,6 +3716,7 @@ window.addEventListener('keydown', e => {
     if (k === 'tab') { arenaSetWeapon(arenaWIdx + (e.shiftKey ? -1 : 1)); e.preventDefault(); }   // Tab 循環近接武器
     if (k === 't') arenaResetFight();                                    // T 重來
     if (k === 'y') for (const e of enemies) if (!e.dead && !e.dummy) { e.state = 'ENGAGED'; e.detect = 1; }   // Y 叫敵人立刻開戰（不用走過去引怪）
+    if (k === 'c') { arenaSetArmor(arenaArmorIdx + 1); e.preventDefault(); return; }   // C 換身上的甲（蓋掉道具鍵；試作場用不到道具）
     if (k === 'n') arenaNoFog = !arenaNoFog;                             // N 迷霧開關
     if (k === 'b') { arenaAllies = !arenaAllies; enterArena(); }         // B 有無扈從（重建）
     if (k === 'm') { arenaMode = false; goMenu(); e.preventDefault(); return; }   // M 回主選單（戰役等原有功能）
@@ -3876,7 +3918,13 @@ function drawArenaHUD() {
     ['hyperArmor', W.hyperArmor ? '有(判定窗)' : '—'],
     ['cleave', W.cleave], ['擊退距離', Math.round((W.knock || 0) / CONFIG.melee.knockDecay) + 'px'],
     ['背刺', '×' + (W.backstabMul || 1)],
+    ['穿甲 vs 重裝(0.85)', Math.round(0.85 * (1 - W.pierce) * 100) + '% 被彈開'],
   ] : [['（遠程武器）', W.name]];
+  const AR = ARMORS[k.armorId] || ARMORS.none;
+  rows.push(['—', '']);
+  rows.push(['身上的甲', AR.name + '（C 換）']);
+  rows.push(['擋格率', Math.round(AR.armor * 100) + '%']);
+  rows.push(['移速/耐力回復', '×' + AR.moveMul.toFixed(2) + ' / ×' + AR.stamRegenMul.toFixed(2)]);
   const bw = 208, bh = 30 + rows.length * 15;
   ctx.fillStyle = 'rgba(10,14,20,0.82)'; ctx.fillRect(pad, pad, bw, bh);
   ctx.strokeStyle = 'rgba(160,180,200,0.35)'; ctx.lineWidth = 1; ctx.strokeRect(pad, pad, bw, bh);
@@ -3914,7 +3962,7 @@ function drawArenaHUD() {
     ctx.fillStyle = '#cdd6e0'; ctx.textAlign = 'right'; ctx.fillText(String(r[1]), sx + sw - 9, y); ctx.textAlign = 'left';
   });
   // 底部：熱鍵
-  const keysLine = `1-${MELEE_WEAPON_IDS.length}/Tab 換近接武器（${MELEE_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 數值面板 · M 主選單`;
+  const keysLine = `1-${MELEE_WEAPON_IDS.length}/Tab 換武器（${MELEE_WEAPON_IDS.map((id, i) => `${i + 1}=${WEAPONS[id].name}`).join(' ')}） · C 換甲[${(ARMORS[k.armorId] || ARMORS.none).name}] · T 重來 · Y 敵人開戰 · N 迷霧[${arenaNoFog ? '關' : '開'}] · B 扈從[${arenaAllies ? '有' : '無'}] · \` 面板 · M 選單`;
   ctx.textAlign = 'center'; ctx.font = '11px Consolas'; ctx.fillStyle = 'rgba(160,180,200,0.85)';
   ctx.fillText(keysLine, cv.width / 2, cv.height - 112);
   ctx.fillStyle = 'rgba(127,227,255,0.8)';
