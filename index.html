@@ -651,6 +651,10 @@ const ARMORS = {
 const ARMOR_IDS = Object.keys(ARMORS);
 const EQUIP_IDS = Object.keys(EQUIPMENT);
 const LOOT_EQUIP_IDS = EQUIP_IDS.slice();
+// 盾與甲**進戰利品經濟**（Phase 2-B）：這兩張表本來就有 name/rarity，只是從來沒接線，
+// 導致戰役裡永遠拿不到盾也換不了甲——四槽位的副手格因此一直是空的。
+const LOOT_OFF_IDS = OFFHAND_IDS.slice();
+const LOOT_ARMOR_IDS = ARMOR_IDS.filter(id => id !== 'none');   // 布衣＝預設起始，不當戰利品
 
 /* =====================================================================
    局外進度（meta，跨 run 持久；橫向解鎖為主，不破壞局內平衡）。
@@ -2545,7 +2549,9 @@ function applyEventOutcome(o, mi) {
     case 'weapon': { const id = o.id || rollLootWeapon(); warehouse.push({ kind: 'weapon', id }); return `取得武器 ${WEAPONS[id].name}`; }
     case 'equip': { const id = o.id || rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); return `取得裝備 ${EQUIPMENT[id].name}`; }
     case 'item': { const id = o.id || rngPick(LOOT_ITEM_IDS); giveItemStack(id); return `取得道具 ${ITEMS[id].name} ×${ITEM_STACK_MAX}`; }
-    case 'loot': { const out = []; for (let i = 0; i < (o.n || 1); i++) out.push(applyEventOutcome(rngPick([{ type: 'weapon' }, { type: 'equip' }, { type: 'item' }]))); return out.join('、'); }
+    case 'off': { const id = o.id || rngPick(availPool('off', LOOT_OFF_IDS)); warehouse.push({ kind: 'off', id }); return `取得副手 ${OFFHANDS[id].name}`; }
+    case 'armor': { const id = o.id || rngPick(availPool('armor', LOOT_ARMOR_IDS)); warehouse.push({ kind: 'armor', id }); return `取得甲 ${ARMORS[id].name}`; }
+    case 'loot': { const out = []; for (let i = 0; i < (o.n || 1); i++) out.push(applyEventOutcome(rngPick([{ type: 'weapon' }, { type: 'equip' }, { type: 'item' }, { type: 'off' }, { type: 'armor' }]))); return out.join('、'); }
     case 'heal': { for (const r of roster) r.hp = Math.min(rmaxhp(r), (r.hp || 0) + (o.amt || 20)); return `全隊回復 ${o.amt || 20}HP`; }
     case 'damage': { for (const r of roster) r.hp = Math.max(1, (r.hp != null ? r.hp : rmaxhp(r)) - (o.amt || 10)); return `全隊 −${o.amt || 10}HP（未致命）`; }
     case 'maxhp': { if (mi != null && roster[mi]) { roster[mi].bonusMaxHp = (roster[mi].bonusMaxHp || 0) + (o.amt || 15); return `${roster[mi].name} +${o.amt || 15} maxHP`; } for (const r of roster) r.bonusMaxHp = (r.bonusMaxHp || 0) + (o.amt || 10); return `全隊 +${o.amt || 10} maxHP`; }
@@ -2792,7 +2798,9 @@ function rollArmory(n) {
   const equipO = () => { const id = rngPick(availPool('equip', LOOT_EQUIP_IDS)), E = EQUIPMENT[id]; return { type: 'equip', id, label: `裝備 · ${E.name}（${E.rarity}）`, color: '#9fd0e0' }; };
   const ability = () => { const id = rngPick(availPool('ability', LOOT_ABILITY_IDS)), A = ABILITIES[id]; return { type: 'ability', id, label: `技能 · ${A.name}`, color: '#c0a0ff' }; };
   const itemO = () => { const id = rngPick(LOOT_ITEM_IDS), I = ITEMS[id]; return { type: 'item', id, label: `道具 · ${I.name}`, color: '#ffd27d' }; };
-  const gens = [weapon, equipO, ability, itemO];
+  const offO = () => { const id = rngPick(availPool('off', LOOT_OFF_IDS)), O = OFFHANDS[id]; return { type: 'off', id, label: `副手 · ${O.name}（${O.rarity}）`, color: '#bfe6ff' }; };
+  const armorO = () => { const id = rngPick(availPool('armor', LOOT_ARMOR_IDS)), A = ARMORS[id]; return { type: 'armor', id, label: `甲 · ${A.name}（${A.rarity}）`, color: '#e0c24a' }; };
+  const gens = [weapon, equipO, ability, itemO, offO, armorO];
   const offers = []; while (offers.length < n) offers.push(rngPick(gens)());
   return offers;
 }
@@ -2878,6 +2886,8 @@ function rollResupply() {
     else if (c === 'weapon') { const id = rollLootWeapon(); warehouse.push({ kind: 'weapon', id }); got.push(WEAPONS[id].name); }
     else if (c === 'equip') { const id = rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); got.push(EQUIPMENT[id].name); }
     else if (c === 'item') { const id = rngPick(LOOT_ITEM_IDS); giveItemStack(id); got.push(ITEMS[id].name + ' ×' + ITEM_STACK_MAX); }
+    else if (c === 'off') { const id = rngPick(availPool('off', LOOT_OFF_IDS)); warehouse.push({ kind: 'off', id }); got.push(OFFHANDS[id].name); }
+    else if (c === 'armor') { const id = rngPick(availPool('armor', LOOT_ARMOR_IDS)); warehouse.push({ kind: 'armor', id }); got.push(ARMORS[id].name); }
     else if (c === 'ability') { const id = rngPick(availPool('ability', LOOT_ABILITY_IDS)); warehouse.push({ kind: 'ability', id }); got.push(ABILITIES[id].name); }
     seen[c] = true;
   }
@@ -2969,11 +2979,14 @@ function equipGearFromWarehouse(whIdx, mi, kind, field) {
     restSel = null; return;
   }
   const oldId = r[field]; warehouse.splice(whIdx, 1); r[field] = it.id;
-  if (oldId) warehouse.push({ kind, id: oldId }); restSel = null;
+  // 布衣(none)是預設起始狀態，不是戰利品——換甲時不要在倉庫裡生出一件布衣
+  if (oldId && !(kind === 'armor' && oldId === 'none')) warehouse.push({ kind, id: oldId });
+  restSel = null;
 }
 function unequipGear(mi, kind, field) {
   const r = roster[mi]; const oldId = r[field]; if (!oldId) return;
   if (kind === 'item') { warehouse.push({ kind: 'item', id: oldId, count: r.itemCount || 0 }); r.itemId = null; r.itemCount = 0; return; }
+  if (kind === 'armor') { if (oldId === 'none') return; r.armorId = 'none'; warehouse.push({ kind, id: oldId }); return; }   // 脫甲＝回到布衣，不是「沒有甲」
   r[field] = null; warehouse.push({ kind, id: oldId });
 }
 function discardWarehouse(whIdx) { if (whIdx >= 0 && whIdx < warehouse.length) warehouse.splice(whIdx, 1); restSel = null; }
@@ -6348,37 +6361,71 @@ function drawLoadoutCard(mi, x, y, w, h) {
       if (canUnequip) uiButton(x + w - 44, yt + 1, 36, 17, '▸倉', unequipFn, { font: '10px Consolas' });
     }
   };
-  // 武器：主/副「分開兩列」各自顯示（名稱列＋彈藥列）。選到倉庫武器時兩列皆可點＝裝備到該槽。
-  const weaponBlock = (yt, slot) => {
+  /* 手部 set（＝遊戲內的槽 1／槽 2）：主手一列、副手一列、彈藥一列。
+     副手是這次補上的——雙手武器不能帶副手，所以那一格會直接顯示「雙手」而不是空著，
+     否則玩家會以為是自己沒裝。 */
+  const handsBlock = (yt, slot) => {
     const wid = slot === 2 ? r.weaponId2 : r.weaponId, ww = wid ? WEAPONS[wid] : null;
+    const offField = slot === 2 ? 'offId2' : 'offId';
+    const oid = r[offField], oo = oid ? OFFHANDS[oid] : null;
+    const twoHand = wid && handsOf(wid) >= 2;
     const aAmmo = slot === 2 ? (r.allocatedAmmo2 || 0) : (r.allocatedAmmo || 0);
     const selW = manage && sel && sel.kind === 'weapon';
-    if (selW) { ctx.fillStyle = 'rgba(95,208,107,0.12)'; ctx.fillRect(x + 4, yt, w - 8, 17); }   // 選到武器＝此槽可點裝備
-    ctx.textAlign = 'left'; ctx.font = 'bold 10px Consolas'; ctx.fillStyle = '#bfe6ff'; ctx.fillText(slot === 2 ? '副' : '主', x + pad, yt + 13);
-    ctx.beginPath(); ctx.fillStyle = ww ? rarityColor(ww.rarity) : '#555'; ctx.arc(x + pad + 22, yt + 9, 3.3, 0, Math.PI * 2); ctx.fill();
-    ctx.font = '11px Consolas'; ctx.fillStyle = ww ? '#cdd6e0' : '#7a828c'; ctx.fillText(ww ? `${ww.name} 重${ww.weight}` : '無', x + pad + 30, yt + 13);
+    const selO = manage && sel && sel.kind === 'off' && !twoHand;
+    // 主手
+    if (selW) { ctx.fillStyle = 'rgba(95,208,107,0.12)'; ctx.fillRect(x + 4, yt, w - 8, 16); }
+    ctx.textAlign = 'left'; ctx.font = 'bold 10px Consolas'; ctx.fillStyle = '#bfe6ff'; ctx.fillText('槽' + slot, x + pad, yt + 12);
+    ctx.beginPath(); ctx.fillStyle = ww ? rarityColor(ww.rarity) : '#555'; ctx.arc(x + pad + 26, yt + 8, 3.3, 0, Math.PI * 2); ctx.fill();
+    ctx.font = '11px Consolas'; ctx.fillStyle = ww ? '#cdd6e0' : '#7a828c'; ctx.fillText(ww ? `${ww.name} 重${ww.weight}` : '無', x + pad + 34, yt + 12);
     if (manage) {
-      if (selW) pushRect(x + 4, yt, w - 50, 17, () => equipWeaponFromWarehouse(restSel.idx, mi, slot));
-      if (wid && !isInfiniteAmmo(wid)) uiButton(x + w - 42, yt, 34, 16, '▸倉', () => unequipWeapon(mi, slot), { font: '10px Consolas' });
+      if (selW) pushRect(x + 4, yt, w - 50, 16, () => equipWeaponFromWarehouse(restSel.idx, mi, slot));
+      if (wid && !isInfiniteAmmo(wid)) uiButton(x + w - 42, yt - 1, 34, 16, '▸倉', () => unequipWeapon(mi, slot), { font: '10px Consolas' });
     }
-    ctx.textAlign = 'left'; ctx.font = '10px Consolas'; ctx.fillStyle = '#9fb3c8';   // 該槽彈藥
-    if (!wid || isInfiniteAmmo(wid)) ctx.fillText(`彈 ∞${wid ? '（底線/近戰）' : ''}`, x + pad + 14, yt + 29);
+    // 副手（盾）
+    const oy = yt + 17;
+    if (selO) { ctx.fillStyle = 'rgba(191,230,255,0.12)'; ctx.fillRect(x + 4, oy, w - 8, 16); }
+    ctx.font = 'bold 10px Consolas'; ctx.fillStyle = twoHand ? '#5c646f' : '#9fd0e0'; ctx.fillText('└副', x + pad + 6, oy + 12);
+    ctx.font = '11px Consolas';
+    if (twoHand) { ctx.fillStyle = '#5c646f'; ctx.fillText('雙手武器（不能帶盾＝不能格擋）', x + pad + 34, oy + 12); }
     else {
-      ctx.fillText(`彈 ${aAmmo}  儲備 ${ammoStock[wid] | 0}`, x + pad + 14, yt + 29);
+      ctx.fillStyle = oo ? '#cdd6e0' : '#7a828c';
+      ctx.fillText(oo ? `${oo.name} 護弧${oo.blockArcDeg}° 減傷${(oo.blockResist * 100) | 0}%` : '空手（不能格擋）', x + pad + 34, oy + 12);
       if (manage) {
-        uiButton(x + w - 74, yt + 19, 21, 15, '−', () => allocAmmo(mi, -1, slot), { font: 'bold 12px Consolas', enabled: aAmmo > 0 });
-        uiButton(x + w - 30, yt + 19, 21, 15, '+', () => allocAmmo(mi, +1, slot), { font: 'bold 12px Consolas', enabled: (ammoStock[wid] | 0) > 0 });
+        if (selO) pushRect(x + 4, oy, w - 50, 16, () => equipGearFromWarehouse(restSel.idx, mi, 'off', offField));
+        if (oid) uiButton(x + w - 42, oy - 1, 34, 16, '▸倉', () => unequipGear(mi, 'off', offField), { font: '10px Consolas' });
+      }
+    }
+    // 彈藥
+    ctx.font = '10px Consolas'; ctx.fillStyle = '#9fb3c8';
+    if (!wid || isInfiniteAmmo(wid)) ctx.fillText(`彈 ∞${wid ? '（底線/近戰）' : ''}`, x + pad + 14, oy + 27);
+    else {
+      ctx.fillText(`彈 ${aAmmo}  儲備 ${ammoStock[wid] | 0}`, x + pad + 14, oy + 27);
+      if (manage) {
+        uiButton(x + w - 74, oy + 17, 21, 15, '−', () => allocAmmo(mi, -1, slot), { font: 'bold 12px Consolas', enabled: aAmmo > 0 });
+        uiButton(x + w - 30, oy + 17, 21, 15, '+', () => allocAmmo(mi, +1, slot), { font: 'bold 12px Consolas', enabled: (ammoStock[wid] | 0) > 0 });
       }
     }
   };
-  weaponBlock(y + 42, 1);   // 主武器
-  weaponBlock(y + 76, 2);   // 副武器
-  row(y + 108, 20, 'rgba(192,160,255,0.14)', `SK ${r.abilityId ? ABILITIES[r.abilityId].name : '—'}`, manage && sel && sel.kind === 'ability',
-    () => equipAbilityFromWarehouse(restSel.idx, mi), () => unequipAbility(mi), !!r.abilityId);
-  row(y + 130, 20, 'rgba(159,208,224,0.16)', `🛡 ${r.equipId ? EQUIPMENT[r.equipId].name : '—'}`, manage && sel && sel.kind === 'equip',
-    () => equipGearFromWarehouse(restSel.idx, mi, 'equip', 'equipId'), () => unequipGear(mi, 'equip', 'equipId'), !!r.equipId);
-  row(y + 152, 20, 'rgba(255,210,125,0.16)', `C ${r.itemId ? ITEMS[r.itemId].name + ' ×' + (r.itemCount || 0) : '—'}`, manage && sel && sel.kind === 'item',
+  handsBlock(y + 42, 1);   // 槽 1：主手 + 副手
+  handsBlock(y + 90, 2);   // 槽 2：主手 + 副手
+  // 槽 3／4＝術的兩種載具（卷軸有次數、習得有 CD）
+  const scroll = r.itemId ? artOf(r.itemId) : null, learned = r.abilityId ? artOf(r.abilityId) : null;
+  row(y + 138, 20, 'rgba(255,210,125,0.16)',
+    `槽3 卷軸 ${scroll ? scroll.name + ' ×' + (r.itemCount || 0) : '—'}`,
+    manage && sel && sel.kind === 'item',
     () => equipGearFromWarehouse(restSel.idx, mi, 'item', 'itemId'), () => unequipGear(mi, 'item', 'itemId'), !!r.itemId);
+  row(y + 160, 20, 'rgba(192,160,255,0.14)',
+    `槽4 習得 ${learned ? learned.name + '（CD ' + learned.cooldown + 's）' : '—'}`,
+    manage && sel && sel.kind === 'ability',
+    () => equipAbilityFromWarehouse(restSel.idx, mi), () => unequipAbility(mi), !!r.abilityId);
+  // 甲：獨立槽位（不佔手，但吃移速與耐力回復）
+  const AR = ARMORS[r.armorId] || ARMORS.none;
+  row(y + 182, 20, 'rgba(224,194,74,0.16)',
+    `甲 ${AR.name}　擋${(AR.armor * 100) | 0}% 速${(AR.moveMul * 100) | 0}% 耐回${(AR.stamRegenMul * 100) | 0}%`,
+    manage && sel && sel.kind === 'armor',
+    () => equipGearFromWarehouse(restSel.idx, mi, 'armor', 'armorId'), () => unequipGear(mi, 'armor', 'armorId'), !!r.armorId && r.armorId !== 'none');
+  row(y + 204, 20, 'rgba(159,208,224,0.16)', `裝備 ${r.equipId ? EQUIPMENT[r.equipId].name : '—'}`, manage && sel && sel.kind === 'equip',
+    () => equipGearFromWarehouse(restSel.idx, mi, 'equip', 'equipId'), () => unequipGear(mi, 'equip', 'equipId'), !!r.equipId);
   // TARGET 階段：整卡＝指派目標
   if (restPhase === 'TARGET') {
     ctx.fillStyle = 'rgba(255,210,125,0.10)'; ctx.fillRect(x, y, w, h);
@@ -6415,6 +6462,8 @@ function drawRestWarehouse(wy) {
       const meta = it.kind === 'weapon' ? { name: WEAPONS[it.id].name, tag: '武器', col: rarityColor(WEAPONS[it.id].rarity), dot: true }
         : it.kind === 'ability' ? { name: ABILITIES[it.id].name, tag: '技能', col: '#c0a0ff' }
           : it.kind === 'equip' ? { name: EQUIPMENT[it.id].name, tag: '裝備', col: '#9fd0e0' }
+          : it.kind === 'off' ? { name: OFFHANDS[it.id].name, tag: '副手', col: '#bfe6ff' }
+          : it.kind === 'armor' ? { name: ARMORS[it.id].name, tag: '甲', col: '#e0c24a' }
             : { name: ITEMS[it.id].name + (it.count > 1 ? ' ×' + it.count : ''), tag: '道具', col: '#ffd27d' };
       if (meta.dot) { ctx.beginPath(); ctx.fillStyle = meta.col; ctx.arc(x + 8, y + 9, 3.5, 0, Math.PI * 2); ctx.fill(); }
       ctx.textAlign = 'center'; ctx.font = '10px Consolas'; ctx.fillStyle = meta.dot ? '#dde6ef' : meta.col;
@@ -6546,7 +6595,8 @@ function drawRest() {
   ctx.textAlign = 'left';
 
   // 配裝卡（含個性/武器/技能/裝備/道具/彈藥）
-  const n = roster.length, perRow = 5, cw = 234, ch = 176, gap = 12;   // 主/副武器分開兩列＝卡片加高
+  // 卡片高度＝七列（槽1 主+副、槽2 主+副、槽3 卷軸、槽4 習得、甲、裝備）＋彈藥列
+  const n = roster.length, perRow = 5, cw = 234, ch = 232, gap = 12;
   for (let i = 0; i < n; i++) {
     const inRow = Math.min(n - Math.floor(i / perRow) * perRow, perRow);
     const totalW = inRow * cw + (inRow - 1) * gap;
