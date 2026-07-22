@@ -369,12 +369,12 @@ const WEAPONS = {
   // 穿甲軸的遠程擔當（原版 rifle 0.5 / DMR 0.9 的位置）：長弓＝反人員、十字弓＝破甲。
   // magazine 1 + reloadTime＝每發搭箭/絞弦；特定魔法（火矢等）之後進 Phase 2 一樣走此管線。
   // aimTime＝AI 射這把武器前的瞄準時間（＝預告長方形填滿所需秒數）；玩家不受此限
-  longbow: { name: '長弓',   rarity: 'common',   weight: 1.2, damage: 26, fireRate: 1.4, range: 1200, projSpeed: 640, spreadBase: 1.6, spreadPerShot: 0.8, spreadMax: 6, spreadRecover: 9, magazine: 1, reloadTime: 1.0, turnSpeed: 520, pierce: 0.15, aimTime: 0.5, hands: 2 },
-  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85, aimTime: 0.75, hands: 2 },   // 重弩＝瞄得久、但一發很痛
+  longbow: { name: '長弓',   rarity: 'common',   weight: 1.2, damage: 26, fireRate: 1.4, range: 1200, projSpeed: 640, spreadBase: 1.6, spreadPerShot: 0.8, spreadMax: 6, spreadRecover: 9, magazine: 1, reloadTime: 1.5, turnSpeed: 520, pierce: 0.15, aimTime: 0.9, hands: 2 },
+  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85, aimTime: 1.0, hands: 2 },   // 重弩＝瞄得久、但一發很痛
   // 投槍＝**單手**遠程：唯一能搭盾的投射武器（射程短、彈數少），劍盾流的補牌
-  javelin: { name: '投槍',  rarity: 'common',   weight: 1.0, damage: 34, fireRate: 1.2, range: 620,  projSpeed: 560, spreadBase: 2.2, spreadPerShot: 1.0, spreadMax: 8, spreadRecover: 9, magazine: 1, reloadTime: 1.3, turnSpeed: 540, pierce: 0.45, aimTime: 0.45, hands: 1 },
+  javelin: { name: '投槍',  rarity: 'common',   weight: 1.0, damage: 34, fireRate: 1.2, range: 620,  projSpeed: 560, spreadBase: 2.2, spreadPerShot: 1.0, spreadMax: 8, spreadRecover: 9, magazine: 1, reloadTime: 1.3, turnSpeed: 540, pierce: 0.45, aimTime: 0.75, hands: 1 },
   // 局外解鎖武器（榮譽；解鎖後才進招募/loot 池，仍 RNG 取得）
-  warbow:  { name: '戰弓',  rarity: 'uncommon', weight: 1.6, damage: 34, fireRate: 1.2, range: 1300, projSpeed: 760, spreadBase: 1.2, spreadPerShot: 0.7, spreadMax: 5, spreadRecover: 9, magazine: 1, reloadTime: 1.2, turnSpeed: 470, pierce: 0.45, aimTime: 0.55, hands: 2 },   // 強弓：長弓的上位，過半穿甲
+  warbow:  { name: '戰弓',  rarity: 'uncommon', weight: 1.6, damage: 34, fireRate: 1.2, range: 1300, projSpeed: 760, spreadBase: 1.2, spreadPerShot: 0.7, spreadMax: 5, spreadRecover: 9, magazine: 1, reloadTime: 1.7, turnSpeed: 470, pierce: 0.45, aimTime: 0.95, hands: 2 },   // 強弓：長弓的上位，過半穿甲
   falchion:{ name: '彎刀',  rarity: 'uncommon', weight: 1.3, damage: 34, fireRate: 6, range: 62, turnSpeed: 560, pierce: 0.25, melee: true, swingStyle: 'sweep', hands: 1,
              arcDeg: 120, reach: 62, windup: 0.09, activeT: 0.09, recover: 0.24, cleave: 4, knock: 240, stagger: 0, backstabMul: 1.0, poiseDmg: 24, stamCost: 17,
              magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },   // 單手廣掃：對付雜兵群
@@ -3779,7 +3779,7 @@ function alertEnemiesNear(pos, radius) {
 const unitMag = (u) => u.magazine || u.weapon.magazine;   // 有效彈夾（裝備可改）
 function startReload(u) {
   if (u.reloadT > 0 || u.ammoReserve <= 0 || u.ammoInMag >= unitMag(u)) return;
-  u.reloadDur = u.weapon.reloadTime * (u.reloadMul || 1);   // 裝備(快卸彈匣)可加速
+  u.reloadDur = u.weapon.reloadTime * (u.reloadMul || 1) * CONFIG.tempo;   // 裝備(快卸彈匣)可加速；× tempo＝整體節奏（先前漏了遠程裝填）
   u.reloadT = u.reloadDur;
   Sfx.play('reload');   // 換彈音效接縫
 }
