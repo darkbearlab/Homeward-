@@ -2168,6 +2168,7 @@ let armoryOffers = null;     // 軍械庫節點的三選一
 let roadCompleted, roadAvailable, roadCurrent;  // 路線圖狀態
 let runAct = 1;      // A/B 兩幕：1＝敵境歸途、2＝故土焦原（initRun 重置為 1；Act1 boss 完成→beginAct2 轉 2）
 let actMsg = '';     // 翻面（進第二幕）當下的路線圖橫幅（selectNode 清）
+let debrief = null;  // 戰後結算畫面資料 { reward, joined[], survived[], dead[] }（enterDebrief 設、debriefContinue 清）
 let hysteresisOn = true, debugView = false;
 let aimDir = 0;              // 砲塔目標朝向（世界角，由滑鼠位移累積）
 let pointerLocked = false;  // 是否已鎖定滑鼠（FPS 式瞄準）
@@ -2573,7 +2574,14 @@ function endMission() {
   const cacheReveal = [];   // 密封容器開封＝事後抽選（排除基本階、含未解鎖、run 限定進倉庫）：僅過關時開
   if (win) { const cachesOut = survivors.reduce((n, p) => n + (p.caches || 0), 0); for (let i = 0; i < cachesOut; i++) cacheReveal.push(rollMysteryLoot()); }
   lastSummary = { mission: missionIndex + 1, extracted: survivors.map(p => p.name), dead: players.filter(p => p.state === 'DEAD').map(p => p.name), fileSafe, cacheReveal };
-  if (win) { roster = survivors.map(rosterFromPlayer); missionIndex++; grantCombatReward(); advanceNode(); return; }   // 勝利→戰後獎勵（榮譽即時發放）→直接回路線圖（原本的戰果升階已移除）
+  if (win) {
+    const brought = new Set((roster || []).map(r => r.name));   // 進場前的隊伍（未重建）＝用來分辨「新加入」與「原有生還」
+    const joined = survivors.filter(p => !brought.has(p.name)).map(p => p.name);   // 這場才加入且撤出者（救的騎士/俘虜等）
+    roster = survivors.map(rosterFromPlayer); missionIndex++;
+    const reward = grantCombatReward();
+    debrief = { reward, joined, survived: survivors.map(p => p.name).filter(n => joined.indexOf(n) < 0), dead: lastSummary.dead };
+    scene = 'DEBRIEF'; releasePointer(); return;   // 戰後結算畫面（前進→advanceNode）
+  }
   if (finaleActive) { resolveFinale(false); return; }   // 最終挑戰全滅＝Bad End（不走一般 RUNEND）
   scene = 'RUNEND'; result = 'LOSE'; loseReason = (kn && kn.state !== 'EXTRACTED' && !fileSafe) ? '遺物遺失' : '騎士陣亡'; metaOnRunEnd(false); releasePointer();   // 一般 run 失敗：局外結算
 }
@@ -3285,7 +3293,7 @@ function skipIntro() {
 }
 
 /* =====================================================================
-   休息關 meta 流程：共用倉庫(有上限) + 臨時背包整理 + 二選一(搜刮/喚醒) + 配裝/彈藥分配
+   休息關 meta 流程：共用倉庫(有上限) + 臨時背包整理 + 二選一(搜刮/收留) + 配裝/彈藥分配
    restPhase: CHOICE(可整理) → OFFERS(搜刮三選一) / TARGET(指定升級對象) → DONE(可整理→繼續)
    ===================================================================== */
 const RARITY_WEIGHT = { common: 60, uncommon: 25, rare: 12, epic: 4, legendary: 1 };
@@ -3480,13 +3488,13 @@ function applyOffer(o, mi) {
 // （早期這裡還有 cycleArchetype 轉職——待機原型系統移除後一併收掉。）
 const canEditLoadout = (mi) => mi === KNIGHT_ID;
 
-// --- 喚醒：必須先把倉庫整理到 ≤ 當前上限（§5），再 +1 隊員（容量 +slotsPerMember）---
+// --- 收留同行者：必須先把倉庫整理到 ≤ 當前上限（§5），再 +1 隊員（容量 +slotsPerMember）---
 function restDoAwaken() {
   if (restPhase !== 'CHOICE' || overCap()) return;
   const rec = makeRecruit(new Set(roster.map(r => r.name)));
   autoEquipFromWarehouse(rec);                     // 從已整理倉庫配裝；無更好者保留手邊武器（§4/§7）
   roster.push(rec);
-  restMsg = `喚醒 ${rec.name}（${rosterClass(rec).name}）入隊`;
+  restMsg = `收留 ${rec.name}（${rosterClass(rec).name}）入伍`;
   restPhase = 'DONE';
 }
 function autoEquipFromWarehouse(rec) {
@@ -4511,7 +4519,7 @@ function freePrisoner(pr) {
   pr.freed = true;
   if (pr.kind === 'knight') { rallyStrandedKnight(pr); return; }   // B面：落難騎士＝招他入伍（騎士級 + 他的殘兵）
   const cfg = makeRecruit(new Set(players.map(p => p.name)));
-  cfg.weaponId = FLOOR_WEAPON;   // 底線武器（跟喚醒 sleeper 同規則）
+  cfg.weaponId = FLOOR_WEAPON;   // 底線武器（收留的散兵手邊只剩一把短刀）
   const u = makePlayer(players.length, cfg, { x: pr.pos.x, y: pr.pos.y });
   u.state = 'IDLE'; u.idleAnchor = u.facing;
   players.push(u); spawnHeal(pr.pos);
@@ -5435,6 +5443,7 @@ cv.addEventListener('click', () => {
   else if (scene === 'HQ') hqClick(mouse.mx, mouse.my);
   else if (scene === 'FINALE') finaleClick(mouse.mx, mouse.my);
   else if (scene === 'ENDING') endingAdvance();
+  else if (scene === 'DEBRIEF') debriefContinue();   // 戰後結算：點擊前進
   // EDITOR：互動在 mousedown/up 處理（支援拖拉），click 不處理
 });
 // 休息關：命中最後繪製（最上層）的可點區域
@@ -5542,6 +5551,7 @@ window.addEventListener('keydown', e => {
   if (scene === 'MENU') return;   // 主選單以滑鼠點選
   if (scene === 'HQ') { if (k === 'escape' || k === 'backspace') { goMenu(); e.preventDefault(); } return; }   // 總部：Esc/Backspace 回選單，其餘以滑鼠點選
   if (scene === 'ENDING') { if (k === ' ' || k === 'enter') { endingAdvance(); e.preventDefault(); } return; }   // 結局/揭示：空白/Enter 加速或繼續
+  if (scene === 'DEBRIEF') { if (k === ' ' || k === 'enter') { debriefContinue(); e.preventDefault(); } return; }   // 戰後結算：空白/Enter 前進
   if (scene === 'FINALE') {   // 最終潛入設定：打字輸入種子、Enter 開始、Esc 返回
     if (k === 'escape') goMenu();
     else if (k === 'backspace') finaleSeedBuf = finaleSeedBuf.slice(0, -1);
@@ -5790,6 +5800,7 @@ function draw() {
   if (scene === 'BLACKSMITH') { drawBlacksmith(); return; }
   if (scene === 'ORIGIN') { drawOrigin(); return; }
   if (scene === 'RUNEND') { drawRunEnd(); return; }
+  if (scene === 'DEBRIEF') { drawDebrief(); return; }
   if (scene === 'RUNWIN') { drawRunWin(); return; }
 
   // 鎖定滑鼠前＝黑螢幕（不洩漏場面、不破壞氣氛；全關卡適用，含第0關）
@@ -7223,7 +7234,7 @@ function drawRestActionBar() {
   const ay = 596, over = overCap();
   if (restPhase === 'CHOICE') {
     ctx.textAlign = 'center'; ctx.font = '12px Consolas'; ctx.fillStyle = '#8b97a5';
-    ctx.fillText('二選一 —「隨機整補（純拿資源、零風險）」對上「喚醒 +1 身體（個性隨機）」。可隨時整理倉庫/配裝/分配彈藥。風險與抉擇在事件格。', cv.width / 2, ay - 16);
+    ctx.fillText('二選一 —「隨機整補（純拿資源、零風險）」對上「收留 +1 名同行者（兵種隨機）」。可隨時整理倉庫/配裝/分配彈藥。風險與抉擇在事件格。', cv.width / 2, ay - 16);
     uiButton(cv.width / 2 - 320, ay, 300, 64, '', null, { bg: 'rgba(30,52,70,0.9)', border: '#7fe3ff' });
     uiButton(cv.width / 2 + 20, ay, 300, 64, '', null, { bg: over ? 'rgba(34,40,48,0.7)' : 'rgba(30,52,42,0.9)', border: over ? '#566' : '#7fffa8' });
     // 搜刮
@@ -7232,7 +7243,7 @@ function drawRestActionBar() {
     ctx.fillText('純拿資源、零風險（可能多樣）', cv.width / 2 - 170, ay + 57);
     pushRect(cv.width / 2 - 320, ay, 300, 64, restDoScavenge);
     // 喚醒
-    ctx.fillStyle = over ? '#6a727c' : '#7fffa8'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[2] 喚醒 Sleeper', cv.width / 2 + 170, ay + 24);
+    ctx.fillStyle = over ? '#6a727c' : '#7fffa8'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[2] 收留同行者', cv.width / 2 + 170, ay + 24);
     ctx.fillStyle = over ? '#6a727c' : '#aeb9c5'; ctx.font = '11px Consolas';
     ctx.fillText('保證 +1 隊員（個性隨機）', cv.width / 2 + 170, ay + 42);
     ctx.fillText(over ? '需先整理倉庫至 ≤ 上限' : '容量 +' + CONFIG.loadout.slotsPerMember, cv.width / 2 + 170, ay + 57);
@@ -7506,8 +7517,8 @@ function drawRestTutorial() {
     ['休息關 — 你可以：', '#7fe3ff'],
     ['• 搜刮(1)：三選一，拿補給 / 武器', '#cdd6e0'],
     ['  裝備 / 技能 / 道具 / 質升級', '#cdd6e0'],
-    ['• 喚醒(2)：+1 隊員（先把倉庫', '#cdd6e0'],
-    ['  整理到上限內才可喚醒）', '#cdd6e0'],
+    ['• 收留(2)：+1 隊員（先把倉庫', '#cdd6e0'],
+    ['  整理到上限內才可收留）', '#cdd6e0'],
     ['• 配裝：點倉庫物→點成員裝上；', '#cdd6e0'],
     ['  ▸ 卸下回倉庫', '#cdd6e0'],
     ['• 彈藥：± 分配各員備彈', '#cdd6e0'],
@@ -7558,6 +7569,32 @@ function drawRunWin() {
   ctx.textAlign = 'left';
 }
 
+/* ---- 戰後結算（COMBAT 勝利 → 此 → 路線圖）：戰功榮譽 + 這場的隊伍變動（加入/生還/戰死）---- */
+function drawDebrief() {
+  const d = debrief || { reward: 0, joined: [], survived: [], dead: [] };
+  ctx.fillStyle = 'rgba(8,12,16,0.96)'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8fe3a0'; ctx.font = 'bold 40px Consolas'; ctx.fillText('戰 · 罷', cv.width / 2, 130);
+  ctx.fillStyle = '#ffd27a'; ctx.font = 'bold 22px Consolas'; ctx.fillText('戰功 · 榮譽 +' + d.reward, cv.width / 2, 176);
+  // 三欄：加入（綠）/ 生還（白）/ 戰死（紅）
+  const cols = [
+    { title: '＋ 加入隊伍', names: d.joined, col: '#8fe3a0', empty: '（無新血）' },
+    { title: '生還撤出', names: d.survived, col: '#cdd6e0', empty: '（無）' },
+    { title: '戰死沙場', names: d.dead, col: '#ff6a6a', empty: '（無人陣亡）' },
+  ];
+  const cw = 300, gap = 40, totalW = cols.length * cw + (cols.length - 1) * gap, x0 = cv.width / 2 - totalW / 2, top = 236;
+  cols.forEach((c, i) => {
+    const cx = x0 + i * (cw + gap) + cw / 2;
+    ctx.fillStyle = c.col; ctx.font = 'bold 16px Consolas'; ctx.fillText(c.title, cx, top);
+    ctx.strokeStyle = 'rgba(120,140,160,0.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx - cw / 2 + 20, top + 12); ctx.lineTo(cx + cw / 2 - 20, top + 12); ctx.stroke();
+    ctx.font = '14px Consolas';
+    if (!c.names.length) { ctx.fillStyle = 'rgba(150,160,170,0.5)'; ctx.fillText(c.empty, cx, top + 40); }
+    else c.names.forEach((n, j) => { ctx.fillStyle = c.col; ctx.fillText(n, cx, top + 40 + j * 26); });
+  });
+  ctx.fillStyle = '#cdd6e0'; ctx.font = '16px Consolas'; ctx.fillText('點擊 / 空白　前進 →', cv.width / 2, cv.height - 60);
+  ctx.textAlign = 'left';
+}
+function debriefContinue() { debrief = null; advanceNode(); }   // 前進：接回路線圖 / 翻面 / 莊園結局（由 advanceNode 決定）
 /* ---- 戰果結算畫面（COMBAT 勝利 → 此 → 路線圖）---- */
 function sBtn(x, y, w, h, label, on, fn) {
   ctx.fillStyle = on ? 'rgba(54,66,84,0.95)' : 'rgba(38,44,52,0.6)'; ctx.fillRect(x, y, w, h);
