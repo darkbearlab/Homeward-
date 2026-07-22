@@ -1280,7 +1280,14 @@ function validateRoadmap(rm) {   // 連通(start 可達全部)、唯一終點(�
   if (seen.size !== rm.nodes.length) return false;   // 無孤點
   return rm.nodes.filter(n => adj[n.id].length === 0).length === 1;   // 唯一無後繼節點＝王
 }
-function genRoadmap() {   // 每局程序生成（在 srandSeed 後呼叫）
+// A/B 兩幕：整個 run ＝兩張路線圖。Act1 boss＝國界（翻面）、Act2 boss＝奪回莊園（結局）。
+// enter＝翻面當下的路線圖橫幅。boss＝該幕王節點顯示名（實際地圖之後再換成專屬國界/莊園圖）。
+const ACT_INFO = {
+  1: { name: '第一幕 · 敵境歸途', boss: '國界之戰', enter: '' },
+  2: { name: '第二幕 · 故土焦原', boss: '奪回莊園', enter: '你翻過了國界——腳下已是自己的國土，卻已被踏成焦原。' },
+};
+const actInfo = () => ACT_INFO[runAct === 2 ? 2 : 1];
+function genRoadmap() {   // 每局程序生成（在 srandSeed 後呼叫）；依 runAct 分流（目前先分王節點的顯示身分，內容池之後接）
   const C = CONFIG.roadmap;
   const cols = Math.max(3, C.cols | 0), rows = Math.max(1, C.rowsPerCol | 0), body = cols - 1;
   const cellSet = {}, edgeSet = new Set(), key = (c, r) => c + ',' + r;
@@ -1315,6 +1322,8 @@ function genRoadmap() {   // 每局程序生成（在 srandSeed 後呼叫）
   roadAssignMaps(nodes);
   const rm = { start: nodes.filter(n => n.col === 0).map(n => n.id), nodes, edges };
   roadmap = validateRoadmap(rm) ? rm : FALLBACK_ROADMAP;
+  roadmap.act = (runAct === 2 ? 2 : 1);                     // 這張圖屬於哪一幕
+  const bn = roadmap.nodes.find(n => n.boss); if (bn) bn.bossName = ACT_INFO[roadmap.act].boss;   // 王節點的顯示身分（國界/莊園）
   buildRoadAdj();
 }
 buildRoadAdj();   // 載入時先用 fallback 建好（讓全域衍生值存在）
@@ -2108,6 +2117,8 @@ let restWslot = {};          // 各員配裝卡正在編輯的武器槽（mi→1
 let restRects = [];          // 休息關/軍械庫可點擊區域（每幀於 draw 重建）
 let armoryOffers = null;     // 軍械庫節點的三選一
 let roadCompleted, roadAvailable, roadCurrent;  // 路線圖狀態
+let runAct = 1;      // A/B 兩幕：1＝敵境歸途、2＝故土焦原（initRun 重置為 1；Act1 boss 完成→beginAct2 轉 2）
+let actMsg = '';     // 翻面（進第二幕）當下的路線圖橫幅（selectNode 清）
 let hysteresisOn = true, debugView = false;
 let aimDir = 0;              // 砲塔目標朝向（世界角，由滑鼠位移累積）
 let pointerLocked = false;  // 是否已鎖定滑鼠（FPS 式瞄準）
@@ -2352,7 +2363,7 @@ function initRun() {
   knightRelics = new Set(); applyRelicHooks();         // roguelite：聖物 run 中撿、開新 run 清空
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = []; runMomentumMods = [];   // 戰役旗標/事件佇列/已見事件/跨戰鬥氣勢修正重置
-  runEscort = null; escortMsg = ''; missionMsg = '';   // S3 護送狀態 + 戰後獎勵橫幅重置
+  runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = '';   // S3 護送 + 戰後橫幅 + A/B 幕別重置
   runStats = { events: 0, kia: 0 };                     // 本局榮譽累計（事件數/陣亡數）重置
   // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
   // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
@@ -2374,7 +2385,7 @@ function initRun() {
 // 在路線圖選擇一個可前往的節點
 function selectNode(id) {
   if (!roadAvailable.includes(id) || roadCompleted.has(id)) return;
-  escortMsg = ''; missionMsg = '';   // 團聚/錯過、戰功橫幅只顯示到玩家挑下一個節點
+  escortMsg = ''; missionMsg = ''; actMsg = '';   // 團聚/錯過、戰功、翻面橫幅只顯示到玩家挑下一個節點
   roadCurrent = id;
   const node = roadNode(id), t = node.type;
   if (t === 'COMBAT') startMission();
@@ -2420,13 +2431,23 @@ function checkEscort() {
   if (roadCurrent === runEscort.markNodeId) escortReunite();         // 剛完成的就是團聚點＝抵達
   else if (maxCompletedCol() >= runEscort.markCol) escortMissed();   // 已推進到/越過團聚點所在欄、卻不是它＝錯過
 }
+// 翻面：第一幕（敵境）走完國界 boss → 不結算，生成第二幕（故土）路線圖續跑。roster＝上一場的生還小隊，跨幕保留。
+function beginAct2() {
+  runAct = 2;
+  genRoadmap();   // 續用同一條 srand 流（不重播種＝整局仍可重現）；roadmap.act 由 runAct 決定
+  roadCompleted = new Set(); roadCurrent = null; roadAvailable = roadmap.start.slice();
+  actMsg = ACT_INFO[2].enter;   // 翻面橫幅
+  scene = 'MAP'; releasePointer();
+  Hooks.fire('actBegin', { act: 2 });
+}
 function advanceNode() {
   if (roadCurrent != null) roadCompleted.add(roadCurrent);
   checkEscort();   // S3：抵達團聚點 or 改道錯過（在把 roadCurrent 併入 completed 之後判定）
   const succ = roadCurrent != null ? roadAdj[roadCurrent] : [];
-  if (!succ || succ.length === 0) {   // 走完路線＝勝
-    if (finaleActive) { resolveFinale(true); return; }   // 最終真相挑戰：走完整條＝真結局＋解 喪鐘
-    scene = 'RUNWIN'; metaOnRunEnd(true);   // 一般 run：局外結算(榮譽/里程碑)
+  if (!succ || succ.length === 0) {   // 走完這一幕的路線
+    if (finaleActive) { resolveFinale(true); return; }   // （舊 finale 死碼；已停用不會進來）
+    if (runAct === 1) { beginAct2(); return; }            // 第一幕完成＝翻過國界，續生第二幕（不結算）
+    scene = 'RUNWIN'; metaOnRunEnd(true);                 // 第二幕（莊園）完成＝通關；結局象限在步驟3接
   }
   else { roadAvailable = succ.slice(); scene = 'MAP'; }
   releasePointer();
@@ -7487,7 +7508,7 @@ function eventClick(mx, my) { for (const r of eventRects) if (mx >= r.x && mx <=
 function drawRoadmap() {
   ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 28px Consolas'; ctx.fillText('ROUTE · 路線圖', cv.width / 2, 56);
+  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 28px Consolas'; ctx.fillText(actInfo().name, cv.width / 2, 56);   // A/B：第一幕 敵境歸途 / 第二幕 故土焦原
   ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '13px Consolas';
   ctx.fillText('點擊（或按數字鍵）前往發亮的節點 ▷', cv.width / 2, 80);
   // 圖例（區分戰鬥地圖）
@@ -7499,8 +7520,13 @@ function drawRoadmap() {
   ctx.fillStyle = hsl(48, 75, 58); ctx.fillText('★ 軍械庫', cv.width / 2 + 120, 102);
   ctx.fillStyle = hsl(150, 60, 55); ctx.fillText('＋ 休息', cv.width / 2 + 230, 102);
 
-  // 頂部橫幅堆疊：戰後獎勵（綠）＋ S3 護送團聚/錯過（金）；兩者皆 selectNode 清掉。護送中則常駐提示。
+  // 頂部橫幅堆疊：翻面（紅）＋戰後獎勵（綠）＋ S3 護送團聚/錯過（金）；皆 selectNode 清掉。護送中則常駐提示。
   let by = 120;
+  if (actMsg) {   // 翻過國界進第二幕的轉場語
+    ctx.fillStyle = 'rgba(48,20,20,0.94)'; ctx.fillRect(cv.width / 2 - 400, by - 15, 800, 28);
+    ctx.strokeStyle = 'rgba(255,120,110,0.75)'; ctx.lineWidth = 1.5; ctx.strokeRect(cv.width / 2 - 400, by - 15, 800, 28);
+    ctx.fillStyle = '#ff9a8a'; ctx.font = 'bold 14px Consolas'; ctx.fillText(actMsg, cv.width / 2, by + 4); by += 34;
+  }
   if (missionMsg) { ctx.fillStyle = '#8fe3a0'; ctx.font = 'bold 14px Consolas'; ctx.fillText('⚔ ' + missionMsg, cv.width / 2, by); by += 22; }
   if (escortMsg) {
     ctx.fillStyle = 'rgba(40,34,20,0.92)'; ctx.fillRect(cv.width / 2 - 380, by - 14, 760, 26);
@@ -7539,7 +7565,7 @@ function drawRoadmap() {
     // 休息節點：**內容進入才揭曉**（已去過 or 斥候探明才顯示真實 site；否則一律「休整地」）
     const restKnown = n.type === 'REST' && roadSiteKnown(n);
     const glyph = done ? '✓' : n.boss ? '‼' : n.type === 'REST' ? (restKnown ? REST_SITES[siteOf(n)].glyph : '⌂') : n.type === 'ARMORY' ? '★' : n.type === 'EVENT' ? '?' : (isBravo ? '⊟' : '⚔');
-    const sub = n.boss ? '最終 · ' + (MAPS[n.map] || MAPS.alpha).label : n.type === 'REST' ? (restKnown ? REST_SITES[siteOf(n)].name : '休整地') : n.type === 'ARMORY' ? '軍械庫' : n.type === 'EVENT' ? '事件' : (MAPS[n.map] || MAPS.alpha).label;
+    const sub = n.boss ? (n.bossName || ACT_INFO[roadmap.act || 1].boss) : n.type === 'REST' ? (restKnown ? REST_SITES[siteOf(n)].name : '休整地') : n.type === 'ARMORY' ? '軍械庫' : n.type === 'EVENT' ? '事件' : (MAPS[n.map] || MAPS.alpha).label;
     ctx.fillStyle = done ? '#aab' : '#ffffff'; ctx.font = 'bold 16px Consolas';
     ctx.fillText(glyph, p.x, p.y + 6);
     ctx.fillStyle = isAvail ? '#e8eef5' : 'rgba(180,190,200,0.6)'; ctx.font = '11px Consolas';
@@ -8116,7 +8142,7 @@ function enterFinaleSetup() { finaleSeedBuf = ''; scene = 'FINALE'; releasePoint
 // 跳過序章直接進路線圖；走完整條＝真結局＋解 Siren，途中 run 失敗＝Bad End（皆回選單，無刪檔）。
 function startFinale(seedStr) {
   srandSeed((seedStr && seedStr.length) ? seedFromStr(seedStr) : Math.floor(Math.random() * 0xFFFFFFFF));
-  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 }; runEscort = null; escortMsg = ''; missionMsg = '';
+  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 }; runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = '';
   warehouse = []; backpack = []; drops = []; grantStartingGear();
   ammoStock = {}; for (const id of WEAPON_IDS) ammoStock[id] = WEAPONS[id].silent ? CONFIG.ammo.subsonicStart : CONFIG.ammo.stockStart;
   roster = baseRoster(); missionIndex = 0;
