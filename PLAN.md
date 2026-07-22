@@ -894,6 +894,13 @@ Phase 4 前的最後一項插隊調整。
    - **石中劍**（`stonesword`）：`req:'honor'` 門檻（`CONFIG.stoneswordHonor`＝120，**不扣榮譽**）→ 倉庫得 `stoneSwordInst()`
      （預打滿、pierce 1.0、rally 詞條裝著就加氣勢）。rally 標 `source:'stone'`＝導師不會給。
    - `eventChoosable` 加 `req:'honor'/'ally'` 兩種閘門。
+5. ✅ **接掉落／取得端（讓強化在遊戲流程裡真的活起來）**：先前引擎/site/事件都做了，但**撿到的武器一律精良1**
+   （loot 池沒有高稀有度武器、`warehouse.push` 也不帶 quality，只在鐵匠 backfill 成基礎稀有度）＝精良3~5 的深度
+   在實際遊玩中永遠碰不到。修法＝**掉落時擲一個獨立的精良度**（`rollDropQuality`，權重 55/26/12/5/2），
+   與武器基礎稀有度取高（`dropWeaponQuality`）。同一把長劍因此可能撿到粗製(精良1)或精良(精良3)。
+   接進所有取得管線：事件 `weapon`/`loot`、休整補給、搜刮、軍械庫 offer（label 直接標 ★，拿的與看的一致）；
+   取得訊息對精良2+ 標 `qualityTag`。實測掉落分佈 1:55% … 5:2%，精良3 長劍＝鐵匠可打 3 次。
+   > 仍是「品項 id 不變、精良度是掉落屬性」——符合定案「骰到高稀有度＝那個精良度的武器」，不必新增武器種類。
 
 
 

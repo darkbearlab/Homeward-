@@ -410,7 +410,8 @@ const ENEMY_ONLY_WEAPON_IDS = ['fangs', 'club'];                       // 敵人
    ===================================================================== */
 const WEAPON_QUALITY = { common: 1, uncommon: 2, rare: 3, epic: 4, legendary: 5 };   // 稀有度 → charge 預算
 const qualityOf = (id) => WEAPON_QUALITY[(WEAPONS[id] || {}).rarity] || 1;
-CONFIG.enhance = { sharpMin: 3, sharpMax: 8, balanceMin: 2, balanceMax: 5 };          // 鋒利/平衡的隨機值域
+CONFIG.enhance = { sharpMin: 3, sharpMax: 8, balanceMin: 2, balanceMax: 5,             // 鋒利/平衡的隨機值域
+  qualityWeights: { 1: 55, 2: 26, 3: 12, 4: 5, 5: 2 } };                               // 掉落武器的精良度分佈（大多粗製，偶爾精良/上乘＝強化次數更多）
 // 詞條池（迷你聖物）：純數值走 delta；有效果走 hook（poiseAdd 等）；momentum 走 S1；source 限定來源
 const AFFIXES = {
   piercing: { name: '破甲', charges: 2, delta: { pierceAdd: 0.30 } },
@@ -2879,7 +2880,7 @@ function applyEventOutcome(o, mi) {
     case 'nothing': return o.msg || '離開了，什麼也沒發生';   // o.msg＝給有敘事但無機制的選項一句像樣的收場（如護送難民）
     case 'leave': { if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可離隊的人'; const gone = roster.splice(mi, 1)[0]; return `${gone.name} 離開了隊伍`; }   // 移除一名指定隊員（need:'target'）；女巫的 inline 移除是這個的特例
     case 'ammo': { const ids = WEAPON_IDS.filter(id => !isInfiniteAmmo(id) && !WEAPONS[id].silent), id = rngPick(ids), amt = WEAPONS[id].magazine * (o.big ? 6 : 3); ammoStock[id] = (ammoStock[id] || 0) + amt; return `${WEAPONS[id].name}彈 +${amt}`; }
-    case 'weapon': { const id = o.id || rollLootWeapon(); warehouse.push({ kind: 'weapon', id }); return `取得武器 ${WEAPONS[id].name}`; }
+    case 'weapon': { const id = o.id || rollLootWeapon(); const e = lootWeaponEntry(id, o.quality); warehouse.push(e); return `取得武器 ${WEAPONS[id].name}${qualityTag(e.quality)}`; }
     case 'equip': { const id = o.id || rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); return `取得裝備 ${EQUIPMENT[id].name}`; }
     case 'item': { const id = o.id || rngPick(LOOT_ITEM_IDS); giveItemStack(id); return `取得道具 ${ITEMS[id].name} ×${ITEM_STACK_MAX}`; }
     case 'off': { const id = o.id || rngPick(availPool('off', LOOT_OFF_IDS)); warehouse.push({ kind: 'off', id }); return `取得副手 ${OFFHANDS[id].name}`; }
@@ -3136,6 +3137,13 @@ const RARITY_WEIGHT = { common: 60, uncommon: 25, rare: 12, epic: 4, legendary: 
 const weaponValue = (W) => W.damage * W.fireRate * (W.range / 400);   // 粗略估值（自動配裝用）
 function weightedPick(ids, weightOf) { const w = ids.map(weightOf); const tot = w.reduce((a, b) => a + b, 0); let r = srand() * tot; for (let i = 0; i < ids.length; i++) { r -= w[i]; if (r <= 0) return ids[i]; } return ids[ids.length - 1]; }   // 非戰鬥(loot)＝吃種子
 const rollLootWeapon = () => weightedPick(randomWeaponPool(availPool('weapon', LOOT_WEAPON_IDS)), id => RARITY_WEIGHT[WEAPONS[id].rarity] || 10);
+// 掉落武器的精良度（＝強化 charge 預算，本身不加數值）：擲一個獨立的精良度等級，與武器本身的基礎稀有度取高。
+// 這讓「同一把長劍」可能撿到粗製(精良1)或精良(精良3)，強化系統的深度在實際遊戲流程裡才活起來。
+function rollDropQuality() { const W = CONFIG.enhance.qualityWeights; let tot = 0; for (const q of [1, 2, 3, 4, 5]) tot += (W[q] || 0); let x = srand() * tot; for (const q of [1, 2, 3, 4, 5]) { x -= (W[q] || 0); if (x <= 0) return q; } return 1; }
+const dropWeaponQuality = (id) => Math.max(qualityOf(id), rollDropQuality());
+// 撿到／取得一把武器的倉庫物件（帶擲出的精良度）；q 給定時沿用（拾取既有實例用）。附「★精良度」標籤給收場訊息。
+const lootWeaponEntry = (id, q) => ({ kind: 'weapon', id, quality: q != null ? q : dropWeaponQuality(id) });
+const qualityTag = (q) => (q >= 2 ? `（${'★'.repeat(q)} 精良${q}）` : '');   // 精良1＝粗製，不特別標；精良2+ 才提示「這把值得帶去強化」
 
 // --- 倉庫容量 ---
 const warehouseCap = () => roster.length * CONFIG.loadout.slotsPerMember;
@@ -3145,7 +3153,7 @@ const overCap = () => warehouseUsed() > warehouseCap();
 // --- 軍械庫節點：三選一拿 武器/裝備/技能/道具 → 倉庫 → 回路線圖（不進戰鬥、不耗時）---
 function enterArmory() { scene = 'ARMORY'; releasePointer(); armoryOffers = rollArmory(CONFIG.loadout.scavengeChoices); }
 function rollArmory(n) {
-  const weapon = () => { const id = rollLootWeapon(), W = WEAPONS[id]; return { type: 'weapon', id, label: `武器 · ${W.name}（${W.rarity}）`, color: rarityColor(W.rarity) }; };
+  const weapon = () => { const id = rollLootWeapon(), W = WEAPONS[id], q = dropWeaponQuality(id); return { type: 'weapon', id, quality: q, label: `武器 · ${W.name}${q >= 2 ? ' ' + '★'.repeat(q) : ''}`, color: rarityColor(W.rarity) }; };
   const equipO = () => { const id = rngPick(availPool('equip', LOOT_EQUIP_IDS)), E = EQUIPMENT[id]; return { type: 'equip', id, label: `裝備 · ${E.name}（${E.rarity}）`, color: '#9fd0e0' }; };
   const ability = () => { const id = rngPick(availPool('ability', LOOT_ABILITY_IDS)), A = ABILITIES[id]; return { type: 'ability', id, label: `技能 · ${A.name}`, color: '#c0a0ff' }; };
   const itemO = () => { const id = rngPick(LOOT_ITEM_IDS), I = ITEMS[id]; return { type: 'item', id, label: `道具 · ${I.name}`, color: '#ffd27d' }; };
@@ -3157,7 +3165,7 @@ function rollArmory(n) {
 }
 function armoryPick(i) {
   if (scene !== 'ARMORY' || !armoryOffers || i < 0 || i >= armoryOffers.length) return;
-  const o = armoryOffers[i]; if (o.type === 'item') giveItemStack(o.id); else warehouse.push({ kind: o.type, id: o.id }); armoryOffers = null; advanceNode();
+  const o = armoryOffers[i]; if (o.type === 'item') giveItemStack(o.id); else if (o.type === 'weapon') warehouse.push(lootWeaponEntry(o.id, o.quality)); else warehouse.push({ kind: o.type, id: o.id }); armoryOffers = null; advanceNode();
 }
 
 /* ── 導師節點（使用者定案）──────────────────────────────────────────────
@@ -3284,7 +3292,7 @@ function rollResupply() {
       const k = 1 + (srand() < 0.5 ? 1 : 0);
       for (let j = 0; j < k; j++) { const id = rngPick(ids), amt = WEAPONS[id].magazine * (2 + Math.floor(srand() * 3)); ammoStock[id] = (ammoStock[id] || 0) + amt; got.push(`${WEAPONS[id].name}彈+${amt}`); }
     } else if (seen[c]) { const ids = WEAPON_IDS.filter(id => !isInfiniteAmmo(id) && !WEAPONS[id].silent), id = rngPick(ids), amt = WEAPONS[id].magazine * 2; ammoStock[id] = (ammoStock[id] || 0) + amt; got.push(`${WEAPONS[id].name}彈+${amt}`); }   // 同類型重抽→改給彈藥(不重複物品)
-    else if (c === 'weapon') { const id = rollLootWeapon(); warehouse.push({ kind: 'weapon', id }); got.push(WEAPONS[id].name); }
+    else if (c === 'weapon') { const id = rollLootWeapon(); const e = lootWeaponEntry(id); warehouse.push(e); got.push(WEAPONS[id].name + qualityTag(e.quality)); }
     else if (c === 'equip') { const id = rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); got.push(EQUIPMENT[id].name); }
     else if (c === 'item') { const id = rngPick(LOOT_ITEM_IDS); giveItemStack(id); got.push(ITEMS[id].name + ' ×' + ITEM_STACK_MAX); }
     else if (c === 'off') { const id = rngPick(availPool('off', LOOT_OFF_IDS)); warehouse.push({ kind: 'off', id }); got.push(OFFHANDS[id].name); }
@@ -3308,7 +3316,7 @@ function applyTarget(mi) {
 function applyOffer(o, mi) {
   if (o.type === 'supply') { for (const id of WEAPON_IDS) if (!isInfiniteAmmo(id) && !WEAPONS[id].silent) ammoStock[id] += o.amt; restMsg = `搜刮：全武器類彈藥 +${o.amt}`; }   // 消音亞音速彈不由補給補（維持稀少）
   else if (o.type === 'maxhp') { for (const r of roster) r.bonusMaxHp = (r.bonusMaxHp || 0) + o.amt; restMsg = `搜刮：全隊 +${o.amt} maxHP`; }
-  else if (o.type === 'weapon') { warehouse.push({ kind: 'weapon', id: o.id }); restMsg = `搜刮：${WEAPONS[o.id].name} 入倉庫`; }
+  else if (o.type === 'weapon') { const e = lootWeaponEntry(o.id); warehouse.push(e); restMsg = `搜刮：${WEAPONS[o.id].name}${qualityTag(e.quality)} 入倉庫`; }
   else if (o.type === 'ability') { warehouse.push({ kind: 'ability', id: o.id }); restMsg = `搜刮：${ABILITIES[o.id].name} 入倉庫`; }
   else if (o.type === 'equip') { warehouse.push({ kind: 'equip', id: o.id }); restMsg = `搜刮：${EQUIPMENT[o.id].name} 入倉庫`; }
   else if (o.type === 'item') { giveItemStack(o.id); restMsg = `搜刮：${ITEMS[o.id].name} ×${ITEM_STACK_MAX} 入倉庫`; }
