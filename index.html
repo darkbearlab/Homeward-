@@ -93,6 +93,7 @@ const CONFIG = {
   //   套用點：spdOf（我方移動）、makeEnemy.moveSpeed（敵方移動）、startSwing（揮擊三段）、aimTimeOf（預告）。
   //   設回 1.0＝恢復原速。刻意不動士氣/CD/耐力回復等純邏輯計時。
   tempo: 1.2,
+  introEnabled: true,       // 選完出身是否播序章（敗騎自屍山醒來→處決狼→遇敵兵→撤離）。關掉＝直接進路線圖。
   moveSpeed: 110,           // px/s（戰術化：放慢）
   turnSpeed: 480,           // deg/s（預設砲塔轉速；實際以各武器 turnSpeed 為準）
   mouseSensitivity: 0.0035, // FPS 式滑鼠鎖定靈敏度（rad/px）。轉速不夠快時砲塔會追不上＝轉向延遲
@@ -694,7 +695,7 @@ CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數�
 // restEvery＝每隔幾欄放一道「休息牆」（整欄 REST）＝不管走哪條路，都在相同深度必經休息（見 genRoadmap）。
 // siteWeights＝休息節點裡實際是什麼（**進入才知道**）：營地整補 / 導師 / 未來的鐵匠・商人・情報販子・營地事件。
 CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
-  typeWeights: { COMBAT: 4, EVENT: 4, ARMORY: 1.4, REST: 2.0 },
+  typeWeights: { COMBAT: 4, EVENT: 5, ARMORY: 1.4, REST: 2.0 },   // 休息牆吃掉整欄，事件權重再拉高補償（隨機欄裡最高）
   siteWeights: { camp: 3, tutor: 1.5 } };
 /* ── 休息節點的「內容」（使用者定案：導師歸類成休息，進入才揭曉）─────────────
    路線圖上所有這些都畫成同一種「休整地」節點，玩家點進去才知道是哪一種——
@@ -2212,7 +2213,7 @@ const ORIGINS = {
 const ORIGIN_IDS = Object.keys(ORIGINS);
 let originPick = null;   // 本局選的出身（顯示用；實際效果已寫進 roster[0]）
 function enterOrigin() { scene = 'ORIGIN'; releasePointer(); }
-// 選定出身 → 覆寫騎士的配裝 → 進路線圖
+// 選定出身 → 覆寫騎士的配裝 → 播序章 → 進路線圖
 function chooseOrigin(id) {
   const O = ORIGINS[id];
   if (!O || scene !== 'ORIGIN') return false;
@@ -2225,7 +2226,8 @@ function chooseOrigin(id) {
   k.allocatedAmmo = isInfiniteAmmo(k.weaponId) ? 0 : CONFIG.ammo.defaultAlloc;
   k.allocatedAmmo2 = isInfiniteAmmo(k.weaponId2) ? 0 : CONFIG.ammo.defaultAlloc;
   Hooks.fire('originChosen', { id, origin: O });
-  scene = 'MAP'; releasePointer();
+  if (CONFIG.introEnabled) startIntro();   // 選完出身＝敗騎自屍山醒來的序章（Esc 可跳過）
+  else { scene = 'MAP'; releasePointer(); }
   return true;
 }
 function initRun() {
@@ -2721,86 +2723,85 @@ function makeIntroCast() {
   const g2 = makeRecruit(used); g2.weaponId = rngPick(availPool('weapon', RECRUIT_WEAPON_IDS));
   return [prot, g1, g2];
 }
+/* 新序章（使用者定案）：敗騎自屍山血海中醒來 → 處決啃屍的狼 → 接管操作 → 遇搜刮的敵兵
+   （文字卡操作說明）→ 擊敗 → 撤離。全程重用既有的 cutscene beat 序列器（聚光/對話/腳本攻擊/gate）。 */
 function startIntro() {
   introActive = true; restTutorial = false;
-  introCast = makeIntroCast();
-  buildMapDerived('intro');
+  buildMapDerived('field');                          // 曠野當戰場（開闊，適合屍山血海的 placeholder）
   for (const d of MAP.doors) d.open = false;
   for (const d of (MAP.destructibles || [])) { d.cur = d.intact; d.curHp = d.hp; }
-  reservations = new Map(); patrolClaims = new Map(); patrolPool = []; enemyIdSeq = 1; bullets = []; grenades = []; smokes = []; flashFx = []; particles = []; drops = []; fileDrop = null; cacheGround = []; prisoners = []; corpses = []; decals = []; soundPings = []; shakeAmt = 0; kickY = 0; hitstopT = 0;
+  reservations = new Map(); patrolClaims = new Map(); patrolPool = []; enemyIdSeq = 1;
+  bullets = []; grenades = []; smokes = []; flashFx = []; particles = []; drops = []; fileDrop = null;
+  cacheGround = []; prisoners = []; corpses = []; decals = []; soundPings = []; shakeAmt = 0; kickY = 0; hitstopT = 0;
   searchFocusNode = null; searchSet = null; searchCleared = null; searchConsumedT = -Infinity;
-  // 主角＝players[0]（管制室，看著下方）；演出期由腳本移動，鏡頭固定，控制鎖住
-  players = [makePlayer(0, introCast[0], { x: 390, y: 240 })];
-  players[0].facing = Math.PI / 2; players[0].state = 'CONTROLLED'; controlledId = 0;
-  // 同僚＝enemy 單位（讓玩家子彈打得到；IDLE 不交戰；被貼背＝繞背爆擊）
-  const victim = makeEnemy(0, 'rusher', false, Math.PI / 2, 'footman');
-  victim.pos = { x: 320, y: 240 }; victim.facing = Math.PI / 2; victim.hp = victim.maxHp = 30;
-  enemies = [victim];
   introGuards = []; introConsole = null;
-  if (CONFIG.devLootRack) spawnDevRack();   // 開發測試：第0關陳列所有武器/道具（解鎖後走過即測）
-  curTimeBudget = 1e9;   // 序章不要追兵打斷敘事
-  simTime = 0; reinforceTimer = 0;
-  extractedCount = 0; deadCount = 0; result = null;
+  // 騎士＝出身選定的孤身一人；醒來處在戰場左側
+  const wake = { x: 220, y: 360 };
+  introCast = [roster[KNIGHT_ID]];                   // finishIntro 的失敗保底
+  players = [makePlayer(0, roster[KNIGHT_ID], wake)];
+  players[0].facing = 0; players[0].state = 'CONTROLLED'; controlledId = 0;
+  // 屍山血海（placeholder）：醒來處散佈屍體叉叉 + 血跡
+  const scatter = [[180, 318], [250, 402], [158, 378], [300, 332], [206, 300], [286, 410], [344, 372], [150, 344], [262, 356], [214, 420], [330, 308]];
+  for (const s of scatter) { corpses.push({ x: s[0], y: s[1], enemy: srand() < 0.5 }); pushDecal(s[0], s[1], 14 + srand() * 10, 'rgba(96,20,20,0.5)'); }
+  // 眼前一隻狼，背對玩家，正低頭啃食一具屍體
+  const wolf = makeEnemy(nearestNode(wake, false), 'rusher', false, 0, 'wolf');
+  wolf.pos = { x: 470, y: 360 }; wolf.homePos = { x: 470, y: 360 }; wolf.facing = 0;   // 面向右＝背對從左來的騎士
+  wolf.state = 'IDLE'; wolf.hp = wolf.maxHp = 30;
+  corpses.push({ x: 508, y: 360, enemy: true }); pushDecal(500, 360, 18, 'rgba(110,24,24,0.6)');
+  // 再往前，一名敵兵蹲著搜刮（面向下方的屍體＝背對動線、不會提早發現你，直到文字卡後才開打）
+  const soldier = makeEnemy(nearestNode({ x: 840, y: 380 }, false), 'holder', false, Math.PI / 2, 'footman');
+  soldier.pos = { x: 840, y: 380 }; soldier.homePos = { x: 840, y: 380 }; soldier.facing = Math.PI / 2;
+  soldier.state = 'IDLE'; soldier.introFrozen = true;   // 文字卡結束前不行動、不偵測（見 enemyTick）
+  corpses.push({ x: 840, y: 434, enemy: false }); pushDecal(840, 430, 16, 'rgba(96,20,20,0.5)');
+  enemies = [wolf, soldier];
+  if (CONFIG.devLootRack) spawnDevRack();
+  curTimeBudget = 1e9; simTime = 0; reinforceTimer = 0;
+  extractedCount = 0; deadCount = 0; result = null; squadRevealed = false;
   scene = 'COMBAT'; Input.aim = players[0].facing;
   initCamera(players[0]);
-  cutscene = { beats: introBeats(victim), i: 0, line: null, subtitle: '', lock: true, gate: null,
-               cam: { x: 380, y: 215, angle: 0 }, reveal: { x: 355, y: 245, r: 168 }, victim, flags: {}, advance: false };
+  cutscene = { beats: introBeats(), i: 0, line: null, subtitle: '', lock: true, gate: null,
+               cam: { x: 300, y: 360, angle: 0 }, reveal: { x: 220, y: 360, r: 140 },
+               victim: wolf, soldier, flags: {}, advance: false, card: null, cardAck: false };
 }
-// 序章對白/演出腳本（節拍序列）。對白以「對話泡」呈現於說話者頭頂（pos 給世界座標、不顯姓名）。
-function introBeats(victim) {
-  const prot = () => players[0].pos, vic = () => victim.pos;
-  const guard0 = () => (introGuards[0] ? introGuards[0].pos : players[0].pos);
-  const guard1 = () => (introGuards[1] ? introGuards[1].pos : players[0].pos);
+// 序章節拍序列。對白以「對話泡」呈現於說話者頭頂（pos 給世界座標、不顯姓名）。
+function introBeats() {
+  const prot = () => players[0].pos;
   return [
-    { kind: 'wait', dur: 0.6 },
-    { kind: 'say', pos: vic, text: '時候…終於到了。那東西，終於完成了。' },
-    { kind: 'say', pos: prot, text: '是啊。父親會以我們為傲。' },
-    { kind: 'say', pos: vic, text: '再過不久，世界就會聽見父親的聲音。' },
-    { kind: 'say', pos: prot, text: '我去趟洗手間。' },
-    { kind: 'say', pos: vic, text: '去吧。' },
-    { kind: 'move', actor: () => players[0], to: { x: 470, y: 70 }, speed: 150 },   // 往上走出聚光、沒入迷霧
-    { kind: 'wait', dur: 0.8 },
-    { kind: 'move', actor: () => players[0], to: { x: 320, y: 170 }, speed: 120 },  // 自迷霧走回、停在同僚正後方
-    { kind: 'face', actor: () => players[0], to: { x: 320, y: 240 } },
-    { kind: 'wait', dur: 0.4 },
-    { kind: 'shoot', text: '按下左鍵攻擊' },                            // 等待左鍵 → 處決同僚
+    { kind: 'wait', dur: 0.9 },
+    { kind: 'say', pos: prot, text: '……我還活著？' },
+    { kind: 'say', pos: prot, text: '（環顧四周，全是自己人的屍體）我們……輸了。' },
+    { kind: 'reveal', to: { x: 360, y: 360, r: 320 } },      // 聚光擴大，帶出前方的狼
     { kind: 'wait', dur: 0.5 },
-    { kind: 'cam', to: 'follow' },                                       // 交接：鏡頭轉為跟隨主角（恢復一般迷霧）
-    { kind: 'sub', text: '取得機密檔案（走到控制台按 F）' },
-    { kind: 'do', fn: () => { introConsole = { x: 700, y: 240, used: false }; } },
-    { kind: 'gate', on: 'codes' },
-    { kind: 'sub', text: '前往出口、按 F 開門' },
-    { kind: 'gate', on: 'door' },
-    { kind: 'sub', text: '' },
-    { kind: 'cam', to: { x: 980, y: 240, angle: 0 } },                   // 開門後：固定機位看廊道
-    { kind: 'reveal', to: { x: 1010, y: 240, r: 185 } },                 // 聚光移到守衛區
-    { kind: 'do', fn: () => {   // 兩名守衛現身
-        introGuards = [ { pos: { x: 1000, y: 215 }, facing: Math.PI, hue: 0, name: '守衛' },
-                        { pos: { x: 1000, y: 265 }, facing: Math.PI, hue: 0, name: '守衛' } ];
-      } },
-    { kind: 'wait', dur: 0.6 },
-    { kind: 'say', pos: prot, text: 'For our Father.' },
-    { kind: 'say', pos: guard0, text: 'For our Father.' },              // 兩名守衛依序回應
-    { kind: 'say', pos: guard1, text: 'For our Father.' },
-    { kind: 'do', fn: () => guardsJoin() },                              // 守衛入隊（帶初始武器）
-    { kind: 'cam', to: 'follow' },                                       // 交回跟隨（恢復一般迷霧）
-    { kind: 'sub', text: '按 H 撤離　或 Shift+H 全員撤離' },
-    { kind: 'gate', on: 'extract' },                                     // 永不自完成；由 endMission 收尾
+    { kind: 'say', pos: () => cutscene.victim.pos, text: '（一隻狼正低頭啃食屍體，背對著你）' },
+    { kind: 'sub', text: '繞到狼的背後' },
+    { kind: 'move', actor: () => players[0], to: { x: 412, y: 360 }, speed: 110 },
+    { kind: 'face', actor: () => players[0], to: { x: 470, y: 360 } },
+    { kind: 'wait', dur: 0.3 },
+    { kind: 'shoot', victim: () => cutscene.victim, text: '按左鍵攻擊——趁牠不備' },   // 一擊處決
+    { kind: 'wait', dur: 0.7 },
+    { kind: 'say', pos: prot, text: '（撿起地上的兵刃）得離開這裡。' },
+    { kind: 'cam', to: 'follow' },                            // 交接控制、恢復一般視野
+    { kind: 'sub', text: '往前走（WASD 移動）' },
+    { kind: 'gate', on: 'approach' },                         // 玩家接近敵兵 → 觸發文字卡
+    { kind: 'card', title: '操作說明', lines: [
+        'WASD 移動　·　滑鼠轉向',
+        '左鍵　揮擊（前搖 → 判定 → 後搖，要耐力）',
+        '右鍵　格擋／招架（有盾才擋得住）',
+        '',
+        '前方有名敵兵正在搜刮屍體——解決他。',
+      ] },
+    { kind: 'do', fn: () => { const s = cutscene.soldier; if (s) { s.introFrozen = false; s.state = 'ENGAGED'; s.facing = Math.PI; } } },
+    { kind: 'sub', text: '擊敗敵兵' },
+    { kind: 'gate', on: 'clear' },
+    { kind: 'sub', text: '前往撤離點（走過去，或按 H 自走）' },
+    { kind: 'gate', on: 'extract' },                          // 由 endMission（場上無我方）收尾
   ];
 }
-// 守衛入隊：比照解放俘虜，但帶 RECRUIT 初始武器（用 introCast[1]/[2] 以對齊最終 roster）
-function guardsJoin() {
-  introGuards.forEach((g, k) => {
-    const u = makePlayer(players.length, introCast[k + 1], { x: g.pos.x, y: g.pos.y });
-    u.facing = g.facing; u.state = 'IDLE'; u.idleAnchor = u.facing;
-    players.push(u); spawnHeal(g.pos);
-  });
-  introGuards = [];   // 轉為真單位後不再以 actor 繪製
-}
 function gateSatisfied(g) {
-  if (g === 'fire') return cutscene.victim && cutscene.victim.dead;
-  if (g === 'codes') return introConsole && introConsole.used;
-  if (g === 'door') { const d = MAP.doors.find(x => x.id === 'exit'); return d && d.open; }
+  const cs = cutscene; if (!cs) return false;
+  if (g === 'wolf') return cs.victim && cs.victim.dead;
+  if (g === 'approach') return cs.soldier && !cs.soldier.dead && dist(players[0].pos, cs.soldier.pos) < 175;
+  if (g === 'clear') return cs.soldier && cs.soldier.dead;
   return false;   // 'extract'：由 endMission（場上無我方）收尾
 }
 function cutsceneTick(dt) {
@@ -2825,6 +2826,7 @@ function beatEnter(cs, b) {
   else if (b.kind === 'move') { cs.lock = true; }
   else if (b.kind === 'wait') { cs.lock = true; }
   else if (b.kind === 'shoot') { cs.lock = true; cs.line = null; cs.subtitle = b.text || '按下左鍵攻擊'; }
+  else if (b.kind === 'card') { cs.lock = true; cs.line = null; cs.card = { title: b.title || '', lines: b.lines || [] }; cs.cardAck = false; }   // 文字卡：暫停畫面、點擊關閉（新）
   else if (b.kind === 'gate') { cs.lock = false; cs.gate = b.on; cs.line = null; if (b.text != null) cs.subtitle = b.text; }
   else if (b.kind === 'choice') { cs.lock = true; cs.advance = false; cs.choice = b.options || []; cs.choicePick = null; cs.line = b.text ? { text: b.text, pos: b.pos } : null; }   // 對話分歧：列選項、按數字鍵選
 }
@@ -2840,14 +2842,18 @@ function beatDone(cs, b, dt) {
       return dist(a.pos, b.to) < 4;
     }
     case 'shoot': {
-      if (mouse.down && !b._fired) {   // 左鍵 → 處決同僚（貼背＝繞背爆擊；999 確保斃）
+      const v = b.victim ? b.victim() : cs.victim;
+      if (mouse.down && !b._fired && v) {   // 左鍵 → 一擊處決（貼背＝繞背爆擊；999 確保斃）
         b._fired = true;
-        const p = players[0], v = cs.victim;
-        p.facing = angTo(p.pos, v.pos); p.muzzle = 0.05; spawnMuzzleBullet(p, v);
+        const p = players[0];
+        p.facing = angTo(p.pos, v.pos);
+        if (p.weapon && p.weapon.melee) { startSwing(p, 1); spawnHit(v.pos); }   // 近戰：揮一刀
+        else { p.muzzle = 0.05; spawnMuzzleBullet(p, v); }                        // 遠程：槍口火光
         damageUnit(v, 999, 1, angTo(v.pos, p.pos));
       }
-      return cs.victim.dead;
+      return v ? v.dead : true;
     }
+    case 'card': if (cs.cardAck) { cs.card = null; cs.cardAck = false; return true; } return false;
     case 'choice': {   // 等玩家選；選了→套 fn/set/queue、把該選項的 then 節拍接到後面、續播
       if (cs.choicePick == null) return false;
       const opt = b.options[cs.choicePick]; cs.choicePick = null; cs.choice = null; cs.line = null;
@@ -2868,16 +2874,16 @@ function spawnMuzzleBullet(p, v) { spawnHit(v.pos); for (let i = 0; i < 3; i++) 
 // 結束序章 → 序章休息（含教學）。陣容＝撤出者（與 introCast 一致），失敗保底用 introCast。
 function finishIntro() {
   const survivors = players.filter(p => p.state === 'EXTRACTED');
-  roster = survivors.length ? survivors.map(rosterFromPlayer) : introCast.slice();
+  if (survivors.length) roster = survivors.map(rosterFromPlayer);   // 帶著撤出的騎士進正式 run（保留血量等）
   introActive = false; cutscene = null; introGuards = []; introConsole = null;
   missionIndex = 0;
-  enterRest(true);   // 序章休息：顯示教學面板
+  scene = 'MAP'; releasePointer();   // 序章結束＝直接進路線圖（不再走舊的「序章休息」）
 }
-// Esc：只跳過演出。陣容直接用 introCast，照樣進序章休息（不顯示教學面板）。
+// Esc：跳過演出＝直接進路線圖（roster 維持出身選定）
 function skipIntro() {
   introActive = false; cutscene = null; introGuards = []; introConsole = null;
-  roster = introCast.slice(); missionIndex = 0;
-  enterRest(false);
+  missionIndex = 0;
+  scene = 'MAP'; releasePointer();
 }
 
 /* =====================================================================
@@ -4649,6 +4655,7 @@ function huntStep(e, dt) {   // 沒有已知目標：有焦點區→清查；否
 }
 
 function enemyTick(e, dt) {
+  if (e.introFrozen) return;    // 序章：文字卡結束前，搜刮的敵兵不行動、不偵測（腳本化開打）
   if (e.staggerT > 0) return;   // 硬直（被戰鎚打中/招架失敗）：完全不行動
   if (e.dummy) return;          // 訓練假人（近戰試作場）：只挨打，不思考
   // 士氣潰逃：丟下戰鬥往入口方向跑（不還手）。**這是「孤騎對軍團」的解**——
@@ -4941,6 +4948,7 @@ cv.addEventListener('mousedown', e => {
   if (scene !== 'COMBAT' || !pointerLocked) return;
   if (cutscene && cutscene.lock) {   // 演出：有對白→左鍵續播；無對白(處決拍)→放行 mouse.down 給 shoot 拍讀取
     if (cutscene.choice) return;     // 對話分歧用數字鍵選，吞掉點擊
+    if (cutscene.card) { if (e.button === 0) cutscene.cardAck = true; return; }   // 文字卡：點擊關閉
     if (cutscene.line) { if (e.button === 0) cutscene.advance = true; return; }
     if (e.button === 0) mouse.down = true;
     return;
@@ -5425,6 +5433,20 @@ function drawCutscene() {
   if (cs.line) {
     const p = cs.line.pos ? cs.line.pos() : null;
     if (p) drawSpeechBubble(w2s(p), cs.line.text);   // 對話泡：說話者頭頂、不顯姓名
+  }
+  if (cs.card) {   // 文字卡（新）：畫面正中的說明面板，點擊關閉
+    const lines = cs.card.lines || [], w = 540, h = 96 + lines.length * 26, x = cv.width / 2 - w / 2, y = cv.height / 2 - h / 2;
+    ctx.fillStyle = 'rgba(6,9,14,0.5)'; ctx.fillRect(0, 0, cv.width, cv.height);   // 壓暗全畫面
+    ctx.fillStyle = 'rgba(12,16,22,0.96)'; ctx.fillRect(x, y, w, h);
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(200,180,120,0.85)'; ctx.strokeRect(x, y, w, h);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe08a'; ctx.font = 'bold 20px Consolas';
+    ctx.fillText(cs.card.title || '', cv.width / 2, y + 36);
+    ctx.font = '15px Consolas'; ctx.fillStyle = '#dbe6f0';
+    lines.forEach((ln, i) => ctx.fillText(ln, cv.width / 2, y + 70 + i * 26));
+    const blink = Math.sin(simTime * 5) > 0;
+    ctx.fillStyle = blink ? '#ffe08a' : 'rgba(205,214,224,0.55)'; ctx.font = '12px Consolas';
+    ctx.fillText('點擊繼續', cv.width / 2, y + h - 14);
+    ctx.textAlign = 'left';
   }
   if (cs.choice) {   // 對話分歧：畫面下方列選項（按數字鍵選）
     ctx.textAlign = 'center'; ctx.font = '13px Consolas';
