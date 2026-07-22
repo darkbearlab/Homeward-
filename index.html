@@ -2418,16 +2418,19 @@ function pickEscortMark(fromId) {
   return any.length ? rngPick(any) : null;
 }
 const maxCompletedCol = () => { let m = -1; for (const id of roadCompleted) { const n = roadNode(id); if (n && n.col > m) m = n.col; } return m; };
-function escortReunite() {   // 抵達團聚點：物資 + 次戰氣勢+（使用者定案：輕量插曲）
+function escortReunite() {   // 抵達團聚點：物資 + 次戰氣勢+（使用者定案：輕量插曲）；護送弱者抵達＝義名+
+  const label = (runEscort && runEscort.label) || '同行的人', mercy = (runEscort && runEscort.mercy) || 0;
   runEscort = null;
   const got = applyEventOutcome({ type: 'loot', n: 1 });
-  addRunMomentumMod({ source: '男孩團聚', amount: CONFIG.escort.reuniteMomentum, lifetime: 'oneBattle' });
-  escortMsg = `走散的男孩在約定的地方等著你們——他平安歸隊，帶來了些物資（${got}），全隊士氣為之一振。`;
+  addRunMomentumMod({ source: '護送團聚', amount: CONFIG.escort.reuniteMomentum, lifetime: 'oneBattle' });
+  if (mercy) runFlags.mercy = (runFlags.mercy || 0) + mercy;   // 義名軸（步驟3 結局象限的來源，與 ralliedKnight 的兵力軸並列）
+  escortMsg = `${label}在約定的會合點與你們重逢，平安無事，還留下些物資（${got}）。全隊士氣為之一振。`;
 }
 function escortMissed() {     // 改道越過團聚點：次戰氣勢−（一次性打擊）
+  const label = (runEscort && runEscort.label) || '同行的人';
   runEscort = null;
-  addRunMomentumMod({ source: '男孩走失', amount: CONFIG.escort.missMomentum, lifetime: 'oneBattle' });
-  escortMsg = '你們走了另一條路。那個男孩沒能跟上……愧疚讓全隊在下一戰前都提不起勁。';
+  addRunMomentumMod({ source: '護送失散', amount: CONFIG.escort.missMomentum, lifetime: 'oneBattle' });
+  escortMsg = `你們走了另一條路。${label}沒能等到你們……愧疚讓全隊在下一戰前都提不起勁。`;
 }
 function checkEscort() {
   if (!runEscort) return;
@@ -2908,14 +2911,28 @@ const EVENTS = [
   { id: 'lostBoy', title: '走散的男孩', text: '一個隨軍的男孩與家人失散，怯生生地問能不能跟著你們，直到前方安全的落腳處。',
     cond: () => !runEscort && roadCurrent != null && roadNode(roadCurrent) && roadNode(roadCurrent).col + 2 <= (roadmap._maxCol || 0),   // 已在護送＝不再觸發；太靠近終點＝沒地方打團聚點
     choices: [
-      { label: '帶上他', hint: '在前方路上約定一處會合——抵達有物資與士氣、改道錯過則下一戰士氣受挫', outcome: { type: 'escortBoy' } },
+      { label: '帶上他', hint: '在前方路上約定一處會合——抵達有物資與士氣、改道錯過則下一戰士氣受挫', outcome: { type: 'escort', kind: 'boy', label: '走散的男孩', mercy: 1, takeMsg: '男孩跟上了隊伍。你在心裡記下前方一處會合的地點——別走岔了。' } },
       { label: '這一路太危險，婉拒', outcome: { type: 'nothing', msg: '你搖了搖頭。男孩失望地退回陰影裡。' } },
     ] },
   // 落難騎士（B面限定）：一名我方騎士帶著僅剩的殘兵被劫掠隊圍攻。殺進去、接觸他(F)招他入伍、一起撤離＝入隊（騎士級）。
   { id: 'lostKnight', title: '被圍的騎士', text: '前方傳來廝殺——一名我方騎士帶著僅剩的幾名士兵，正被一隊劫掠者團團圍住，眼看就要撐不住了。', act: 2,
     choices: [
       { label: '殺進去解圍', hint: '進入戰鬥：接觸騎士（F 招他入伍），一起活著撤離＝他與殘兵入隊', outcome: { type: 'combat', map: 'alpha', rescue: true } },
-      { label: '避開，這不是你顧得了的', outcome: { type: 'nothing', msg: '你別過臉，繞道而行。廝殺聲漸漸落在身後。' } },
+      { label: '避開，這不是你顧得了的', outcome: { type: 'score', mercy: -1, msg: '你別過臉，繞道而行。廝殺聲漸漸落在身後。' } },
+    ] },
+  // 逃亡的農奴（B面限定）：護送＝S3 換皮（抵達＝義名+物資士氣、改道錯過＝他們落入劫掠者手中）。
+  { id: 'fleeingSerfs', title: '逃亡的農奴', text: '一群衣衫襤褸的農奴拖家帶口，逃離被焚的村莊，跪求你護送他們到前方安全的落腳處。', act: 2,
+    cond: () => !runEscort && roadCurrent != null && roadNode(roadCurrent) && roadNode(roadCurrent).col + 2 <= (roadmap._maxCol || 0),
+    choices: [
+      { label: '護送他們一程', hint: '前方約定一處會合——抵達＝義名＋物資士氣、改道錯過＝他們落入劫掠者手中', outcome: { type: 'escort', kind: 'serfs', label: '逃亡的農奴', mercy: 2, takeMsg: '農奴們默默跟上。你在心裡記下前方一處安全的會合點——可別把他們甩在半路。' } },
+      { label: '你自顧不暇，繞道', outcome: { type: 'score', mercy: -1, msg: '你別過臉。他們的哭喊落在身後，很快被風聲蓋過。' } },
+    ] },
+  // 焚村的倖存者（B面限定）：即時取捨——分糧救助（義名＋，但耗己方物資）／搜刮他們最後的口糧（義名−、得物資）／繞過。
+  { id: 'burnedVillage', title: '焚村的倖存者', text: '一座還在冒煙的村莊，幾名倖存者縮在斷壁殘垣間，眼神空洞。他們身上還剩一點口糧。', act: 2,
+    choices: [
+      { label: '分出補給救助他們', hint: '義名＋（全隊小幅回血、換得民心）', outcome: { type: 'score', mercy: 2, msg: '你留下一些糧秣與傷藥。他們哽咽著記住了你的紋章。', then: { type: 'heal', amt: 10 } } },
+      { label: '奪走他們僅剩的口糧', hint: '義名−（得物資，但你也成了劫掠者）', outcome: { type: 'score', mercy: -2, msg: '你別開眼，拿走了他們最後的口糧。', then: { type: 'loot', n: 1 } } },
+      { label: '什麼也不做，離開', outcome: { type: 'nothing', msg: '你沉默地穿過廢墟。' } },
     ] },
   // 女巫的交易（S2×S1）：獻祭一名手下 → 巫紋強化騎士主手，但軍心蒙塵到見證者散盡、且有人憤而離去。
   { id: 'witch', title: '沼澤女巫', text: '霧中一名女巫向你招手：「交出一個追隨你的人，我便讓你的兵刃嗜血如我。」她的眼神讓活著的人都想遠離。',
@@ -2968,7 +2985,8 @@ function applyEventOutcome(o, mi) {
   switch (o.type) {
     case 'nothing': return o.msg || '離開了，什麼也沒發生';   // o.msg＝給有敘事但無機制的選項一句像樣的收場（如護送難民）
     case 'leave': { if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可離隊的人'; const gone = roster.splice(mi, 1)[0]; return `${gone.name} 離開了隊伍`; }   // 移除一名指定隊員（need:'target'）；女巫的 inline 移除是這個的特例
-    case 'escortBoy': { const mark = pickEscortMark(roadCurrent); if (!mark) return '……但前路已到盡頭，無處可送。他向你們道別。'; runEscort = { kind: 'boy', markNodeId: mark, markCol: roadNode(mark).col }; return '男孩跟上了隊伍。你在心裡記下前方一處會合的地點——別走岔了。'; }   // S3：設乘客態 + 在路線圖打一個團聚點記號
+    case 'escort': { const mark = pickEscortMark(roadCurrent); if (!mark) return o.noRoomMsg || '……但前路已到盡頭，無處可送。他們向你們道別。'; runEscort = { kind: o.kind || 'boy', label: o.label || '走散的男孩', mercy: o.mercy || 0, markNodeId: mark, markCol: roadNode(mark).col }; return o.takeMsg || '他們跟上了隊伍。你在心裡記下前方一處會合的地點——別走岔了。'; }   // S3：設乘客態 + 在路線圖打一個團聚點記號（label/mercy 讓男孩/農奴共用同一套）
+    case 'score': { if (o.mercy) runFlags.mercy = (runFlags.mercy || 0) + o.mercy; if (o.might) runFlags.might = (runFlags.might || 0) + o.might; let msg = o.msg || (o.mercy > 0 ? '你做了該做的事。' : o.mercy < 0 ? '你別過臉，繼續趕路。' : ''); if (o.then) { const r = applyEventOutcome(o.then, mi); if (r) msg += `（${r}）`; } return msg; }   // 結局象限的兩軸累加（義名 mercy / 兵力 might）+ 可選 then（實際效果）；步驟3 讀它決定莊園結局
     case 'ammo': { const ids = WEAPON_IDS.filter(id => !isInfiniteAmmo(id) && !WEAPONS[id].silent), id = rngPick(ids), amt = WEAPONS[id].magazine * (o.big ? 6 : 3); ammoStock[id] = (ammoStock[id] || 0) + amt; return `${WEAPONS[id].name}彈 +${amt}`; }
     case 'weapon': { const id = o.id || rollLootWeapon(); const e = lootWeaponEntry(id, o.quality); warehouse.push(e); return `取得武器 ${WEAPONS[id].name}${qualityTag(e.quality)}`; }
     case 'equip': { const id = o.id || rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); return `取得裝備 ${EQUIPMENT[id].name}`; }
@@ -4483,7 +4501,7 @@ function injectKnightRescue() {
   for (let i = 0; i < CONFIG.rescue.raiders; i++) {
     const ang = (i / CONFIG.rescue.raiders) * Math.PI * 2;
     const e = makeEnemy(node, 'rusher', false, ang + Math.PI, rngPick(['footman', 'spearman']));
-    e.pos = { x: kp.x + Math.cos(ang) * 92, y: kp.y + Math.sin(ang) * 92 }; e.state = 'ENGAGED';
+    e.pos = { x: kp.x + Math.cos(ang) * 92, y: kp.y + Math.sin(ang) * 92 }; e.state = 'ENGAGED'; e.rescueRaider = true;
     enemies.push(e); commitReservation(e, e.currentNode);
   }
 }
