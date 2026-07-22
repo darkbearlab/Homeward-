@@ -807,11 +807,15 @@ Phase 4 前的最後一項插隊調整。
 
 **三個事件的拆解**
 
-1. **走散的隨軍男孩**（S1 + S3）
-   - 遇見 → 帶上他＝設 `runEscort=boy`、在路線圖挑一個未來節點打註記。
-   - 抵達註記點＝團聚 → `loot`（物資）＋ S1 `oneBattle` 氣勢+。
-   - 錯過（從別條路越過該深度）＝男孩難過離開 → S1 `oneBattle` 氣勢−（一次性打擊）。
-   - 待決：註記點怎麼選（隨機一個 2~3 欄後的節點？）、UI 怎麼在路線圖標出來、錯過的當下在哪裡告知玩家。
+1. **走散的隨軍男孩**（S1 + S3）✅ **已做**
+   - 遇見 → 帶上他＝`escortBoy` 結果設 `runEscort={kind,markNodeId,markCol}`、在路線圖挑一個未來節點打註記。
+   - 抵達註記點＝團聚 → `loot`（物資）＋ S1 `oneBattle` 氣勢+（`CONFIG.escort.reuniteMomentum`=18）。
+   - 錯過（從別條路越過該深度）＝男孩難過離開 → S1 `oneBattle` 氣勢−（`missMomentum`=−12，一次性）。
+   - **三個待決都定案了**（使用者選「輕量插曲」的賭注）：
+     - **註記點**＝`pickEscortMark`：從當前節點沿 `roadAdj` **可達的後代**裡挑約 2 欄後的節點（排除休息牆/王＝每條路必經、沒張力）。可達保證「有機會到」，玩家仍可分岔＝錯過。
+     - **偵測**＝`advanceNode` 把 `roadCurrent` 併入 `roadCompleted` 後 `checkEscort()`：剛完成的就是註記點→團聚；否則 `maxCompletedCol ≥ markCol`＝越過→錯過。
+     - **UI**＝路線圖上註記點畫金色虛線環＋⚑「會合」；團聚/錯過當下跳一條金色橫幅（`escortMsg`，`selectNode` 挑下一節點時清掉）；護送中頂部常駐提示。
+   - `lostBoy` 事件 `cond` 擋掉「已在護送」與「太靠近終點（沒地方打註記）」。
 
 2. **女巫的獻祭**（S1 + S2）
    - 交出一名手下（**移除一名 roster** — 新的小結果 `sacrifice`）→ S2 強化一件裝備。
@@ -833,7 +837,8 @@ Phase 4 前的最後一項插隊調整。
 - ✅ **S1 · 跨戰鬥氣勢修正層**：`runMomentumMods` + `addRunMomentumMod` + `applyRunMomentum`（`startMission` 開戰時套一發）。
   三型 lifetime（oneBattle／untilGone〔綁見證者〕／whileEquipped〔綁武器〕）全部有測試。
   事件接縫：新增 `momentum` 結果型（`{amount, lifetime, witnesses?, weaponId?, source?}`）。
-- ⏳ S3 護送、S2 強化＝未做。
+- ✅ **S3 護送**（走散的男孩）：`runEscort` 乘客態＋`pickEscortMark` 註記＋`checkEscort` 抵達/錯過偵測＋路線圖 marker/橫幅。5 項測試。
+- ✅ **S2 強化**：引擎/鐵匠/導師/女巫/石中劍＋**掉落端擲精良度**（見上「裝備強化系統」）＝完整可用。
 
 ### 休整地的「人」+ 裝備強化系統（設計草案，使用者定案：一起設計，做完再回頭弄事件）
 

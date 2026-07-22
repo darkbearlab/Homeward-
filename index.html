@@ -786,6 +786,8 @@ CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數�
 // 女巫獻祭：詛咒的氣勢量、額外離隊機率、石中劍的榮譽門檻
 CONFIG.witch = { curse: -35, desertChance: 0.25 };
 CONFIG.stoneswordHonor = 120;   // 拔石中劍需要的累積榮譽
+// S3 護送（走散男孩）：抵達團聚＝次戰氣勢+，改道錯過＝次戰氣勢−（皆 oneBattle，使用者定案「輕量插曲」）
+CONFIG.escort = { reuniteMomentum: 18, missMomentum: -12 };
 CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
   typeWeights: { COMBAT: 4, EVENT: 5, ARMORY: 1.4, REST: 2.0 },   // 休息牆吃掉整欄，事件權重再拉高補償（隨機欄裡最高）
   siteWeights: { camp: 3, tutor: 1.5, blacksmith: 1.5 } };
@@ -2337,6 +2339,7 @@ function initRun() {
   knightRelics = new Set(); applyRelicHooks();         // roguelite：聖物 run 中撿、開新 run 清空
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = []; runMomentumMods = [];   // 戰役旗標/事件佇列/已見事件/跨戰鬥氣勢修正重置
+  runEscort = null; escortMsg = '';   // S3 護送狀態重置
   runStats = { events: 0, kia: 0 };                     // 本局榮譽累計（事件數/陣亡數）重置
   // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
   // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
@@ -2358,6 +2361,7 @@ function initRun() {
 // 在路線圖選擇一個可前往的節點
 function selectNode(id) {
   if (!roadAvailable.includes(id) || roadCompleted.has(id)) return;
+  escortMsg = '';   // 團聚/錯過橫幅只顯示到玩家挑下一個節點
   roadCurrent = id;
   const node = roadNode(id), t = node.type;
   if (t === 'COMBAT') startMission();
@@ -2374,8 +2378,38 @@ function enterSite(site) {
 }
 
 // 完成目前節點 → 回路線圖開放後繼節點；無後繼＝走完路線
+/* ── S3 護送：帶一名非戰鬥乘客，在路線圖上打一個「團聚點」記號 ─────────────
+   pickEscortMark：從 fromId 沿 roadAdj **可達的後代**裡挑一個約 2 欄後的節點（排除休息牆/王——
+   那些每條路必經＝沒有「改道錯過」的張力）。可達＝一定有機會到，但玩家仍可能分岔走掉＝錯過。 */
+function pickEscortMark(fromId) {
+  const from = roadNode(fromId); if (!from) return null;
+  const seen = new Set([fromId]), stack = [fromId], desc = [];   // DFS 收集所有可達後代
+  while (stack.length) { const id = stack.pop(); for (const nx of (roadAdj[id] || [])) if (!seen.has(nx)) { seen.add(nx); desc.push(nx); stack.push(nx); } }
+  const eligible = (want) => desc.filter(id => { const n = roadNode(id); return n && n.col === want && n.type !== 'REST' && !n.boss; });
+  for (const want of [from.col + 2, from.col + 3, from.col + 1]) { const pool = eligible(want); if (pool.length) return rngPick(pool); }
+  const any = desc.filter(id => { const n = roadNode(id); return n && n.type !== 'REST' && !n.boss; });
+  return any.length ? rngPick(any) : null;
+}
+const maxCompletedCol = () => { let m = -1; for (const id of roadCompleted) { const n = roadNode(id); if (n && n.col > m) m = n.col; } return m; };
+function escortReunite() {   // 抵達團聚點：物資 + 次戰氣勢+（使用者定案：輕量插曲）
+  runEscort = null;
+  const got = applyEventOutcome({ type: 'loot', n: 1 });
+  addRunMomentumMod({ source: '男孩團聚', amount: CONFIG.escort.reuniteMomentum, lifetime: 'oneBattle' });
+  escortMsg = `走散的男孩在約定的地方等著你們——他平安歸隊，帶來了些物資（${got}），全隊士氣為之一振。`;
+}
+function escortMissed() {     // 改道越過團聚點：次戰氣勢−（一次性打擊）
+  runEscort = null;
+  addRunMomentumMod({ source: '男孩走失', amount: CONFIG.escort.missMomentum, lifetime: 'oneBattle' });
+  escortMsg = '你們走了另一條路。那個男孩沒能跟上……愧疚讓全隊在下一戰前都提不起勁。';
+}
+function checkEscort() {
+  if (!runEscort) return;
+  if (roadCurrent === runEscort.markNodeId) escortReunite();         // 剛完成的就是團聚點＝抵達
+  else if (maxCompletedCol() >= runEscort.markCol) escortMissed();   // 已推進到/越過團聚點所在欄、卻不是它＝錯過
+}
 function advanceNode() {
   if (roadCurrent != null) roadCompleted.add(roadCurrent);
+  checkEscort();   // S3：抵達團聚點 or 改道錯過（在把 roadCurrent 併入 completed 之後判定）
   const succ = roadCurrent != null ? roadAdj[roadCurrent] : [];
   if (!succ || succ.length === 0) {   // 走完路線＝勝
     if (finaleActive) { resolveFinale(true); return; }   // 最終真相挑戰：走完整條＝真結局＋解 喪鐘
@@ -2668,6 +2702,8 @@ function arenaResetFight() {
    ===================================================================== */
 let eventCur = null, eventPhase = 'CHOICE', eventPendingChoice = null, eventMsg = '', eventRects = [], eventSeen = [];
 let runFlags = {}, pendingEvents = [];   // 戰役旗標(儲存玩家選擇,跨節點)＋預定的後續事件佇列(被報位/伏擊…)；initRun 重置
+let runEscort = null;   // S3 護送：{ kind, markNodeId, markCol } or null（帶著一名非戰鬥乘客，抵達註記點＝團聚、改道越過＝錯過）；initRun 重置
+let escortMsg = '';     // 團聚/錯過的當下要在路線圖跳的橫幅（advanceNode 設、drawRoadmap 顯示一次）
 const setFlag = (k, v) => { runFlags[k] = (v === undefined ? true : v); };
 const flag = (k) => runFlags[k];
 
@@ -2828,6 +2864,13 @@ const EVENTS = [
       { label: '收下謝禮', outcome: { type: 'loot', n: 1 } },
       { label: '婉謝（義名遠播，次戰士氣一振）', outcome: { type: 'momentum', amount: 12, lifetime: 'oneBattle', source: '義名遠播' } },
     ] },
+  // 走散的男孩（S3 護送）：帶上他＝在路線圖前方打一個團聚點；抵達＝物資＋次戰氣勢+，改道越過＝次戰氣勢−。
+  { id: 'lostBoy', title: '走散的男孩', text: '一個隨軍的男孩與家人失散，怯生生地問能不能跟著你們，直到前方安全的落腳處。',
+    cond: () => !runEscort && roadCurrent != null && roadNode(roadCurrent) && roadNode(roadCurrent).col + 2 <= (roadmap._maxCol || 0),   // 已在護送＝不再觸發；太靠近終點＝沒地方打團聚點
+    choices: [
+      { label: '帶上他', hint: '在前方路上約定一處會合——抵達有物資與士氣、改道錯過則下一戰士氣受挫', outcome: { type: 'escortBoy' } },
+      { label: '這一路太危險，婉拒', outcome: { type: 'nothing', msg: '你搖了搖頭。男孩失望地退回陰影裡。' } },
+    ] },
   // 女巫的交易（S2×S1）：獻祭一名手下 → 巫紋強化騎士主手，但軍心蒙塵到見證者散盡、且有人憤而離去。
   { id: 'witch', title: '沼澤女巫', text: '霧中一名女巫向你招手：「交出一個追隨你的人，我便讓你的兵刃嗜血如我。」她的眼神讓活著的人都想遠離。',
     choices: [
@@ -2879,6 +2922,7 @@ function applyEventOutcome(o, mi) {
   switch (o.type) {
     case 'nothing': return o.msg || '離開了，什麼也沒發生';   // o.msg＝給有敘事但無機制的選項一句像樣的收場（如護送難民）
     case 'leave': { if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可離隊的人'; const gone = roster.splice(mi, 1)[0]; return `${gone.name} 離開了隊伍`; }   // 移除一名指定隊員（need:'target'）；女巫的 inline 移除是這個的特例
+    case 'escortBoy': { const mark = pickEscortMark(roadCurrent); if (!mark) return '……但前路已到盡頭，無處可送。他向你們道別。'; runEscort = { kind: 'boy', markNodeId: mark, markCol: roadNode(mark).col }; return '男孩跟上了隊伍。你在心裡記下前方一處會合的地點——別走岔了。'; }   // S3：設乘客態 + 在路線圖打一個團聚點記號
     case 'ammo': { const ids = WEAPON_IDS.filter(id => !isInfiniteAmmo(id) && !WEAPONS[id].silent), id = rngPick(ids), amt = WEAPONS[id].magazine * (o.big ? 6 : 3); ammoStock[id] = (ammoStock[id] || 0) + amt; return `${WEAPONS[id].name}彈 +${amt}`; }
     case 'weapon': { const id = o.id || rollLootWeapon(); const e = lootWeaponEntry(id, o.quality); warehouse.push(e); return `取得武器 ${WEAPONS[id].name}${qualityTag(e.quality)}`; }
     case 'equip': { const id = o.id || rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); return `取得裝備 ${EQUIPMENT[id].name}`; }
@@ -7441,6 +7485,15 @@ function drawRoadmap() {
   ctx.fillStyle = hsl(48, 75, 58); ctx.fillText('★ 軍械庫', cv.width / 2 + 120, 102);
   ctx.fillStyle = hsl(150, 60, 55); ctx.fillText('＋ 休息', cv.width / 2 + 230, 102);
 
+  // S3 護送：團聚/錯過的當下橫幅（selectNode 清掉）；護送中則提示「去 ⚑ 會合」
+  if (escortMsg) {
+    ctx.fillStyle = 'rgba(40,34,20,0.92)'; ctx.fillRect(cv.width / 2 - 380, 114, 760, 30);
+    ctx.strokeStyle = 'rgba(255,210,125,0.7)'; ctx.lineWidth = 1.5; ctx.strokeRect(cv.width / 2 - 380, 114, 760, 30);
+    ctx.fillStyle = '#ffd27d'; ctx.font = '13px Consolas'; ctx.fillText(escortMsg, cv.width / 2, 134);
+  } else if (runEscort) {
+    ctx.fillStyle = '#ffd27d'; ctx.font = '12px Consolas'; ctx.fillText('⚑ 護送中：帶男孩到標記的會合點（走岔了他會跟丟）', cv.width / 2, 132);
+  }
+
   const avail = roadAvailable.filter(id => !roadCompleted.has(id));
   // 邊
   for (const [a, b] of roadmap.edges) {
@@ -7475,6 +7528,13 @@ function drawRoadmap() {
     ctx.fillText(glyph, p.x, p.y + 6);
     ctx.fillStyle = isAvail ? '#e8eef5' : 'rgba(180,190,200,0.6)'; ctx.font = '11px Consolas';
     ctx.fillText(sub, p.x, p.y + 38);
+    // S3 護送：團聚點記號（金色虛線環 + ⚑ + 「會合」）
+    if (runEscort && n.id === runEscort.markNodeId && !done) {
+      ctx.strokeStyle = 'rgba(255,210,125,0.9)'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.arc(p.x, p.y, 29, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#ffd27d'; ctx.font = 'bold 15px Consolas'; ctx.fillText('⚑', p.x, p.y - 30);
+      ctx.font = '10px Consolas'; ctx.fillText('會合', p.x, p.y - 44);
+    }
   }
 
   // 現有陣容（底部）
@@ -8037,7 +8097,7 @@ function enterFinaleSetup() { finaleSeedBuf = ''; scene = 'FINALE'; releasePoint
 // 跳過序章直接進路線圖；走完整條＝真結局＋解 Siren，途中 run 失敗＝Bad End（皆回選單，無刪檔）。
 function startFinale(seedStr) {
   srandSeed((seedStr && seedStr.length) ? seedFromStr(seedStr) : Math.floor(Math.random() * 0xFFFFFFFF));
-  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 };
+  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 }; runEscort = null; escortMsg = '';
   warehouse = []; backpack = []; drops = []; grantStartingGear();
   ammoStock = {}; for (const id of WEAPON_IDS) ammoStock[id] = WEAPONS[id].silent ? CONFIG.ammo.subsonicStart : CONFIG.ammo.stockStart;
   roster = baseRoster(); missionIndex = 0;
