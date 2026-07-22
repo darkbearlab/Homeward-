@@ -949,7 +949,8 @@ Phase 4 前的最後一項插隊調整。
 - ✅ **① 骨架**：`runAct` + `genRoadmap` 依幕標 `roadmap.act`/王名 + `beginAct2` 轉場（Act1 boss→生 Act2、不結算、roster 保留）+ Act2 boss→RUNWIN；路線圖標幕名/王名/翻面橫幅。
 - **② B面內容**（進行中）：
   - ✅ **事件 A/B 分流接縫**：`enterEvent` 濾 `e.act`（無＝共用、1＝敵境、2＝故土）。現有事件先全共用（「複製一份」），B 專屬掛 `act:2` 慢慢充實。
-  - ✅ **落難騎士**（`lostKnight`，act:2）：**劫掠隊＝正規敵軍**（不另做 faction）；延伸俘虜機制——接觸(F)招他入伍＝騎士級（貴氣名/manatarms/板甲）+ 他僅剩的普通殘兵，撤離才入隊；`ralliedKnight` 旗標＝兵力軸來源。
+  - ✅ **落難騎士**（`lostKnight`，act:2）：**劫掠隊＝正規敵軍**（不另做 faction）；延伸俘虜機制——接觸(F)招他入伍＝騎士級（貴氣名/manatarms）+ 他僅剩的普通殘兵，撤離才入隊；`ralliedKnight` 旗標＝兵力軸來源。
+    - ✅ **變體（A+B1）**：`KNIGHT_TEMPLATES` 隨機抽——劍盾/巨斧/長槍/弩騎士（純資料重用現有武器＋近戰/遠程 AI）＋**術士騎士**（B1：新武器「法杖」`staff`＝遠程魔法彈、`infinite`/`magic`/`noRandom`，走現有遠程開火 AI，隊友本就會射＝不必動 AI）。魔法彈另畫成紫青發光光矢。B2（AI 隊友主動施法）＝大坑，先擱。
   - ✅ **農奴/難民事件**（act:2）：護送機制一般化（runEscort 帶 label/mercy，男孩/農奴共用）；`fleeingSerfs`（護送→義名+）、`burnedVillage`（分糧救助/奪走口糧/離開）。新 `score` 結果累加兩軸旗標（義名 `mercy`／兵力 `might`）+ 可選 `then`＝結局象限的種子（與 `ralliedKnight` 並列）。
 - ✅ **③ 結局**（先簡版：一段文字演出）：`homecomingAxes`＝義名 `runFlags.mercy` × 兵力（生還同伴數 + `ralliedKnight`×`knightMight`）；`pickEnding` 依 2×2 象限選 `ENDINGS`（率眾光復/鐵血奪回/教堂會師/焦土）；第二幕莊園 boss 完成→`resolveHomecoming`＝結算(wins+1) + `playEnding` 播該象限 5 行文字 → RUNWIN。門檻 `CONFIG.ending`（先佔位、待調）。
 - ⏳ **④ A面內容 + 打磨**：A 事件池、國界 boss 變體（巡邏隊/戰場/兇獸）、莊園/國界專屬地圖、敘事文本。

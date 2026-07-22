@@ -378,6 +378,8 @@ const WEAPONS = {
   javelin: { name: '投槍',  rarity: 'common',   weight: 1.0, damage: 34, fireRate: 1.2, range: 620,  projSpeed: 560, spreadBase: 2.2, spreadPerShot: 1.0, spreadMax: 8, spreadRecover: 9, magazine: 1, reloadTime: 1.3, turnSpeed: 540, pierce: 0.45, aimTime: 0.75, hands: 1 },
   // 局外解鎖武器（榮譽；解鎖後才進招募/loot 池，仍 RNG 取得）
   warbow:  { name: '戰弓',  rarity: 'uncommon', weight: 1.6, damage: 34, fireRate: 1.2, range: 1300, projSpeed: 760, spreadBase: 1.2, spreadPerShot: 0.7, spreadMax: 5, spreadRecover: 9, magazine: 1, reloadTime: 1.7, turnSpeed: 470, pierce: 0.45, aimTime: 0.95, hands: 2 },   // 強弓：長弓的上位，過半穿甲
+  // 術士騎士（救援變體 B1）的法杖：走遠程開火 AI（隊友本就會射），發射魔法彈＝彈藥無限、過半穿甲、視覺另畫。noRandom＝不進任何隨機池。
+  staff:   { name: '法杖',  rarity: 'rare', weight: 1.4, damage: 30, fireRate: 1.2, range: 900, projSpeed: 560, spreadBase: 1.0, spreadPerShot: 0.5, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 1.5, turnSpeed: 500, pierce: 0.55, aimTime: 0.8, hands: 2, magic: true, infinite: true, noRandom: true },
   falchion:{ name: '彎刀',  rarity: 'uncommon', weight: 1.3, damage: 34, fireRate: 6, range: 62, turnSpeed: 560, pierce: 0.25, melee: true, swingStyle: 'sweep', hands: 1,
              arcDeg: 120, reach: 62, windup: 0.09, activeT: 0.09, recover: 0.24, cleave: 4, knock: 240, stagger: 0, backstabMul: 1.0, poiseDmg: 24, stamCost: 17,
              magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },   // 單手廣掃：對付雜兵群
@@ -790,7 +792,15 @@ CONFIG.stoneswordHonor = 120;   // 拔石中劍需要的累積榮譽
 CONFIG.escort = { reuniteMomentum: 18, missMomentum: -12 };
 // B面「救援落難騎士」（使用者定案）：接觸(F)招他入伍＝騎士級（貴氣名、披甲重裝 manatarms + 板甲）＋他身邊僅剩的幾名普通士兵；
 // 沿用俘虜規則——打完活著撤離才永久入隊（餵步驟3「兵力軸」）。raiders＝圍攻他的劫掠隊（＝正規敵軍）人數。
-CONFIG.rescue = { knightClass: 'manatarms', knightKit: { weaponId: 'sword', offId: 'shield', armorId: 'plate' }, soldiers: 2, soldierClasses: ['footman', 'spearman'], raiders: 3 };
+CONFIG.rescue = { knightClass: 'manatarms', soldiers: 2, soldierClasses: ['footman', 'spearman'], raiders: 3 };
+// 救援騎士的變體（A＝不同武器、B1＝法杖魔法）：都是騎士級身體（CONFIG.rescue.knightClass）＋不同武器/甲。救援時隨機抽一種。
+const KNIGHT_TEMPLATES = [
+  { key: 'sword', name: '劍盾騎士', weaponId: 'sword',    offId: 'shield', armorId: 'plate' },     // 防守磐石
+  { key: 'axe',   name: '巨斧騎士', weaponId: 'axe',      offId: null,     armorId: 'cuirass' },   // 硬換猛攻（hyperArmor、不能格擋）
+  { key: 'spear', name: '長槍騎士', weaponId: 'spear',    offId: null,     armorId: 'plate' },     // 長 reach 控距
+  { key: 'bow',   name: '弩騎士',   weaponId: 'crossbow', offId: null,     armorId: 'mail' },      // 遠程火力
+  { key: 'mage',  name: '術士騎士', weaponId: 'staff',    offId: null,     armorId: 'gambeson' },  // B1：法杖魔法彈（走遠程開火 AI）
+];
 CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
   typeWeights: { COMBAT: 4, EVENT: 5, ARMORY: 1.4, REST: 2.0 },   // 休息牆吃掉整欄，事件權重再拉高補償（隨機欄裡最高）
   siteWeights: { camp: 3, tutor: 1.5, blacksmith: 1.5 } };
@@ -4068,6 +4078,7 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
       pierce: W.pierce || 0,      // 穿甲：對裝甲敵人的擋格率衰減
       tracer: isTracer,           // 曳光彈：火光色亮拖尾（否則極細淡線/隱形）
+      magic: !!W.magic,           // 魔法彈（法杖）：另畫成發光的紫青光矢
       shooterId: isPlayer ? u.id : -1, owner: u,   // 擊殺歸屬；owner＝射手本人（友軍誤傷判定用來排除自己）
     });
   }
@@ -4529,10 +4540,11 @@ function freePrisoner(pr) {
 function rallyStrandedKnight(pr) {
   const used = new Set(players.map(p => p.name));
   const R = CONFIG.rescue;
-  const kcfg = makeRecruit(used, true);   // 貴氣名
-  kcfg.classId = R.knightClass; Object.assign(kcfg, R.knightKit); kcfg.hp = classOf(R.knightClass).hp;
+  const tpl = rngPick(KNIGHT_TEMPLATES);   // A/B1：隨機抽一種變體（劍盾/巨斧/長槍/弩/術士）
+  const kcfg = makeRecruit(used, true);    // 貴氣名
+  kcfg.classId = R.knightClass; kcfg.weaponId = tpl.weaponId; kcfg.offId = tpl.offId; kcfg.armorId = tpl.armorId; kcfg.hp = classOf(R.knightClass).hp;
   const kn = makePlayer(players.length, kcfg, { x: pr.pos.x, y: pr.pos.y });
-  kn.state = 'IDLE'; kn.idleAnchor = kn.facing; kn.rescuedKnight = true;
+  kn.state = 'IDLE'; kn.idleAnchor = kn.facing; kn.rescuedKnight = true; kn.knightVariant = tpl.key;
   players.push(kn); spawnHeal(pr.pos);
   for (let i = 0; i < R.soldiers; i++) {   // 他身邊僅剩的普通士兵
     const scfg = makeRecruit(used);
@@ -6232,13 +6244,24 @@ function drawBullets() {
   // 曳光彈：火光色（橙黃）、較長較亮的加色拖尾
   ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 2.4;
   for (const b of bullets) {
-    if (!b.tracer) continue;
+    if (!b.tracer || b.magic) continue;
     const l = Math.hypot(b.vx, b.vy) || 1, len = clamp(l * 0.05 * CONFIG.juice.tracer, 22, 180);
     const tx = b.x - b.vx / l * len, ty = b.y - b.vy / l * len;
     const col = b.faction === 'player' ? '255,190,96' : '255,120,60';   // 火光色（敵偏紅）
     const g = ctx.createLinearGradient(tx, ty, b.x, b.y);
     g.addColorStop(0, `rgba(${col},0)`); g.addColorStop(1, `rgba(${col},0.95)`);
     ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  // 魔法彈（法杖）：紫青發光光矢 + 亮頭
+  ctx.globalCompositeOperation = 'lighter';
+  for (const b of bullets) {
+    if (!b.magic) continue;
+    const l = Math.hypot(b.vx, b.vy) || 1, len = clamp(l * 0.05, 26, 150);
+    const tx = b.x - b.vx / l * len, ty = b.y - b.vy / l * len;
+    const g = ctx.createLinearGradient(tx, ty, b.x, b.y);
+    g.addColorStop(0, 'rgba(150,110,255,0)'); g.addColorStop(1, 'rgba(160,210,255,0.95)');
+    ctx.lineWidth = 3; ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,225,255,0.95)'; ctx.beginPath(); ctx.arc(b.x, b.y, 3.2, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
 }
