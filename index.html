@@ -413,10 +413,17 @@ const AFFIXES = {
   piercing: { name: '破甲', charges: 2, delta: { pierceAdd: 0.30 } },
   keen:     { name: '鋒棱', charges: 1, delta: { dmgAdd: 6 } },
   flame:    { name: '烈焰', charges: 2, poiseAdd: 12 },                                 // 命中額外體幹傷（Hooks：attackHit）
-  rally:    { name: '戰意', charges: 2, momentum: { amount: 30, lifetime: 'whileEquipped' } },   // 石中劍那條
+  rally:    { name: '戰意', charges: 2, source: 'stone', momentum: { amount: 30, lifetime: 'whileEquipped' } },   // 石中劍專屬（預打滿，非導師可給）
   hex:      { name: '巫紋', charges: 3, source: 'witch', delta: { pierceAdd: 0.5 }, momentum: { amount: 15, lifetime: 'whileEquipped' } },   // 女巫專屬
 };
 const AFFIX_IDS = Object.keys(AFFIXES);
+// 導師可給的詞條＝無來源限定的那些（rally/hex 是事件專屬）
+const TUTOR_AFFIX_IDS = AFFIX_IDS.filter(id => !AFFIXES[id].source);
+/* 詞條取得成本（使用者定案：**先免費**，但留這三個鉤子給將來的 run 內經濟——
+   之後只要改這裡就能加代價，不必動叫用端）。 */
+function affixCost(affixId) { return 0; }
+function canAffordAffix(affixId) { return true; }
+function payForAffix(affixId) { /* 之後扣 run 內資源 */ }
 // 武器實例：{ id, quality, enh:[{kind:'sharp'|'balance'|'affix', charges, value?/affix?}] }
 function weaponInst(id, opts) {
   return { id, quality: (opts && opts.quality != null) ? opts.quality : qualityOf(id), enh: (opts && opts.enh) ? opts.enh.slice() : [] };
@@ -437,7 +444,7 @@ function enhanceWeapon(inst) {
 function applyAffix(inst, affixId, opts) {
   const A = AFFIXES[affixId]; if (!A || !inst || WEAPONS[inst.id].noEnhance) return null;
   if (A.source && (!opts || opts.source !== A.source)) return null;   // 限定來源
-  if (chargesFree(inst) < (A.charges || 1)) return null;
+  if (!(opts && opts.force) && chargesFree(inst) < (A.charges || 1)) return null;   // force＝超凡（女巫）不受格數限制
   inst.enh.push({ kind: 'affix', affix: affixId, charges: A.charges || 1 });
   return A;
 }
@@ -772,6 +779,9 @@ CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數�
 // 事件加權（使用者定案：事件多一點）——事件是招募人手的主要管道，開局單騎後更需要它。
 // restEvery＝每隔幾欄放一道「休息牆」（整欄 REST）＝不管走哪條路，都在相同深度必經休息（見 genRoadmap）。
 // siteWeights＝休息節點裡實際是什麼（**進入才知道**）：營地整補 / 導師 / 未來的鐵匠・商人・情報販子・營地事件。
+// 女巫獻祭：詛咒的氣勢量、額外離隊機率、石中劍的榮譽門檻
+CONFIG.witch = { curse: -35, desertChance: 0.25 };
+CONFIG.stoneswordHonor = 120;   // 拔石中劍需要的累積榮譽
 CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
   typeWeights: { COMBAT: 4, EVENT: 5, ARMORY: 1.4, REST: 2.0 },   // 休息牆吃掉整欄，事件權重再拉高補償（隨機欄裡最高）
   siteWeights: { camp: 3, tutor: 1.5, blacksmith: 1.5 } };
@@ -2067,6 +2077,7 @@ let rosterUidSeq = 1;        // 隊員穩定身分序號（名字會被重用，
 let missionIndex;            // 已清的戰鬥數（用於難度遞增/HUD）
 let restMsg, lastSummary;    // 休息關狀態
 let tutorOffers = null, tutorMsg = '';   // 導師節點：可學清單 / 提示訊息
+let tutorMode = 'art', tutorAffixWep = null;   // 導師的兩種功能：教術(art) / 加詞條(affix)；後者先選武器再選詞條
 let warehouse = [];          // 共用倉庫：未裝備物品 [{kind:'weapon'|'ability', id}]（有上限）。預設空＝沙盒/選單不經 initRun 也不為 undefined
 let backpack = [];           // 臨時背包：任務中撿到、待休息關處理 [{kind, id, ammo}]（無上限、任務中不可動用）
 let ammoStock = {};          // 共用彈藥儲備 {weaponId: number}（按武器類別）
@@ -2760,6 +2771,18 @@ const EVENTS = [
       { label: '只標記位置、回收他丟下的物資（安全）', outcome: { type: 'ammo' } },
       { label: '無視，離開', outcome: { type: 'nothing' } },
     ] },
+  // 女巫的交易（S2×S1）：獻祭一名手下 → 巫紋強化騎士主手，但軍心蒙塵到見證者散盡、且有人憤而離去。
+  { id: 'witch', title: '沼澤女巫', text: '霧中一名女巫向你招手：「交出一個追隨你的人，我便讓你的兵刃嗜血如我。」她的眼神讓活著的人都想遠離。',
+    choices: [
+      { label: '獻祭一名手下（染上巫紋 + 全隊氣勢受詛咒直到他們散盡）', req: 'ally', need: 'target', outcome: { type: 'witchPact' } },
+      { label: '不與魔鬼交易，離開', outcome: { type: 'nothing' } },
+    ] },
+  // 湖中石中劍（S1×S4）：累積榮譽夠多才拔得起（不扣榮譽）；裝著時 rally 詞條大幅加氣勢、完全穿甲、不可再強化。
+  { id: 'stonesword', title: '湖中之劍', text: '一把劍插在湖畔的巨石中，劍身無鏽。傳說只有夠格的人才拔得動它。',
+    choices: [
+      { label: '拔劍（需要足夠的榮譽）', req: 'honor', honor: 120, outcome: { type: 'stonesword' } },
+      { label: '你自認還不夠格，離開', outcome: { type: 'nothing' } },
+    ] },
   // 場景化事件（kind:'scene'）：在戰鬥地圖上用 cutscene 對話演出。男孩＝meet/ambush 地圖的 civ。
   { id: 'boy', kind: 'scene', map: 'meet',
     onEnter: f => { f.boyMet = true; f.boyHostile = srand() < 0.5; },   // 隱藏身分(吃種子)：友善(父親 sleeper) / 敵意(被策反)
@@ -2788,7 +2811,12 @@ const EVENTS = [
       ];
     } },
 ];
-function eventChoosable(c) { return !(c.req === 'gear' && !hasGear()); }
+function eventChoosable(c) {
+  if (c.req === 'gear' && !hasGear()) return false;
+  if (c.req === 'honor' && (meta.honor | 0) < (c.honor || 0)) return false;   // 榮譽門檻（石中劍：夠多才拔得起，不扣）
+  if (c.req === 'ally' && (roster || []).filter((r, i) => i !== KNIGHT_ID).length < 1) return false;   // 要有可獻祭的手下
+  return true;
+}
 function applyEventOutcome(o, mi) {
   if (!o) return '無事發生';
   switch (o.type) {
@@ -2808,6 +2836,19 @@ function applyEventOutcome(o, mi) {
     case 'trade': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的代價'; paid = `付出 ${g}，`; } return paid + applyEventOutcome(o.gain, mi); }
     case 'gamble': { if (srand() < (o.p || 0.5)) return '成功！' + applyEventOutcome(o.win, mi); return '失手！' + applyEventOutcome(o.lose, mi); }
     case 'momentum': { addRunMomentumMod({ source: o.source || 'event', amount: o.amount || 0, lifetime: o.lifetime || 'oneBattle', witnesses: o.witnesses, weaponId: o.weaponId }); return o.amount >= 0 ? '士氣為之一振' : '士氣蒙上陰影'; }   // S1：事件掛一條跨戰鬥氣勢修正
+    case 'witchPact': {   // 女巫的交易：獻祭一名手下（mi）→ 巫紋強化騎士主手 + untilGone 詛咒 + 有些人憤而離去
+      if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可獻祭的人';
+      const victim = roster.splice(mi, 1)[0];
+      const k = roster[KNIGHT_ID];
+      if (!Array.isArray(k.enh)) k.enh = [];
+      if (k.quality == null) k.quality = qualityOf(k.weaponId);
+      const aff = applyAffix({ id: k.weaponId, quality: k.quality, enh: k.enh }, 'hex', { source: 'witch', force: true });   // 超凡＝不受格數限制
+      addRunMomentumMod({ source: '女巫詛咒', amount: CONFIG.witch.curse, lifetime: 'untilGone', witnesses: roster.map(r => r.uid) });
+      const gone = [];
+      for (let i = roster.length - 1; i >= 1; i--) if (srand() < CONFIG.witch.desertChance) gone.push(roster.splice(i, 1)[0].name);
+      return `${victim.name} 化作巫火，你的兵刃染上巫紋（${aff ? aff.name : '？'}）` + (gone.length ? `；${gone.join('、')} 憤而離去` : '') + '。從此軍心蒙塵，直到見證此事的人盡數散去。';
+    }
+    case 'stonesword': { const s = stoneSwordInst(); warehouse.push({ kind: 'weapon', id: 'stonesword', quality: s.quality, enh: s.enh }); return '你握住劍柄——石中劍應手而出。裝上它，戰意自石中湧生。'; }
     case 'combat': { forcedMap = o.map || 'bravo'; eventCur = null; startMission(); return null; }   // ★hook：接特製地圖；打完走一般結算
     case 'rest': { eventCur = null; enterRest(); return null; }   // 事件變成休息關（如：父親接待＋補給）→ 休整後 advanceNode
     default: return '無事發生';
@@ -3090,8 +3131,24 @@ function tutorOffer(artId) {
 }
 function enterTutor() {
   scene = 'TUTOR'; releasePointer();
+  tutorMode = 'art'; tutorAffixWep = null; tutorMsg = '';
   // 只列「學得會的術」；學不會的實體（陶罐/藥/箭袋）根本不該出現在導師面前
   tutorOffers = ART_IDS.filter(id => ARTS[id].learnable).map(tutorOffer);
+}
+function tutorSetMode(m) { if (scene !== 'TUTOR') return; tutorMode = m; tutorAffixWep = null; tutorMsg = ''; }
+// 加詞條：先選武器（enhanceTargets，與鐵匠同源），再選詞條（TUTOR_AFFIX_IDS）
+function tutorPickWeapon(i) { if (scene !== 'TUTOR' || tutorMode !== 'affix') return false; if (!enhanceTargets()[i]) return false; tutorAffixWep = i; tutorMsg = ''; return true; }
+function tutorGrantAffix(affixId) {
+  if (scene !== 'TUTOR' || tutorMode !== 'affix' || tutorAffixWep == null) return false;
+  const t = enhanceTargets()[tutorAffixWep], A = AFFIXES[affixId]; if (!t || !A || A.source) return false;   // 導師不給來源限定的詞條
+  if (chargesFree(t.inst) < (A.charges || 1)) { tutorMsg = `${A.name}：格數不夠（要 ${A.charges} 格，剩 ${chargesFree(t.inst)}）`; return false; }
+  if (!canAffordAffix(affixId)) { tutorMsg = `${A.name}：資源不足`; return false; }   // 經濟鉤子（現免費）
+  const r = applyAffix(t.inst, affixId);   // 就地改 enh 陣列（參照）
+  if (!r) { tutorMsg = '施加失敗'; return false; }
+  payForAffix(affixId);
+  tutorMsg = `${WEAPONS[t.id].name} 獲得詞條：${A.name}`;
+  tutorAffixWep = null;   // 回武器清單
+  return true;
 }
 function tutorPick(i) {
   if (scene !== 'TUTOR' || !tutorOffers || i < 0 || i >= tutorOffers.length) return false;
@@ -5207,7 +5264,17 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (scene === 'ARMORY') { if (k >= '1' && k <= '9') armoryPick(parseInt(k, 10) - 1); return; }
-  if (scene === 'TUTOR') { if (k >= '1' && k <= '9') tutorPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') tutorLeave(); return; }
+  if (scene === 'TUTOR') {
+    if (k === 'tab') { tutorSetMode(tutorMode === 'art' ? 'affix' : 'art'); return; }
+    if (k === 'escape' || k === 'enter') { if (tutorMode === 'affix' && tutorAffixWep != null) tutorAffixWep = null; else tutorLeave(); return; }
+    if (k >= '1' && k <= '9') {
+      const n = parseInt(k, 10) - 1;
+      if (tutorMode === 'art') tutorPick(n);
+      else if (tutorAffixWep == null) tutorPickWeapon(n);
+      else tutorGrantAffix(TUTOR_AFFIX_IDS[n]);
+    }
+    return;
+  }
   if (scene === 'BLACKSMITH') { if (k >= '1' && k <= '9') blacksmithPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') blacksmithLeave(); return; }
   if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(ORIGIN_IDS[parseInt(k, 10) - 1]); return; }
   if (scene === 'RUNEND' || scene === 'RUNWIN') { if (k === 'r') goMenu(); return; }
@@ -6992,14 +7059,23 @@ function drawTutor() {
   restRects = [];
   ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#d9a0e8'; ctx.font = 'bold 30px Consolas'; ctx.fillText('導師', cv.width / 2, 78);
-  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '14px Consolas';
-  ctx.fillText('燒掉卷軸換永久習得：無限次使用，但要 CD、要耐力、前搖會被打斷', cv.width / 2, 104);
-  ctx.fillStyle = 'rgba(205,214,224,0.45)'; ctx.font = '12px Consolas';
-  ctx.fillText('卷軸留著＝即時、打不斷的救命按鈕。這是取捨，不是升級。', cv.width / 2, 126);
+  ctx.fillStyle = '#d9a0e8'; ctx.font = 'bold 30px Consolas'; ctx.fillText('導師', cv.width / 2, 66);
+  // 模式切換：教術 / 加詞條
+  const tabs = [['art', '教術'], ['affix', '加詞條']];
+  const tw = 130, tx0 = cv.width / 2 - tw, ty = 84;
+  tabs.forEach(([m, label], i) => {
+    const tx = tx0 + i * tw, on = tutorMode === m;
+    ctx.fillStyle = on ? 'rgba(54,42,68,0.97)' : 'rgba(28,24,34,0.7)'; ctx.fillRect(tx, ty, tw - 6, 30);
+    ctx.lineWidth = 1.6; ctx.strokeStyle = on ? '#c0a0ff' : 'rgba(120,110,130,0.5)'; ctx.strokeRect(tx, ty, tw - 6, 30);
+    ctx.fillStyle = on ? '#e6dcff' : '#8b8496'; ctx.font = 'bold 14px Consolas'; ctx.fillText(label, tx + (tw - 6) / 2, ty + 20);
+    pushRect(tx, ty, tw - 6, 30, () => tutorSetMode(m));
+  });
+  if (tutorMode === 'affix') { drawTutorAffix(); return; }
+  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '13px Consolas';
+  ctx.fillText('燒卷軸換永久習得：無限次使用，但要 CD、要耐力、前搖會被打斷', cv.width / 2, 132);
 
   const list = tutorOffers || [];
-  const bw = 520, bh = 62, gap = 10, y0 = 168;
+  const bw = 520, bh = 60, gap = 9, y0 = 156;
   for (let i = 0; i < list.length; i++) {
     const o = list[i], y = y0 + i * (bh + gap), x = cv.width / 2 - bw / 2, A = ARTS[o.artId];
     ctx.fillStyle = o.ok ? 'rgba(26,34,46,0.97)' : 'rgba(18,22,28,0.9)';
@@ -7024,6 +7100,55 @@ function drawTutor() {
   ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, 180, 40);
   ctx.fillStyle = '#cdd6e0'; ctx.font = '14px Consolas'; ctx.fillText('什麼都不學（Enter）', cv.width / 2, by + 26);
   pushRect(bx, by, 180, 40, () => tutorLeave());
+}
+// 導師的「加詞條」分頁：先選武器，再選詞條（TUTOR_AFFIX_IDS，先免費、只受格數限制）
+function drawTutorAffix() {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '13px Consolas';
+  ctx.fillText('替武器刻上詞條（現免費，只受精良度格數限制）。高級詞條吃多格。', cv.width / 2, 132);
+  const list = enhanceTargets();
+  const bw = 560, bh = 54, gap = 8, y0 = 156;
+  if (tutorAffixWep == null) {   // 第一步：選武器
+    if (!list.length) { ctx.fillStyle = '#8b97a5'; ctx.font = '14px Consolas'; ctx.fillText('沒有可加詞條的武器。', cv.width / 2, y0 + 30); }
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i], y = y0 + i * (bh + gap), x = cv.width / 2 - bw / 2, s = enhSummary(t.id, t.inst.quality, t.inst.enh);
+      ctx.fillStyle = 'rgba(26,22,34,0.97)'; ctx.fillRect(x, y, bw, bh);
+      ctx.lineWidth = 2; ctx.strokeStyle = '#c0a0ff'; ctx.strokeRect(x, y, bw, bh);
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 15px Consolas'; ctx.fillStyle = '#c0a0ff'; ctx.fillText(`[${i + 1}]`, x + 14, y + 23);
+      ctx.fillStyle = '#e8eef5'; ctx.font = '15px Consolas'; ctx.fillText(WEAPONS[t.id].name + '  ' + s.stars, x + 54, y + 23);
+      ctx.font = '11px Consolas'; ctx.fillStyle = '#8b97a5'; ctx.fillText(t.src + '　' + (s.parts.length ? s.parts.join('・') : '白板'), x + 54, y + 42);
+      ctx.textAlign = 'right'; ctx.fillStyle = '#ffd27d'; ctx.font = 'bold 13px Consolas'; ctx.fillText('剩 ' + s.free + ' 格', x + bw - 16, y + 23);
+      pushRect(x, y, bw, bh, () => tutorPickWeapon(i));
+    }
+  } else {   // 第二步：選詞條
+    const t = list[tutorAffixWep];
+    if (!t) { tutorAffixWep = null; return; }
+    const free = chargesFree(t.inst);
+    ctx.fillStyle = '#e8eef5'; ctx.font = 'bold 15px Consolas'; ctx.fillText(WEAPONS[t.id].name + '（剩 ' + free + ' 格）— 選一條詞條：', cv.width / 2, y0 + 6);
+    TUTOR_AFFIX_IDS.forEach((aid, i) => {
+      const A = AFFIXES[aid], y = y0 + 24 + i * (bh + gap), x = cv.width / 2 - bw / 2, ok = free >= (A.charges || 1);
+      const desc = A.delta ? (A.delta.dmgAdd ? '+' + A.delta.dmgAdd + '傷害' : '') + (A.delta.pierceAdd ? '+' + A.delta.pierceAdd + '穿甲' : '') : (A.poiseAdd ? '命中+' + A.poiseAdd + '體幹傷' : '');
+      ctx.fillStyle = ok ? 'rgba(26,22,34,0.97)' : 'rgba(18,16,22,0.9)'; ctx.fillRect(x, y, bw, bh);
+      ctx.lineWidth = 2; ctx.strokeStyle = ok ? '#c0a0ff' : 'rgba(120,110,130,0.35)'; ctx.strokeRect(x, y, bw, bh);
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 15px Consolas'; ctx.fillStyle = ok ? '#c0a0ff' : '#5c646f'; ctx.fillText(`[${i + 1}]`, x + 14, y + 23);
+      ctx.fillStyle = ok ? '#e8eef5' : '#6b7580'; ctx.font = '15px Consolas'; ctx.fillText(A.name, x + 54, y + 23);
+      ctx.font = '11px Consolas'; ctx.fillStyle = ok ? '#8b97a5' : '#5c646f'; ctx.fillText(desc + '　（吃 ' + A.charges + ' 格）', x + 54, y + 42);
+      if (ok) pushRect(x, y, bw, bh, () => tutorGrantAffix(aid));
+    });
+    const cy = y0 + 24 + TUTOR_AFFIX_IDS.length * (bh + gap) + 6, cx = cv.width / 2 - 70;
+    ctx.fillStyle = 'rgba(24,30,40,0.97)'; ctx.fillRect(cx, cy, 140, 30); ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, 140, 30);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#cdd6e0'; ctx.font = '13px Consolas'; ctx.fillText('← 換一把', cv.width / 2, cy + 20);
+    pushRect(cx, cy, 140, 30, () => { tutorAffixWep = null; });
+  }
+  ctx.textAlign = 'center';
+  if (tutorMsg) { ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 13px Consolas'; ctx.fillText(tutorMsg, cv.width / 2, cv.height - 88); }
+  const by = cv.height - 64, bx = cv.width / 2 - 90;
+  ctx.fillStyle = 'rgba(24,30,40,0.97)'; ctx.fillRect(bx, by, 180, 40); ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, 180, 40);
+  ctx.fillStyle = '#cdd6e0'; ctx.font = '14px Consolas'; ctx.fillText('離開（Enter）', cv.width / 2, by + 26);
+  pushRect(bx, by, 180, 40, () => tutorLeave());
+  ctx.textAlign = 'left';
 }
 // 武器強化摘要（配裝卡/鐵匠共用）：★精良度＋鋒利/平衡/詞條
 function enhSummary(id, quality, enh) {

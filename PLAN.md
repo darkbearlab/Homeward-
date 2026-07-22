@@ -859,8 +859,14 @@ Phase 4 前的最後一項插隊調整。
    ✅ **鐵匠 site**（`REST_SITES.blacksmith`，休整地的一種，進入才知道）：列出騎士兩把主手＋倉庫武器，
    點一下打一次鋒利/平衡（隨機、就地改 enh 陣列＝跨關保留），精良度用完就滿；noEnhance/底線刀不列。免費、只受格數限制。
    ✅ **配裝卡**顯示 ★精良度 + 鋒利/平衡/詞條摘要（`enhSummary`）。
-   ⏳ 導師加「加詞條」功能、詞條的取得成本＝未做。
-4. **接事件**：女巫（獻祭→強化＋S1 詛咒）、石中劍（榮譽 gate→給預打滿實例）。
+   ✅ **導師加「加詞條」功能**（已做）：導師多一個分頁——選武器→選詞條（`TUTOR_AFFIX_IDS`＝無來源限定的破甲/鋒棱/烈焰）。
+   詞條**先免費**（使用者定案），但留了三個經濟鉤子 `affixCost`/`canAffordAffix`/`payForAffix`，之後接 run 內經濟只改這裡。
+4. ✅ **接事件**（已做）：
+   - **女巫**（`witchPact`）：獻祭一名手下（`need:'target'`，`req:'ally'`）→ 巫紋 hex 強化騎士主手（`force`＝超凡不受格數限制）
+     ＋ S1 `untilGone` 詛咒（見證者＝當下全隊 uid）＋ 有些人憤而離去（`desertChance`）。
+   - **石中劍**（`stonesword`）：`req:'honor'` 門檻（`CONFIG.stoneswordHonor`＝120，**不扣榮譽**）→ 倉庫得 `stoneSwordInst()`
+     （預打滿、pierce 1.0、rally 詞條裝著就加氣勢）。rally 標 `source:'stone'`＝導師不會給。
+   - `eventChoosable` 加 `req:'honor'/'ally'` 兩種閘門。
 
 
 
