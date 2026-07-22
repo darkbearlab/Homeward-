@@ -2995,11 +2995,12 @@ function enterEvent() {
   runStats.events++;   // 戰役中每進一個事件節點＝榮譽加分（不論後續分支/是否接戰）
   let ev = null;
   while (pendingEvents.length && !ev) { const id = pendingEvents.shift(); ev = EVENTS.find(e => e.id === id); }   // 被預定的後續(報位/伏擊…)優先；格子仍顯示 ?（shift 須先取出再 find，勿放進 predicate）
-  if (!ev) {   // 否則隨機抽：濾掉已見/不符 cond/scripted(只能被佇列觸發)
-    const avail = e => eventSeen.indexOf(e.id) < 0 && !e.scripted && (!e.cond || e.cond(runFlags));
+  if (!ev) {   // 否則隨機抽：濾掉已見/不符 cond/scripted(只能被佇列觸發)/不屬於本幕
+    const actOk = e => e.act == null || e.act === runAct;   // A/B 分流：無 act＝兩幕共用；act:1＝敵境限定、act:2＝故土限定（「先複製一份、慢慢充實」的接縫）
+    const avail = e => eventSeen.indexOf(e.id) < 0 && !e.scripted && actOk(e) && (!e.cond || e.cond(runFlags));
     let pool = EVENTS.filter(avail);
-    if (!pool.length) { eventSeen = []; pool = EVENTS.filter(e => !e.scripted && (!e.cond || e.cond(runFlags))); }
-    ev = pool.length ? rngPick(pool) : EVENTS[0];
+    if (!pool.length) { eventSeen = []; pool = EVENTS.filter(e => !e.scripted && actOk(e) && (!e.cond || e.cond(runFlags))); }
+    ev = pool.length ? rngPick(pool) : (EVENTS.filter(e => !e.scripted && actOk(e))[0] || EVENTS[0]);
   }
   if (ev) eventSeen.push(ev.id);
   if (ev && ev.kind === 'scene') { startSceneEvent(ev); return; }   // 場景化事件：在戰鬥地圖上用 cutscene 演（含對話選項）
