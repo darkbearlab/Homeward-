@@ -1176,7 +1176,10 @@ function friendlyInLineOfFire(u, aimPos) {
 const factionHue = (fid, fb) => { const f = FACTIONS[fid]; return (f && f.hue != null) ? f.hue : fb; };
 
 // 招募隨機（全部都隨機、無固定基準）：名字/色相/感知/武器/個性
-const UNIT_NAMES = ['Guard', 'Sentry', 'Ghost', 'Vanguard', 'Warden', 'Wisp', 'Echo', 'Raven', 'Slate', 'Cinder', 'Marlow', 'Vesper', 'Koda', 'Bishop', 'Reed', 'Tace', 'Lark', 'Nyx'];
+// 名字池（中世紀化，取代原版諜報代號）。兩池風格對照＝一眼看得出騎士與扈從的身分差：
+//   NOBLE_NAMES（騎士）＝較長、軟音、諾曼/拉丁系＝貴氣；UNIT_NAMES（扈從）＝短促、盎格魯撒克遜暱稱＝俗氣。
+const NOBLE_NAMES = ['Aldric', 'Percival', 'Tristan', 'Godfrey', 'Alaric', 'Reynaud', 'Everard', 'Aymeric', 'Roderick', 'Baldwin', 'Lucan', 'Cedric', 'Rosalind', 'Isolde', 'Eleanor', 'Adela', 'Constance', 'Guinevere'];
+const UNIT_NAMES = ['Hob', 'Wat', 'Ned', 'Gurth', 'Cob', 'Dob', 'Sim', 'Odo', 'Bram', 'Hal', 'Wick', 'Gib', 'Tam', 'Pip', 'Hodge', 'Bess', 'Mag', 'Nel', 'Gert', 'Dunn'];
 const HUE_POOL = [205, 155, 285, 35, 95, 330, 170, 250, 310, 55, 130];
 // 單一 run 的「非戰鬥」隨機都吃一顆種子（招募/事件/搜刮/軍械庫＝可重現）；戰鬥(發散/裝甲/粒子)仍用 Math.random。
 // initRun 重新播種；sandbox 用預設種子。rngPick/weightedPick 的所有呼叫處皆為非戰鬥，故直接改吃 srand。
@@ -1191,9 +1194,10 @@ function srand() {   // mulberry32
 const rngPick = (a) => a[Math.floor(srand() * a.length)];
 // roster 條目 → 兵種（身體）。缺 classId 的舊存檔/手刻陣容退回原型預設，不會壞。
 const rosterClass = (r) => classOf(r.classId || 'footman');
-function makeRecruit(used) {
-  let name = rngPick(UNIT_NAMES);
-  if (used) { let g = 0; while (used.has(name) && g++ < 50) name = rngPick(UNIT_NAMES); used.add(name); }
+function makeRecruit(used, noble) {
+  const pool = noble ? NOBLE_NAMES : UNIT_NAMES;   // 騎士抽貴氣名，扈從抽俗氣名
+  let name = rngPick(pool);
+  if (used) { let g = 0; while (used.has(name) && g++ < 50) name = rngPick(pool); used.add(name); }
   // 招募＝擲一個**兵種**：兵種是身體＋裝備（hp/體幹/移速/武器/盾/甲），也決定崩潰門檻。
   // 待機行為已統一（見 RETAINER_BEHAVIOR），不再有「弓手打法卻是陷陣」那種原型分歧。
   const classId = rngPick(RECRUIT_CLASS_IDS);
@@ -2352,7 +2356,7 @@ function initRun() {
   runStats = { events: 0, kia: 0 };                     // 本局榮譽累計（事件數/陣亡數）重置
   // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
   // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
-  roster = [makeRecruit(new Set())]; missionIndex = 0;
+  roster = [makeRecruit(new Set(), true)]; missionIndex = 0;   // roster[0]＝騎士，抽貴氣名
   warehouse = []; backpack = []; drops = []; grantStartingGear();   // 已解鎖的固定起始裝備(喪鐘)每場自動入倉庫
   ammoStock = {}; for (const id of WEAPON_IDS) ammoStock[id] = WEAPONS[id].silent ? CONFIG.ammo.subsonicStart : CONFIG.ammo.stockStart;  // 共用彈藥儲備（消音武器＝稀少亞音速彈）
   restSel = null;
@@ -3015,7 +3019,7 @@ function eventAdvance() { advanceNode(); }
    ===================================================================== */
 function makeIntroCast() {
   const used = new Set();
-  const prot = makeRecruit(used); prot.weaponId = FLOOR_WEAPON;                 // 主角：側槍(底線)
+  const prot = makeRecruit(used, true); prot.weaponId = FLOOR_WEAPON;           // 主角(騎士)：貴氣名、側槍(底線)
   const g1 = makeRecruit(used); g1.weaponId = rngPick(availPool('weapon', RECRUIT_WEAPON_IDS));      // 守衛：帶初始武器
   const g2 = makeRecruit(used); g2.weaponId = rngPick(availPool('weapon', RECRUIT_WEAPON_IDS));
   return [prot, g1, g2];
