@@ -2739,7 +2739,7 @@ const EVENTS = [
       { label: '只拿外圍彈藥（安全）', outcome: { type: 'ammo' } },
       { label: '不碰，離開', outcome: { type: 'nothing' } },
     ] },
-  { id: 'broker', title: '黑市掮客', text: '一名掮客願意拿稀有貨跟你換點裝備。',
+  { id: 'broker', title: '走私販子', text: '一名走私販子願意拿稀有貨跟你換點裝備。',
     choices: [
       { label: '用一件裝備換稀有武器', req: 'gear', outcome: { type: 'trade', cost: 'gear', gain: { type: 'weapon' } } },
       { label: '用一件裝備換大量彈藥', req: 'gear', outcome: { type: 'trade', cost: 'gear', gain: { type: 'ammo', big: true } } },
@@ -2747,23 +2747,23 @@ const EVENTS = [
     ] },
   { id: 'veteran', title: '老兵指點', text: '一名退役老兵願意指點一名隊員，但要點「拜師禮」。',
     choices: [
-      { label: '受訓（指定一員學一條跨樹被動）', req: 'gear', need: 'target', outcome: { type: 'relic', cost: 'gear' } },
+      { label: '受訓（指定一員習得一個術，入倉庫）', req: 'gear', need: 'target', outcome: { type: 'relic', cost: 'gear' } },   // 升階/被動樹已移除＝這裡教的是一個「習得的術」，非被動
       { label: '婉拒', outcome: { type: 'nothing' } },
     ] },
-  { id: 'ambush', title: '巷弄埋伏', text: '前方巷口突然冒出一支巡邏隊，情況很快會失控。',
+  { id: 'ambush', title: '林道伏擊', text: '前方林道拐角突然冒出一支巡邏隊，情況很快會失控。',
     choices: [
-      { label: '強行突破（短促交火）', hint: '進入一場戰鬥', outcome: { type: 'combat', map: 'bravo' } },   // TODO 特製短地圖；先借 bravo
+      { label: '強行突破（短兵相接）', hint: '進入一場戰鬥', outcome: { type: 'combat', map: 'bravo' } },   // TODO 特製短地圖；先借 bravo
       { label: '繞遠路（安全離開）', outcome: { type: 'nothing' } },
     ] },
-  { id: 'riot', title: '暴動街區', text: '前方街區陷入暴亂——駐軍正與武裝暴民火拼。兩派都不會放過你，但此刻他們自顧不暇。',
+  { id: 'riot', title: '動亂的村鎮', text: '前方村鎮陷入動亂——領主的巡騎正與揭竿的民團廝殺。兩邊都不會放過你，但此刻他們自顧不暇。',
     choices: [
-      { label: '趁亂穿過', hint: '進場：駐軍 vs 暴民混戰中繞行撤離（兩派都與你為敵，但會先互打）', outcome: { type: 'combat', map: 'riot' } },   // ★多陣營戰：第三勢力暴民與駐軍互毆，玩家趁亂通過
+      { label: '趁亂穿過', hint: '進場：巡騎 vs 民團混戰中繞行撤離（兩邊都與你為敵，但會先互毆）', outcome: { type: 'combat', map: 'riot' } },   // ★多陣營戰：第三勢力民團與巡騎互毆，玩家趁亂通過
       { label: '繞遠路（安全離開）', outcome: { type: 'nothing' } },
     ] },
-  { id: 'wounded', title: '傷兵求救', text: '無線電傳來一名落單探員的求救——但這一帶剛有交火，可能是陷阱。',
+  { id: 'wounded', title: '傷兵求救', text: '路旁傳來微弱的呼救——一名重傷的落單士兵。但這一帶剛交過火，也可能是誘敵的餌。',
     choices: [
       { label: '前往救援', hint: '70% 救出 → +1 隊員 / 否則陷阱 → 全隊 −12HP(未致命)', outcome: { type: 'gamble', p: 0.7, win: { type: 'recruit' }, lose: { type: 'damage', amt: 12 } } },
-      { label: '只標記位置、回收他丟下的物資（安全）', outcome: { type: 'ammo' } },
+      { label: '不冒險，只取走他遺落的物資（安全）', outcome: { type: 'ammo' } },
       { label: '無視，離開', outcome: { type: 'nothing' } },
     ] },
   // ── 簡單隨機事件（純換皮：組合現有結果，零新機制；隱藏傾向走 gamble 免掉 onEnter）───────
@@ -2823,7 +2823,7 @@ const EVENTS = [
     ] },
   // 場景化事件（kind:'scene'）：在戰鬥地圖上用 cutscene 對話演出。男孩＝meet/ambush 地圖的 civ。
   { id: 'boy', kind: 'scene', map: 'meet',
-    onEnter: f => { f.boyMet = true; f.boyHostile = srand() < 0.5; },   // 隱藏身分(吃種子)：友善(父親 sleeper) / 敵意(被策反)
+    onEnter: f => { f.boyMet = true; f.boyHostile = srand() < 0.5; },   // 隱藏身分(吃種子)：友善(父親是隨軍老兵) / 敵意(已被收買報信)
     scene: f => {
       const boy = () => { const b = enemies.find(e => !e.dead); return b ? b.pos : { x: 700, y: 260 }; };
       return [
@@ -2832,7 +2832,7 @@ const EVENTS = [
         { kind: 'choice', text: '要相信這孩子嗎？', pos: boy, options: [
           { label: '相信他', then: f.boyHostile
             ? [{ kind: 'say', text: '……哼，真好騙。', pos: boy }, { kind: 'do', fn: eventResolveCombat }]
-            : [{ kind: 'say', text: '太好了！我父親也是 sleeper，年紀大了上不了場，但能接待你們、給補給。', pos: boy }, { kind: 'do', fn: eventResolveRest }] },
+            : [{ kind: 'say', text: '太好了！我父親從前也隨軍征戰，年紀大了上不了場，但能接待你們、給點補給。', pos: boy }, { kind: 'do', fn: eventResolveRest }] },
           { label: '拒絕，要他離開', then: f.boyHostile
             ? [{ kind: 'say', text: '……你們會後悔的。', pos: boy }, { kind: 'do', fn: () => { setFlag('boyReported'); pendingEvents.push('boyAmbush'); eventResolveAdvance(); } }]
             : [{ kind: 'say', text: '……我明白了。保重。', pos: boy }, { kind: 'do', fn: eventResolveAdvance }] },
