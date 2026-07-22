@@ -307,7 +307,9 @@ const BREAK_PCT = {
   footman: 55, footman_flank: 55, spearman: 50,
   manatarms: 20, serjeant: 20,
 };
-const ARCH_BREAK_PCT = { anchor: 35, spearhead: 55, ranger: 70 };   // 我方：磐石最硬、遊獵最早崩
+// 我方扈從的崩潰門檻直接沿用上表（按**兵種**）：農兵最脆、披甲士最硬。
+// 早期版本另有一張 ARCH_BREAK_PCT（按待機原型 磐石/先鋒/遊獵）——原型系統移除後一併收掉，
+// 「有人硬有人脆」的分層改掛在兵種這條更直覺的軸上（見 breakPctOf）。
 const breakLevelOf = (pct) => CONFIG.morale.max * 0.5 * (pct / 100);   // % → 實際門檻（0..50）
 const MORALE_STATE = { steady: '堅定', shaken: '動搖', routed: '潰逃' };
 const CMD_LIST = ['follow', 'hold', 'focus', 'extract'];
@@ -877,7 +879,7 @@ function metaOnRunEnd(won) {   // run 結束結算：榮譽 + stats + 里程碑�
   const gain = Math.max(0, gross - penalty);
   meta.honor += gain;
   lastHonorBreakdown = { mi, missionPart, winPart, eventPart, events: rs.events || 0, kia: rs.kia || 0, penalty, gain, won };
-  if (won) { meta.stats.wins = (meta.stats.wins || 0) + 1; for (const r of (roster || [])) if (r && r.archetypeId) meta.stats.winArch[r.archetypeId] = (meta.stats.winArch[r.archetypeId] || 0) + 1; }
+  if (won) { meta.stats.wins = (meta.stats.wins || 0) + 1; for (const r of (roster || [])) if (r && r.classId) meta.stats.winArch[r.classId] = (meta.stats.winArch[r.classId] || 0) + 1; }
   checkMilestoneUnlocks(); saveMeta();
 }
 
@@ -896,19 +898,16 @@ const ITEM_STACK_MAX = 3;   // 消耗品一疊上限；取得即一疊(3)，休�
 function giveItemStack(id) { warehouse.push({ kind: 'item', id, count: ITEM_STACK_MAX }); }   // 取得道具＝整疊進倉庫
 
 /* =====================================================================
-   ARCHETYPES — 我方待機個性（只看「看哪」一軸，by-the-book→chill 三型）。招募隨機抽一種。
-   facing: HOLD(完全不轉頭·固守) | SWEEP(左右掃視·推進) | TRACK(東張西望/追威脅·戰場生存)
-   discipline/fireMode 為每型固定預設（不再是玩家變數）。
+   待機行為 RETAINER_BEHAVIOR — 單一設定（使用者定案）。
+   早期版本按「待機原型」分三型（磐石固守 / 先鋒壓上 / 遊獵繞側），還在人物 UI 上標籤化。
+   這版扈從全由**指令層**（錨點＋繩長＋交戰規則）驅動，待機性格的區分已無必要，故收斂成一份預設、
+   也不再顯示於人物 UI。兵種（classId）才是每名扈從真正的差異來源（身體＋裝備＋崩潰門檻）。
+     facing:     TRACK  = 東張西望/追威脅（戰場生存）
+     discipline: TAP    = 單發瞄準（省彈）
+     fireMode:   AGGRESSIVE = 視野內有目標就開火（否則遠程扈從會顯得很被動）
+     aiPersonality＝與敵人共用的那套 CONFIG.ai（scoreNode 已陣營中立）——flanker＝在騎士附近怎麼站
    ===================================================================== */
-// aiPersonality＝**與敵人共用的那套性格**（CONFIG.ai）。scoreNode 已陣營中立化，
-// 加上指令層給的錨點/繩長，同一份性格在扈從身上就是「在騎士附近怎麼站」。
-const ARCHETYPES = {
-  // 崩潰門檻見 ARCH_BREAK_AT（磐石最硬 30、先鋒 45、遊獵最早崩 55）
-  anchor:    { name: '磐石', facing: 'HOLD',  discipline: 'TAP',  fireMode: 'AGGRESSIVE', tree: 'anchor', aiPersonality: 'holder',   desc: '持盾固守 · 佔掩體不推進' },
-  spearhead: { name: '先鋒', facing: 'SWEEP', discipline: 'AUTO', fireMode: 'AGGRESSIVE', tree: 'spear',  aiPersonality: 'rusher',   desc: '陷陣 · 直線壓上' },
-  ranger:    { name: '遊獵', facing: 'TRACK', discipline: 'TAP',  fireMode: 'DEFENSIVE',  tree: 'ranger', aiPersonality: 'flanker', desc: '斥候散兵 · 繞側翼' },
-};
-const ARCHETYPE_IDS = Object.keys(ARCHETYPES);
+const RETAINER_BEHAVIOR = { facing: 'TRACK', discipline: 'TAP', fireMode: 'AGGRESSIVE', aiPersonality: 'flanker' };
 
 /* =====================================================================
    被動／升階系統已整個移除（使用者定案）。
@@ -931,7 +930,7 @@ const ARCHETYPE_IDS = Object.keys(ARCHETYPES);
 
    刻意**不**管的東西：
    - **武器**：敵人由 ENEMY_TYPES.weaponId 綁死，扈從走四槽位自選——這是雙方真正的差別。
-   - **性格**：敵人由 ENEMY_TYPES.personality，扈從由 ARCHETYPES.aiPersonality（同一份 CONFIG.ai）。
+   - **性格**：敵人由 ENEMY_TYPES.personality，扈從統一走 RETAINER_BEHAVIOR.aiPersonality（同一份 CONFIG.ai）。
    - **耐力**：**唯一的例外**（使用者定案）。只有玩家操作的騎士管理耐力；
      AI 不會用資源管理，牠們的壓力由體幹＋攻擊權承擔。makeEnemy 一律 stamMax:0。
 
@@ -956,9 +955,6 @@ const UNIT_CLASS_IDS = Object.keys(UNIT_CLASSES);
 const classOf = (id) => UNIT_CLASSES[id] || UNIT_CLASSES.footman;
 // 扈從可招募的兵種（不含騎士本人、菁英、動物、平民與假人）
 const RECRUIT_CLASS_IDS = ['levy', 'footman', 'spearman', 'archer'];
-// 原型 → 預設兵種（身體與行為是兩件事，但預設要合理：斥候輕、陷陣與固守是正規步兵）。
-// 這只是預設，roster 的 classId 可覆寫（將來「招募到一名披甲士」就走這條）。
-const ARCH_DEFAULT_CLASS = { anchor: 'footman', spearhead: 'footman', ranger: 'archer' };
 /* ── 兵種班底（使用者定案：扈從裝備由兵種決定、不可自由編輯）──────────────
    「扈從＝敵人」現在是完整的：**同兵種的扈從與敵人不只身體一致，連武器/盾/甲都一致**。
    所以「這次招到的是弓手還是槍兵」是真的結果，撿到什麼都能重配的話這個結果就不存在了。
@@ -1181,19 +1177,18 @@ function srand() {   // mulberry32
 }
 const rngPick = (a) => a[Math.floor(srand() * a.length)];
 // roster 條目 → 兵種（身體）。缺 classId 的舊存檔/手刻陣容退回原型預設，不會壞。
-const rosterClass = (r) => classOf(r.classId || ARCH_DEFAULT_CLASS[r.archetypeId] || 'footman');
+const rosterClass = (r) => classOf(r.classId || 'footman');
 function makeRecruit(used) {
   let name = rngPick(UNIT_NAMES);
   if (used) { let g = 0; while (used.has(name) && g++ < 50) name = rngPick(UNIT_NAMES); used.add(name); }
-  // **兵種與原型各擲一次**：兵種是身體＋裝備（hp/體幹/移速/武器/盾/甲），原型是行為（磐石/先鋒/遊獵）。
-  // 兩者分開擲才會出現「弓手打法卻是陷陣」這種人——招募到誰因此真的有差別。
+  // 招募＝擲一個**兵種**：兵種是身體＋裝備（hp/體幹/移速/武器/盾/甲），也決定崩潰門檻。
+  // 待機行為已統一（見 RETAINER_BEHAVIOR），不再有「弓手打法卻是陷陣」那種原型分歧。
   const classId = rngPick(RECRUIT_CLASS_IDS);
   const kit = classLoadout(classId);
   return { name, uid: rosterUidSeq++, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]), classId,
     // **uid**＝穩定身分：名字會被離隊者的後繼重用，追蹤「這個人」（女巫詛咒的見證者）要靠 uid。
     // **裝備由兵種決定，不可自由編輯**（使用者定案）。弓手就是帶弓、槍兵帶槍。
     weaponId: kit.weaponId, offId: kit.offId, armorId: kit.armorId, abilityId: 'mend',
-    archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
     weaponId2: FLOOR_WEAPON, allocatedAmmo2: 0,   // 副手武器：底線短刀（被貼上時的後備）
     bonusMaxHp: 0, hp: classOf(classId).hp, allocatedAmmo: CONFIG.ammo.defaultAlloc, disciplineOverride: null,
     equipId: null, itemId: null, itemCount: 0 };
@@ -2122,17 +2117,16 @@ const instOfSlotMain = (m) => (m ? { id: m.weaponId, quality: m.quality, enh: m.
 function makePlayer(i, cfg, pos) {
   const W = WEAPONS[cfg.weaponId];
   const ab = artOf(cfg.abilityId);
-  const arch = ARCHETYPES[cfg.archetypeId];
   const fx = (cfg.equipId && EQUIPMENT[cfg.equipId]) ? EQUIPMENT[cfg.equipId].fx : {};   // 裝備持續被動
   const AR = ARMORS[cfg.armorId] || ARMORS.none;                                         // 身上的甲（獨立槽位）
   // **身體來自共用單位數值表**（扈從＝敵人）。騎士固定 knight 級；扈從依 roster 的 classId，
-  // 未指定則由原型給預設。耐力是唯一不從這裡來的東西——只有騎士管理（見 UNIT_CLASSES 註解）。
-  const CLS = classOf(i === KNIGHT_ID ? 'knight' : (cfg.classId || ARCH_DEFAULT_CLASS[cfg.archetypeId] || 'footman'));
+  // 未指定退回 footman。耐力是唯一不從這裡來的東西——只有騎士管理（見 UNIT_CLASSES 註解）。
+  const CLS = classOf(i === KNIGHT_ID ? 'knight' : (cfg.classId || 'footman'));
   const maxHp = CLS.hp + (cfg.bonusMaxHp || 0) + (fx.maxHpAdd || 0);
   // 跨關回復：以攜帶的當前血量為底，回復「缺口 × interMissionHealFrac」（frac=1 → 滿血，與舊行為一致）
   const carried = clamp(cfg.hp != null ? cfg.hp : maxHp, 0, maxHp);
   const startHp = clamp(Math.round(carried + (maxHp - carried) * CONFIG.interMissionHealFrac), 1, maxHp);
-  const disc = cfg.disciplineOverride || arch.discipline;  // 搜刮可把某員紀律提升為 TAP（per-member 覆蓋）
+  const disc = cfg.disciplineOverride || RETAINER_BEHAVIOR.discipline;  // 搜刮可把某員紀律提升為 TAP（per-member 覆蓋）
   // 彈藥備量＝休息關分配的量（底線武器無限）
   const reserve = isInfiniteAmmo(cfg.weaponId) ? 9999 : (cfg.allocatedAmmo != null ? cfg.allocatedAmmo : CONFIG.ammo.defaultAlloc);
   const magazine = Math.round(W.magazine * (fx.magMul || 1));   // 裝備可改彈夾容量
@@ -2158,17 +2152,17 @@ function makePlayer(i, cfg, pos) {
     slots, slotIdx: 0,
     offId: offNow,   // 當前副手（渲染/格擋判定讀 activeSet，這欄只是方便除錯）
     id: i, name: cfg.name, faction: 'player', hue: cfg.hue, strength: cfg.strength || 1,
-    classId: CLS === UNIT_CLASSES.knight ? 'knight' : (cfg.classId || ARCH_DEFAULT_CLASS[cfg.archetypeId] || 'footman'),
+    classId: CLS === UNIT_CLASSES.knight ? 'knight' : (cfg.classId || 'footman'),
     cls: CLS, className: CLS.name,
     pos: { x: pos.x, y: pos.y }, facing: 0, radius: CLS.radius,
     moveSpeed: CLS.moveSpeed,   // 與敵人同欄位名（移動碼一律讀 u.moveSpeed）
     hp: startHp, maxHp,
     state: i === 0 ? 'CONTROLLED' : 'IDLE',
-    archetypeId: cfg.archetypeId, archetype: arch, disciplineOverride: cfg.disciplineOverride || null,
-    idleStrategy: { fireMode: arch.fireMode, targeting: 'NEAREST_IN_LOS', facing: arch.facing, discipline: disc },
+    disciplineOverride: cfg.disciplineOverride || null,
+    idleStrategy: { fireMode: RETAINER_BEHAVIOR.fireMode, targeting: 'NEAREST_IN_LOS', facing: RETAINER_BEHAVIOR.facing, discipline: disc },
     cmd: { mode: 'follow', pos: null, target: null },   // 指令層：預設跟隨騎士
-    personality: CONFIG.ai[arch.aiPersonality || 'flanker'],   // **與敵人共用性格**（scoreNode 已陣營中立）
-    basePersonality: CONFIG.ai[arch.aiPersonality || 'flanker'],   // 士氣恢復時要換回來的那一組
+    personality: CONFIG.ai[RETAINER_BEHAVIOR.aiPersonality],   // **與敵人共用性格**（scoreNode 已陣營中立）
+    basePersonality: CONFIG.ai[RETAINER_BEHAVIOR.aiPersonality],   // 士氣恢復時要換回來的那一組
     moraleState: 'steady', moraleFxT: 0,   // 士氣本身在陣營層級（factionMorale）；單位只持有門檻與狀態
     currentNode: null, targetNode: null,                       // 節點導航（與敵人同一套）
     // 以下是「當前主手」的鏡像（既有戰鬥碼只認得這些欄位；換 set 由 equipActiveSet 重寫）
@@ -2254,7 +2248,7 @@ const rosterFromPlayer = (p) => {
     quality: m0 ? m0.quality : p.quality, enh: m0 ? (m0.enh || []).slice() : (p.enh || []),   // S2：主手強化跨關保留
     weaponId2: w2 ? w2.weaponId : null, offId2: s1 ? s1.off : null,
     quality2: w2 ? w2.quality : undefined, enh2: w2 ? (w2.enh || []).slice() : undefined,      // 副手 set 的強化
-    abilityId: free3.id || p.abilityId, archetypeId: p.archetypeId,
+    abilityId: free3.id || p.abilityId,
     allocatedAmmo2: w2 ? (isInfiniteAmmo(w2.weaponId) ? 0 : w2.ammoReserve) : 0,
     bonusMaxHp: p.maxHp - classOf(p.classId).hp - eqAdd, hp: p.hp,   // 以**自己兵種**的基底回推加值，換兵種不會憑空長血
     allocatedAmmo: m0 ? (isInfiniteAmmo(m0.weaponId) ? CONFIG.ammo.defaultAlloc : m0.ammoReserve) : CONFIG.ammo.defaultAlloc,
@@ -2513,9 +2507,9 @@ let arenaModeKey = 'melee';
 let arenaArmorIdx = 2;          // 試作場預設鎖子甲（C 鍵循環布衣→厚襖→鎖子甲→胸甲→板甲）
 let arenaOffIdx = 1;            // 副手：ARENA_OFF_IDS 的索引（O 鍵循環）
 const ARENA_OFF_IDS = [null, ...OFFHAND_IDS, 'dagger'];   // 空手 / 三種盾 / 雙持短劍
-const arenaMember = (name, hue, wid, arch) => ({
+const arenaMember = (name, hue, wid, classId) => ({
   name, hue, strength: 1, weaponId: wid, offId: ARENA_OFF_IDS[arenaOffIdx] || null,
-  weaponId2: 'longbow', offId2: null, abilityId: 'mend', archetypeId: arch,
+  weaponId2: 'longbow', offId2: null, abilityId: 'mend', classId: classId || 'footman',
   bonusMaxHp: 0, allocatedAmmo: 999, allocatedAmmo2: 999,   // 試作場彈藥管夠（弓弩要備箭）
   equipId: null, itemId: 'firepot', itemCount: 3, carriesFile: false, armorId: ARMOR_IDS[arenaArmorIdx] || 'none',
 });
@@ -2544,8 +2538,8 @@ function arenaSetArmor(i) {
   Sfx.play('swap', k.pos);
 }
 function arenaRoster() {
-  const r = [arenaMember('騎士', 205, arenaWeaponId(), 'anchor')];
-  if (arenaAllies) { r.push(arenaMember('扈從·磐石', 185, 'sword', 'anchor')); r.push(arenaMember('扈從·先鋒', 35, 'axe', 'spearhead')); }
+  const r = [arenaMember('騎士', 205, arenaWeaponId(), 'knight')];
+  if (arenaAllies) { r.push(arenaMember('扈從·劍盾', 185, 'sword', 'footman')); r.push(arenaMember('扈從·斧', 35, 'axe', 'footman')); }
   return r;
 }
 // 配置測試對象：讀 ARENA_MODES[arenaModeKey].spawn（資料驅動＝加新場地不改此函式）
@@ -3256,17 +3250,9 @@ function applyOffer(o, mi) {
   else if (o.type === 'equip') { warehouse.push({ kind: 'equip', id: o.id }); restMsg = `搜刮：${EQUIPMENT[o.id].name} 入倉庫`; }
   else if (o.type === 'item') { giveItemStack(o.id); restMsg = `搜刮：${ITEMS[o.id].name} ×${ITEM_STACK_MAX} 入倉庫`; }
 }
-// 休息轉職（pivot）：把某員 archetype 換成下一型，換樹但保留已學被動；後續升階抽新樹的對應階
 // 配裝只能動騎士（使用者定案）。UI 已把扈從的按鈕拿掉，這是第二道防線＝就算有別的路徑呼叫也擋住。
+// （早期這裡還有 cycleArchetype 轉職——待機原型系統移除後一併收掉。）
 const canEditLoadout = (mi) => mi === KNIGHT_ID;
-function cycleArchetype(mi) {
-  if (!canEditLoadout(mi)) return;
-  const r = roster[mi]; if (!r) return;
-  const i = ARCHETYPE_IDS.indexOf(r.archetypeId);
-  r.archetypeId = ARCHETYPE_IDS[(i + 1) % ARCHETYPE_IDS.length];
-  r.disciplineOverride = null;
-  restMsg = `${r.name} 轉職為 ${ARCHETYPES[r.archetypeId].name}（保留已學被動；後續升階抽新樹）`;
-}
 
 // --- 喚醒：必須先把倉庫整理到 ≤ 當前上限（§5），再 +1 隊員（容量 +slotsPerMember）---
 function restDoAwaken() {
@@ -3274,7 +3260,7 @@ function restDoAwaken() {
   const rec = makeRecruit(new Set(roster.map(r => r.name)));
   autoEquipFromWarehouse(rec);                     // 從已整理倉庫配裝；無更好者保留手邊武器（§4/§7）
   roster.push(rec);
-  restMsg = `喚醒 ${rec.name}（${ARCHETYPES[rec.archetypeId].name}）入隊`;
+  restMsg = `喚醒 ${rec.name}（${rosterClass(rec).name}）入隊`;
   restPhase = 'DONE';
 }
 function autoEquipFromWarehouse(rec) {
@@ -4404,11 +4390,12 @@ function onFactionBroken(fid) {
   Hooks.fire('factionBroken', { faction: fid });
   if (fid !== 'player' && !fieldBrokenFor) fieldBrokenFor = fid;
 }
-const unitWeight = (u) => ((u.type && u.type.elite) || (u.archetype && u.archetype.elite)) ? CONFIG.morale.eliteWeight : 1;
+const unitWeight = (u) => (u.type && u.type.elite) ? CONFIG.morale.eliteWeight : 1;
 // 單位的崩潰門檻＝純兵種（不吃 HP/被圍等局部修正）。回傳「佔自己那半的 %」。
+// 敵我同一張表 BREAK_PCT：敵人用 typeId、扈從用 classId（同兵種＝同門檻）。
 function breakPctOf(u) {
-  if (u.faction === 'player') return ARCH_BREAK_PCT[u.archetypeId] != null ? ARCH_BREAK_PCT[u.archetypeId] : 55;
-  return BREAK_PCT[u.typeId] != null ? BREAK_PCT[u.typeId] : 55;
+  const key = u.faction === 'player' ? u.classId : u.typeId;
+  return BREAK_PCT[key] != null ? BREAK_PCT[key] : 55;
 }
 const breakAtOf = (u) => breakLevelOf(breakPctOf(u));   // 實際門檻（與有效戰意同一把尺）
 
@@ -6672,7 +6659,7 @@ function drawAllyCard(p, x, y, w, h) {
     const blink = p.moraleState === 'routed' && Math.sin(simTime * 10) > 0;
     ctx.fillStyle = blink ? '#ffffff' : ms.c;
     ctx.fillText(ms.t, x + w - pad, y + 15);
-  } else { ctx.fillStyle = 'rgba(205,214,224,0.5)'; ctx.font = '9px Consolas'; ctx.fillText(p.archetype ? p.archetype.name : '', x + w - pad, y + 15); }
+  } else { ctx.fillStyle = 'rgba(205,214,224,0.5)'; ctx.font = '9px Consolas'; ctx.fillText(p.faction === 'player' && p.id !== KNIGHT_ID ? rosterClass(p).name : '', x + w - pad, y + 15); }
 
   // 血條
   const hpFrac = clamp(p.hp / p.maxHp, 0, 1), low = hpFrac <= CONFIG.lowHpFrac && !inactive;
@@ -6714,11 +6701,10 @@ function drawCard(p, x, y, w, h, i) {
   ctx.fillStyle = p.state === 'EXTRACTED' ? '#5fd06b' : p.state === 'DEAD' ? '#8a6a6a' : 'rgba(205,214,224,0.65)';
   ctx.fillText(p.state === 'EXTRACTED' ? 'EXTRACTED' : p.state === 'EXTRACTING' ? 'EXTRACTING' : p.state, x + w - pad, y + 14);
 
-  // 個性 archetype（名稱色＝升階等級）
-  const arch = p.archetype;
+  // 兵種（取代舊的待機原型標籤）
   ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas';
   ctx.fillStyle = inactive ? '#6a727c' : '#9fd0e0';
-  ctx.fillText(arch.name, bx, y + 29);
+  ctx.fillText(rosterClass(p).name, bx, y + 29);
 
   // 生命
   const hpFrac = clamp(p.hp / p.maxHp, 0, 1), low = hpFrac <= CONFIG.lowHpFrac && !inactive;
@@ -6784,9 +6770,6 @@ function drawRosterCard(r, x, y, w, h, i) {
   ctx.fillText(`${W.name}  ${W.rarity}`, x + pad + 12, y + 39);
   ctx.fillStyle = '#9fb3c8'; ctx.font = '11px Consolas';
   ctx.fillText(`${rosterClass(r).name}  HP ${rmaxhp(r)}   感知x${r.strength.toFixed(1)}`, x + pad, y + 58);
-  const arch = ARCHETYPES[r.archetypeId];
-  ctx.fillStyle = '#9fd0e0'; ctx.font = 'bold 11px Consolas';
-  ctx.fillText(arch.name, x + pad, y + 72);
   ctx.textAlign = 'left';
 }
 /* ---- 休息關：clickable rect 小工具 ---- */
@@ -6810,7 +6793,7 @@ function drawLoadoutCard(mi, x, y, w, h) {
   // **只有騎士可以編輯配裝**（使用者定案）：扈從用他們兵種給的裝備，撿到的戰利品全歸騎士。
   // 這讓「這次招到弓手還是槍兵」是真的結果——撿到什麼都能重配的話這個結果就不存在了。
   const editable = manage && mi === KNIGHT_ID;
-  const W = WEAPONS[r.weaponId], arch = ARCHETYPES[r.archetypeId];
+  const W = WEAPONS[r.weaponId];
   const sel = restSelItem();
   // 面板
   ctx.fillStyle = 'rgba(20,26,36,0.92)'; ctx.fillRect(x, y, w, h);
@@ -6822,14 +6805,6 @@ function drawLoadoutCard(mi, x, y, w, h) {
   ctx.fillText(`${rosterClass(r).name} HP ${rmaxhp(r)}`, x + w - pad, y + 18);
   // 扈從＝兵種固定，不可編輯（提示玩家為何點不動）
   if (mi !== KNIGHT_ID) { ctx.textAlign = 'right'; ctx.font = '9px Consolas'; ctx.fillStyle = '#6f7e8c'; ctx.fillText('🔒 兵種固定', x + w - pad, y + 30); }
-  // 個性 archetype：管理階段點名稱＝轉職(pivot 換樹、保留已學被動)。次行＝已學被動 / 性格描述
-  const canSwap = editable && restPhase !== 'TARGET';
-  ctx.textAlign = 'left'; ctx.font = 'bold 11px Consolas'; ctx.fillStyle = '#9fd0e0';
-  const archLabel = (canSwap ? '↻ ' : '') + arch.name;
-  ctx.fillText(archLabel, x + pad, y + 36);
-  if (canSwap) pushRect(x + pad, y + 26, ctx.measureText(archLabel).width + 6, 13, () => cycleArchetype(mi));
-  ctx.font = '10px Consolas';
-  ctx.fillStyle = '#8b97a5'; ctx.fillText(arch.desc, x + pad + 4 + ctx.measureText(archLabel).width + 8, y + 36);
   // 遺物攜帶者：右上角徽章（攜帶者＝金色實心；其餘在可管理階段＝可點指派）。獨立攜帶格、單選。
   // Phase 0：CONFIG.relicEnabled 關閉＝整塊不畫（Phase 4 復活時開回來即可）
   const bw2 = 80, bx2 = x + w - bw2 - 6, by2 = y + 24;
@@ -7362,7 +7337,7 @@ function drawEvent() {
       const x = x0 + i * (cw + gap);
       ctx.fillStyle = 'rgba(40,34,58,0.92)'; ctx.fillRect(x, y, cw, ch); ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(160,130,220,0.7)'; ctx.strokeRect(x, y, cw, ch);
       ctx.textAlign = 'left'; ctx.fillStyle = '#e6dcff'; ctx.font = 'bold 14px Consolas'; ctx.fillText(r.name, x + 12, y + 24);
-      ctx.fillStyle = '#9fd0e0'; ctx.font = '12px Consolas'; ctx.fillText(ARCHETYPES[r.archetypeId].name, x + 12, y + 44);
+      ctx.fillStyle = '#9fd0e0'; ctx.font = '12px Consolas'; ctx.fillText(rosterClass(r).name, x + 12, y + 44);
       eventRects.push({ x, y, w: cw, h: ch, fn: () => eventApplyTarget(i) });
     });
     ctx.textAlign = 'center'; evBtn(cv.width / 2 - 70, y + ch + 24, 140, 36, '← 返回', () => { eventPhase = 'CHOICE'; eventPendingChoice = null; });
@@ -7816,11 +7791,11 @@ let sandboxCfg = null;          // 上次設定（記憶 + localStorage）
 let sandboxLast = null;         // 上一場結果（撤離/陣亡）顯示用
 let sandboxEl = null, sandboxMembersEl = null, sandboxMapText = null, sandboxMapSel = null, sandboxMsgEl = null, sandboxResultEl = null, sandboxRows = [];
 
-const defaultMember = () => ({ archetypeId: rngPick(ARCHETYPE_IDS), weaponId: 'sword', offId: 'shield', weaponId2: 'longbow', abilityId: 'mend', equipId: '', itemId: '' });
-const randomMember = () => { const wp = randomWeaponPool(availPool('weapon', SANDBOX_WEAPON_IDS)); return { archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)), weaponId: rngPick(wp), weaponId2: rngPick(['longbow', 'dagger', 'javelin', ...wp]), abilityId: rngPick(availPool('ability', ABILITY_IDS)), equipId: rngPick(['', ...availPool('equip', EQUIP_IDS)]), itemId: rngPick(['', '', ...availPool('item', ITEM_IDS)]) }; };
+const defaultMember = () => ({ classId: 'footman', weaponId: 'sword', offId: 'shield', weaponId2: 'longbow', abilityId: 'mend', equipId: '', itemId: '' });
+const randomMember = () => { const wp = randomWeaponPool(availPool('weapon', SANDBOX_WEAPON_IDS)); return { classId: rngPick(RECRUIT_CLASS_IDS), weaponId: rngPick(wp), weaponId2: rngPick(['longbow', 'dagger', 'javelin', ...wp]), abilityId: rngPick(availPool('ability', ABILITY_IDS)), equipId: rngPick(['', ...availPool('equip', EQUIP_IDS)]), itemId: rngPick(['', '', ...availPool('item', ITEM_IDS)]) }; };
 function makeSandboxMember(m, used) {
   const r = makeRecruit(used);
-  if (m.archetypeId && ARCHETYPES[m.archetypeId] && isAvailable('archetype', m.archetypeId)) r.archetypeId = m.archetypeId;
+  if (m.classId && UNIT_CLASSES[m.classId]) { r.classId = m.classId; const kit = classLoadout(m.classId); r.weaponId = kit.weaponId; r.offId = kit.offId; r.armorId = kit.armorId; r.hp = classOf(m.classId).hp; }
   if (m.weaponId && WEAPONS[m.weaponId] && isAvailable('weapon', m.weaponId)) r.weaponId = m.weaponId;
   r.weaponId2 = (m.weaponId2 && WEAPONS[m.weaponId2] && isAvailable('weapon', m.weaponId2)) ? m.weaponId2 : FLOOR_WEAPON;   // 副武器（預設 pistol）
   if (m.abilityId && ABILITIES[m.abilityId] && isAvailable('ability', m.abilityId)) r.abilityId = m.abilityId;
@@ -7831,7 +7806,7 @@ function makeSandboxMember(m, used) {
 }
 function loadSandboxCfg() { try { return JSON.parse(localStorage.getItem(SANDBOX_STORE_KEY) || 'null'); } catch (e) { return null; } }
 function saveSandboxCfg() {
-  const cfg = { members: sandboxRows.map(r => ({ archetypeId: r.archetype.value, weaponId: r.weapon.value, weaponId2: r.weapon2.value, abilityId: r.ability.value, equipId: r.equip.value, itemId: r.item.value })), map: (sandboxMapText ? sandboxMapText.value : '').trim(), mapSel: sandboxMapSel ? sandboxMapSel.value : 'alpha' };
+  const cfg = { members: sandboxRows.map(r => ({ classId: r.cls.value, weaponId: r.weapon.value, weaponId2: r.weapon2.value, abilityId: r.ability.value, equipId: r.equip.value, itemId: r.item.value })), map: (sandboxMapText ? sandboxMapText.value : '').trim(), mapSel: sandboxMapSel ? sandboxMapSel.value : 'alpha' };
   sandboxCfg = cfg; try { localStorage.setItem(SANDBOX_STORE_KEY, JSON.stringify(cfg)); } catch (e) {}
 }
 function sandboxMsg(t) { if (sandboxMsgEl) sandboxMsgEl.textContent = t || ''; }
@@ -7884,7 +7859,7 @@ function drawMenu() {
   ctx.fillText('榮譽 ' + (meta.honor | 0) + '　·　通關 ' + (meta.stats.wins || 0) + '　·　清關 ' + (meta.stats.missions || 0) + '　·　解鎖 ' + unlocked + '/' + UNLOCKS.length, cv.width / 2, y);
   y += 26;
   ctx.fillStyle = 'rgba(150,170,190,0.7)'; ctx.font = '12px Consolas';
-  ctx.fillText('內容　武器 ' + Object.keys(WEAPONS).length + '・原型 ' + ARCHETYPE_IDS.length + '・術 ' + ART_IDS.length + '・副手 ' + OFFHAND_IDS.length + '・甲 ' + ARMOR_IDS.length + '・裝備 ' + Object.keys(EQUIPMENT).length + '・事件 ' + EVENTS.length + '・敵型 ' + Object.keys(ENEMY_TYPES).length + '・地圖 ' + Object.keys(MAPS).length, cv.width / 2, y);
+  ctx.fillText('內容　武器 ' + Object.keys(WEAPONS).length + '・兵種 ' + RECRUIT_CLASS_IDS.length + '・術 ' + ART_IDS.length + '・副手 ' + OFFHAND_IDS.length + '・甲 ' + ARMOR_IDS.length + '・裝備 ' + Object.keys(EQUIPMENT).length + '・事件 ' + EVENTS.length + '・敵型 ' + Object.keys(ENEMY_TYPES).length + '・地圖 ' + Object.keys(MAPS).length, cv.width / 2, y);
   y += 24;
   ctx.fillStyle = 'rgba(95,208,107,0.6)'; ctx.font = '11px Consolas';
   ctx.fillText('已完成系統　✓ 單一英雄操作　✓ AI 扈從　✓ 潛行/警覺　✓ 地形/破壞/區域　✓ 成長弧/被動樹　✓ 雙武器　✓ 事件/旗標/演出　✓ 局外解鎖', cv.width / 2, y);
@@ -8049,7 +8024,7 @@ function sandboxStart() {
   if (!mapObj || typeof mapObj !== 'object') { sandboxMsg('地圖無效'); return; }
   MAPS.__sandbox = normalizeForPlay(mapObj);
   const used = new Set();
-  roster = sandboxRows.map(r => makeSandboxMember({ archetypeId: r.archetype.value, weaponId: r.weapon.value, weaponId2: r.weapon2.value, abilityId: r.ability.value, equipId: r.equip.value || null, itemId: r.item.value || null }, used));
+  roster = sandboxRows.map(r => makeSandboxMember({ classId: r.cls.value, weaponId: r.weapon.value, weaponId2: r.weapon2.value, abilityId: r.ability.value, equipId: r.equip.value || null, itemId: r.item.value || null }, used));
   missionIndex = 0; roadCurrent = null; introActive = false; cutscene = null; introGuards = []; introConsole = null;
   forcedMap = '__sandbox'; fromSandbox = true; saveSandboxCfg();
   if (sandboxEl) sandboxEl.classList.remove('open');
@@ -8068,14 +8043,14 @@ function addMemberRow(m) {
   const row = document.createElement('div'); row.className = 'mem';
   const idx = document.createElement('span'); idx.className = 'idx'; row.appendChild(idx);
   const wp = availPool('weapon', SANDBOX_WEAPON_IDS);   // 未解鎖的武器不顯示（局外解鎖過濾）
-  const a = sbSelect(availPool('archetype', ARCHETYPE_IDS), m.archetypeId, id => ARCHETYPES[id].name);
+  const a = sbSelect(RECRUIT_CLASS_IDS, m.classId || 'footman', id => classOf(id).name);
   const w = sbSelect(wp, m.weaponId, id => WEAPONS[id].name);
   const w2 = sbSelect(wp, m.weaponId2 || 'longbow', id => WEAPONS[id].name);
   const k = sbSelect(availPool('ability', ABILITY_IDS), m.abilityId, id => ABILITIES[id].name);
   const e = sbSelect(availPool('equip', EQUIP_IDS), m.equipId || '', id => EQUIPMENT[id].name, '(無裝備)');
   const it = sbSelect(availPool('item', ITEM_IDS), m.itemId || '', id => ITEMS[id].name, '(無道具)');   // 道具槽（含煙霧/手榴彈）
   const del = document.createElement('button'); del.className = 'x'; del.textContent = '✕';
-  const rec = { archetype: a, weapon: w, weapon2: w2, ability: k, equip: e, item: it, row };
+  const rec = { cls: a, weapon: w, weapon2: w2, ability: k, equip: e, item: it, row };
   del.addEventListener('click', () => { const i = sandboxRows.indexOf(rec); if (i >= 0) sandboxRows.splice(i, 1); row.remove(); renumberMembers(); });
   row.appendChild(a); row.appendChild(w); row.appendChild(w2); row.appendChild(k); row.appendChild(e); row.appendChild(it); row.appendChild(del);
   sandboxMembersEl.appendChild(row); sandboxRows.push(rec); renumberMembers();
