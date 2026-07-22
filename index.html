@@ -291,6 +291,7 @@ CONFIG.morale = {
   momentumDurDefault: 12,  // 未指定時的持續秒數（線性衰退到 0）
   momentumMax: 80,         // 單一陣營的氣勢上限（避免疊到爆表）
   // ── 崩潰 ──
+  breakJitterPct: 6,       // 每個單位出生時的門檻浮動（±此值 pct，均勻）：同兵種也不會同一瞬間一起崩＝崩得有先後
   breakHysteresis: 8,      // 有效戰意回到「該單位門檻 + 此值」才脫離崩潰（避免在門檻上抖動）
   routSpeedMul: 1.25,      // 潰逃時的移動倍率
   fleeAwayDist: 560,       // 潰逃的敵人跑這麼遠＝脫離戰場（不算擊殺、不掉落）
@@ -303,7 +304,7 @@ CONFIG.morale = {
    實際門檻 = 50 × 此值/100（拉鋸條上直接畫成刻度）。
    因為門檻不同，戰意下滑會產生**序列**：農兵先垮 → 垮掉又壓低士氣 → 徒步兵跟著垮 …＝雪崩。 */
 const BREAK_PCT = {
-  civilian: 95, levy: 90, wolf: 72, archer: 70, arbalest: 62,
+  civilian: 90, levy: 85, wolf: 72, archer: 70, arbalest: 62,   // civ/農兵基準比原本低 5：留給 ±breakJitterPct 的浮動頂端不至於逼近上限（＝一挨打就崩）
   footman: 55, footman_flank: 55, spearman: 50,
   manatarms: 20, serjeant: 20,
 };
@@ -4393,9 +4394,14 @@ function onFactionBroken(fid) {
 const unitWeight = (u) => (u.type && u.type.elite) ? CONFIG.morale.eliteWeight : 1;
 // 單位的崩潰門檻＝純兵種（不吃 HP/被圍等局部修正）。回傳「佔自己那半的 %」。
 // 敵我同一張表 BREAK_PCT：敵人用 typeId、扈從用 classId（同兵種＝同門檻）。
+// **每個單位出生時另擲一次固定浮動**（±CONFIG.morale.breakJitterPct）：同兵種也不會在同一瞬間一起崩，
+// 崩得有先後、更像真人。惰性 stamp——門檻每幀都被讀，只在第一次擲、之後固定（每幀重擲會讓門檻抖動）。
+// 測試要決定論時把 u.breakJitter 設 0 即可拿到純基準值。
 function breakPctOf(u) {
   const key = u.faction === 'player' ? u.classId : u.typeId;
-  return BREAK_PCT[key] != null ? BREAK_PCT[key] : 55;
+  const base = BREAK_PCT[key] != null ? BREAK_PCT[key] : 55;
+  if (u.breakJitter == null) u.breakJitter = (Math.random() * 2 - 1) * CONFIG.morale.breakJitterPct;
+  return clamp(base + u.breakJitter, 5, 98);
 }
 const breakAtOf = (u) => breakLevelOf(breakPctOf(u));   // 實際門檻（與有效戰意同一把尺）
 
