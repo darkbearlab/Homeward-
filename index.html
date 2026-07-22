@@ -7969,12 +7969,14 @@ function goMenu() {
   if (typeof cutscene !== 'undefined') cutscene = null; introActive = false; finaleActive = false;
   if (sandboxEl) sandboxEl.classList.remove('open');
   releasePointer();
-  // 通關達門檻＝下次回選單先播一次「真相揭示」純文字，再進選單（之後主選單多「最終潛入」入口）。
+  /* 【停用】舊「真決局」橋段——通關達門檻回選單先播「真相揭示」（「醒醒…」洗腦養成）純文字。
+     整組停用，等 A/B 面（往邊境的 A 面 → 敵國入侵、奪回莊園的 B 面多結局）新結局改寫（見 PLAN）。
+     機器（startFinale/resolveFinale/FINALE·ENDING 場景/FINALE_REVEAL·TRUE_END 文字/喪鐘解鎖）保留為死碼，改寫時再接。
   if ((meta.stats.wins || 0) >= CONFIG.finale.revealWins && !meta.revealSeen) {
     meta.revealSeen = true; saveMeta();
     playEnding(FINALE_REVEAL, () => { scene = 'MENU'; releasePointer(); }, '真相');
     return;
-  }
+  } */
   scene = 'MENU';
 }
 function menuClick(x, y) { for (const r of menuRects) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { r.fn(); return; } }
@@ -7991,7 +7993,8 @@ function drawMenu() {
     { label: '總部', desc: '花榮譽解鎖內容 · 看戰況進度', fn: () => enterHQ() },
     { label: '地圖編輯器', desc: '開啟 editor.html（可測試戰鬥）', fn: () => { try { location.href = 'editor.html'; } catch (e) {} } },
   ];
-  if (meta.revealSeen) items.splice(1, 0, { label: '最終潛入 ▸', desc: meta.finaleWon ? '真相挑戰（已通過 · 可再戰）' : '真相挑戰（鐵人 · 一整輪 run）', fn: () => enterFinaleSetup(), hot: true });   // 揭示後出現
+  // 【停用】舊「真決局」的「最終潛入」入口——等 A/B 面新結局改寫（見 goMenu 的說明）。
+  // if (meta.revealSeen) items.splice(1, 0, { label: '最終潛入 ▸', desc: meta.finaleWon ? '真相挑戰（已通過 · 可再戰）' : '真相挑戰（鐵人 · 一整輪 run）', fn: () => enterFinaleSetup(), hot: true });   // 揭示後出現
   const bw = 420, bh = 56, gap = 14, x = cv.width / 2 - bw / 2; let y = 190;
   for (const it of items) {
     const hover = mouse.mx >= x && mouse.mx <= x + bw && mouse.my >= y && mouse.my <= y + bh;
