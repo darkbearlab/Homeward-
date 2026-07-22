@@ -691,7 +691,29 @@ let lastIntelBreakdown = null;          // 上一局情報點明細（run-end �
 CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數）；結局每行間隔秒
 // 隨機路線圖生成（genRoadmap，吃種子）。cols＝run 長度（欄數，含起點與王；可調平衡）。
 // 事件加權（使用者定案：事件多一點）——事件是招募人手的主要管道，開局單騎後更需要它。
-CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, typeWeights: { COMBAT: 4, EVENT: 4, ARMORY: 1.4, REST: 1.2, TUTOR: 1.0 } };   // TUTOR＝導師（燒卷軸習得），比軍械庫略稀有
+// restEvery＝每隔幾欄放一道「休息牆」（整欄 REST）＝不管走哪條路，都在相同深度必經休息（見 genRoadmap）。
+// siteWeights＝休息節點裡實際是什麼（**進入才知道**）：營地整補 / 導師 / 未來的鐵匠・商人・情報販子・營地事件。
+CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
+  typeWeights: { COMBAT: 4, EVENT: 4, ARMORY: 1.4, REST: 2.0 },
+  siteWeights: { camp: 3, tutor: 1.5 } };
+/* ── 休息節點的「內容」（使用者定案：導師歸類成休息，進入才揭曉）─────────────
+   路線圖上所有這些都畫成同一種「休整地」節點，玩家點進去才知道是哪一種——
+   除非有斥候隨從或（尚未設計的）偵查被動先探明（見 hasScoutRecon）。
+   name/glyph 只在「已知」時才顯示。enter 由 enterSite 依 site 分派。 */
+const REST_SITES = {
+  camp:  { name: '營地', glyph: '⛺' },   // 整補（現有的休息關）
+  tutor: { name: '導師', glyph: '書' },   // 燒卷軸習得（現有的導師關）
+  // 之後：blacksmith 鐵匠 / merchant 商人 / info 情報販子 / event 營地事件
+};
+const REST_SITE_IDS = Object.keys(REST_SITES);
+const siteOf = (n) => (n && REST_SITES[n.site] ? n.site : 'camp');   // 缺 site（舊 fallback 圖）＝當作營地
+function hasScoutRecon() { return false; }   // TODO：有斥候隨從/偵查被動時回 true＝提前看穿休息節點內容
+function roadSiteKnown(n) { return roadCompleted.has(n.id) || hasScoutRecon(); }   // 已去過 or 斥候探明＝顯示真實內容
+function pickSite() {
+  const W = CONFIG.roadmap.siteWeights; let tot = 0;
+  for (const k of REST_SITE_IDS) tot += (W[k] || 0);
+  let x = srand() * tot; for (const k of REST_SITE_IDS) { x -= (W[k] || 0); if (x <= 0) return k; } return 'camp';
+}
 // 閃光彈：落點 360° 噴一批「不傷害」的閃光彈丸，中到的敵人累積暈眩 u.flash（中越多越強，上限 max、每秒 decay）。
 // 暈眩效果隨飽和度 flashF(0~1) 縮放：視錐變窄(coneShrink)、視距變短(rangeMax→rangeMin)、移速降(moveSlow)、發散增(spreadAdd)。
 CONFIG.flash = {
@@ -1166,12 +1188,20 @@ function genRoadmap() {   // 每局程序生成（在 srandSeed 後呼叫）
   const edges = [];
   for (const e of edgeSet) { const ab = e.split('>'); edges.push([idOf[ab[0]], idOf[ab[1]]]); }
   for (let r = 0; r < rows; r++) if (cellSet[key(body - 1, r)]) edges.push([idOf[key(body - 1, r)], bossId]);   // 倒數第二欄 → 王
-  const restCol = body - 1;
+  /* 休息牆（使用者定案）：每隔 restEvery 欄整欄設為 REST。因為每條路徑在每一欄都恰有一個節點，
+     整欄 REST ＝**不管走哪條路，都在相同深度必經一次休息**（未必收束到同一格，而是同一進展深度）。
+     王前一欄若不與階梯休息相鄰，也補一道＝整補後上王。 */
+  const restEvery = Math.max(1, (C.restEvery | 0) || 2);
+  const restWallCols = new Set();
+  for (let c = restEvery; c <= body - 1; c += restEvery) restWallCols.add(c);
+  if (!restWallCols.has(body - 1) && !restWallCols.has(body - 2)) restWallCols.add(body - 1);
   for (const n of nodes) {
     if (n.boss || n.col === 0) n.type = 'COMBAT';        // 首欄＝COMBAT、王＝COMBAT
-    else if (n.col === restCol) n.type = 'REST';          // 王前一欄＝保證整補
-    else n.type = roadWeightedType();                     // 中段加權隨機
+    else if (restWallCols.has(n.col)) n.type = 'REST';   // 休息牆：整欄休息（每條路必經）
+    else n.type = roadWeightedType();                    // 中段加權隨機
   }
+  // REST 節點的隱藏內容（camp/tutor/…）：進入才揭曉（見 REST_SITES / roadSiteKnown）
+  for (const n of nodes) if (n.type === 'REST') n.site = pickSite();
   roadAssignMaps(nodes);
   const rm = { start: nodes.filter(n => n.col === 0).map(n => n.id), nodes, edges };
   roadmap = validateRoadmap(rm) ? rm : FALLBACK_ROADMAP;
@@ -2225,11 +2255,16 @@ function initRun() {
 function selectNode(id) {
   if (!roadAvailable.includes(id) || roadCompleted.has(id)) return;
   roadCurrent = id;
-  const t = roadNode(id).type;
+  const node = roadNode(id), t = node.type;
   if (t === 'COMBAT') startMission();
   else if (t === 'ARMORY') enterArmory();
-  else if (t === 'TUTOR') enterTutor();
   else if (t === 'EVENT') enterEvent();
+  else if (t === 'REST') enterSite(siteOf(node));   // 休息節點：進入才依 site 分派（camp→整補 / tutor→導師 / …）
+  else enterRest();
+}
+// 休息節點的分派：目前 camp→休息關、tutor→導師關。未來鐵匠/商人/情報/營地事件在此加分支。
+function enterSite(site) {
+  if (site === 'tutor') enterTutor();
   else enterRest();
 }
 
@@ -6972,7 +7007,7 @@ function drawRoadmap() {
     const isBravo = n.type === 'COMBAT' && (n.map === 'bravo');
     const isOutpost = n.type === 'COMBAT' && (n.map === 'outpost');
     const isLanes = n.type === 'COMBAT' && (n.map === 'lanes');
-    const base = n.type === 'REST' ? 150 : n.type === 'ARMORY' ? 48 : n.type === 'TUTOR' ? 320 : n.type === 'EVENT' ? 280 : (isBravo ? 35 : isOutpost ? 110 : isLanes ? 190 : 8);   // hue: 開闊紅、門禁橙、前哨綠、哨廊藍、軍械庫金、休息青、事件紫
+    const base = n.type === 'REST' ? 150 : n.type === 'ARMORY' ? 48 : n.type === 'EVENT' ? 280 : (isBravo ? 35 : isOutpost ? 110 : isLanes ? 190 : 8);   // hue: 開闊紅、門禁橙、前哨綠、哨廊藍、軍械庫金、休息青、事件紫
     let fill, stroke;
     if (done) { fill = 'rgba(70,80,90,0.5)'; stroke = 'rgba(120,130,140,0.6)'; }
     else if (isAvail) { fill = hsl(base, 65, hover ? 52 : 42); stroke = '#ffffff'; }
@@ -6981,8 +7016,10 @@ function drawRoadmap() {
     if (isAvail) { const a = 0.4 + 0.4 * Math.sin(simTime ? simTime * 5 : 0); ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 30, 0, Math.PI * 2); ctx.stroke(); }
     ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(p.x, p.y, hover ? 24 : 22, 0, Math.PI * 2); ctx.fill();
     ctx.lineWidth = isAvail ? 2.5 : 1.5; ctx.strokeStyle = stroke; ctx.beginPath(); ctx.arc(p.x, p.y, hover ? 24 : 22, 0, Math.PI * 2); ctx.stroke();
-    const glyph = done ? '✓' : n.boss ? '‼' : n.type === 'REST' ? '＋' : n.type === 'ARMORY' ? '★' : n.type === 'TUTOR' ? '書' : n.type === 'EVENT' ? '?' : (isBravo ? '⊟' : '⚔');
-    const sub = n.boss ? '最終 · ' + (MAPS[n.map] || MAPS.alpha).label : n.type === 'REST' ? '休息' : n.type === 'ARMORY' ? '軍械庫' : n.type === 'TUTOR' ? '導師' : n.type === 'EVENT' ? '事件' : (MAPS[n.map] || MAPS.alpha).label;
+    // 休息節點：**內容進入才揭曉**（已去過 or 斥候探明才顯示真實 site；否則一律「休整地」）
+    const restKnown = n.type === 'REST' && roadSiteKnown(n);
+    const glyph = done ? '✓' : n.boss ? '‼' : n.type === 'REST' ? (restKnown ? REST_SITES[siteOf(n)].glyph : '⌂') : n.type === 'ARMORY' ? '★' : n.type === 'EVENT' ? '?' : (isBravo ? '⊟' : '⚔');
+    const sub = n.boss ? '最終 · ' + (MAPS[n.map] || MAPS.alpha).label : n.type === 'REST' ? (restKnown ? REST_SITES[siteOf(n)].name : '休整地') : n.type === 'ARMORY' ? '軍械庫' : n.type === 'EVENT' ? '事件' : (MAPS[n.map] || MAPS.alpha).label;
     ctx.fillStyle = done ? '#aab' : '#ffffff'; ctx.font = 'bold 16px Consolas';
     ctx.fillText(glyph, p.x, p.y + 6);
     ctx.fillStyle = isAvail ? '#e8eef5' : 'rgba(180,190,200,0.6)'; ctx.font = '11px Consolas';
