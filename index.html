@@ -2809,6 +2809,24 @@ const EVENTS = [
       { label: '應戰單挑', hint: '50% 技高一籌(得一件裝備) / 否則落敗掛彩(−全隊12HP)', outcome: { type: 'gamble', p: 0.5, win: { type: 'equip' }, lose: { type: 'damage', amt: 12 } } },
       { label: '抱拳致意，各奔前程', outcome: { type: 'nothing' } },
     ] },
+  // 重傷同袍：資源／士氣／人命三選一（拋下＝leave 移除指定隊員，永久死亡的張力）
+  { id: 'woundedComrade', title: '重傷的同袍', text: '隊中一人傷重難行，拖著會拖慢全隊的腳程。',
+    choices: [
+      { label: '全力救治（付一件裝備 → 全隊回血）', req: 'gear', outcome: { type: 'trade', cost: 'gear', gain: { type: 'heal', amt: 25 } } },
+      { label: '帶著他慢行（次戰士氣低落）', outcome: { type: 'momentum', amount: -10, lifetime: 'oneBattle', source: '拖行傷員' } },
+      { label: '狠心拋下（指定一員離隊）', need: 'target', outcome: { type: 'leave' } },
+    ] },
+  // 迷途難民：護送＝queue 一個報恩事件到後段（延遲後果的正面版，走 boy→ambush 同一條 queue 機制）
+  { id: 'refugees', title: '迷途的難民', text: '一小群難民攔住去路，懇求你護送他們到安全的下一站。',
+    choices: [
+      { label: '護送他們一程', hint: '日後或有回報', set: { escortedRefugees: true }, queue: ['refugeeReward'], outcome: { type: 'nothing', msg: '你護送難民安然抵達下一站。他們記住了你的恩情。' } },
+      { label: '無能為力，繞行', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'refugeeReward', title: '難民的回報', text: '先前你護送的難民捎來消息——他們湊了些物資答謝你。', scripted: true,   // scripted＝只由 refugees 的 queue 觸發，不進隨機池
+    choices: [
+      { label: '收下謝禮', outcome: { type: 'loot', n: 1 } },
+      { label: '婉謝（義名遠播，次戰士氣一振）', outcome: { type: 'momentum', amount: 12, lifetime: 'oneBattle', source: '義名遠播' } },
+    ] },
   // 女巫的交易（S2×S1）：獻祭一名手下 → 巫紋強化騎士主手，但軍心蒙塵到見證者散盡、且有人憤而離去。
   { id: 'witch', title: '沼澤女巫', text: '霧中一名女巫向你招手：「交出一個追隨你的人，我便讓你的兵刃嗜血如我。」她的眼神讓活著的人都想遠離。',
     choices: [
@@ -2858,7 +2876,8 @@ function eventChoosable(c) {
 function applyEventOutcome(o, mi) {
   if (!o) return '無事發生';
   switch (o.type) {
-    case 'nothing': return '離開了，什麼也沒發生';
+    case 'nothing': return o.msg || '離開了，什麼也沒發生';   // o.msg＝給有敘事但無機制的選項一句像樣的收場（如護送難民）
+    case 'leave': { if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可離隊的人'; const gone = roster.splice(mi, 1)[0]; return `${gone.name} 離開了隊伍`; }   // 移除一名指定隊員（need:'target'）；女巫的 inline 移除是這個的特例
     case 'ammo': { const ids = WEAPON_IDS.filter(id => !isInfiniteAmmo(id) && !WEAPONS[id].silent), id = rngPick(ids), amt = WEAPONS[id].magazine * (o.big ? 6 : 3); ammoStock[id] = (ammoStock[id] || 0) + amt; return `${WEAPONS[id].name}彈 +${amt}`; }
     case 'weapon': { const id = o.id || rollLootWeapon(); warehouse.push({ kind: 'weapon', id }); return `取得武器 ${WEAPONS[id].name}`; }
     case 'equip': { const id = o.id || rngPick(availPool('equip', LOOT_EQUIP_IDS)); warehouse.push({ kind: 'equip', id }); return `取得裝備 ${EQUIPMENT[id].name}`; }
