@@ -345,6 +345,10 @@ const WEAPONS = {
   sword: { name: '長劍',  rarity: 'common',   weight: 1.5, damage: 30, fireRate: 6, range: 66, turnSpeed: 520, pierce: 0.35, melee: true, swingStyle: 'sweep', hands: 1,
            arcDeg: 100, reach: 66, windup: 0.10, activeT: 0.09, recover: 0.26, cleave: 3, knock: 260, stagger: 0, backstabMul: 1.0, poiseDmg: 22, stamCost: 18,
            magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
+  // 石中劍（事件解鎖，S2/S1 的產物）：傷害同長劍、**完全穿甲(pierce 1.0)**、noEnhance＝charges 已用盡不能再打。
+  stonesword: { name: '石中劍', rarity: 'legendary', weight: 1.5, damage: 30, fireRate: 6, range: 66, turnSpeed: 520, pierce: 1.0, melee: true, swingStyle: 'sweep', hands: 1, noEnhance: true,
+           arcDeg: 100, reach: 66, windup: 0.10, activeT: 0.09, recover: 0.26, cleave: 3, knock: 260, stagger: 0, backstabMul: 1.0, poiseDmg: 22, stamCost: 18,
+           magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
   axe:   { name: '雙手斧', rarity: 'common',  weight: 2.2, damage: 48, fireRate: 4, range: 62, turnSpeed: 380, pierce: 0.30, melee: true, swingStyle: 'sweep', hyperArmor: true, hands: 2,
            arcDeg: 160, reach: 62, windup: 0.20, activeT: 0.14, recover: 0.38, cleave: 5, knock: 320, stagger: 0, backstabMul: 1.0, poiseDmg: 34, stamCost: 28,
            magazine: 999, reloadTime: 0.1, projSpeed: 0, spreadBase: 0, spreadPerShot: 0, spreadMax: 0, spreadRecover: 1 },
@@ -389,8 +393,82 @@ const WEAPON_IDS = Object.keys(WEAPONS);
 const FLOOR_WEAPON = 'knife';                                          // 預設武器底線（§7）＝人人都有的短刀
 const RECRUIT_WEAPON_IDS = ['sword', 'spear', 'longbow', 'warbow'];    // 隨機招募池（warbow 需局外解鎖才進池）
 const LOOT_WEAPON_IDS = ['sword', 'axe', 'mace', 'spear', 'dagger', 'longbow', 'crossbow', 'javelin', 'warbow', 'falchion'];   // 搜刮戰利品池（喪鐘永不在內）
-const MELEE_WEAPON_IDS = WEAPON_IDS.filter(id => WEAPONS[id].melee);   // 近接武器（試作場熱鍵用）
+const MELEE_WEAPON_IDS = WEAPON_IDS.filter(id => WEAPONS[id].melee && id !== 'stonesword');   // 近接武器（試作場熱鍵用）
 const ENEMY_ONLY_WEAPON_IDS = ['fangs', 'club'];                       // 敵人專屬（不入玩家戰利品/沙盒池）
+
+/* =====================================================================
+   S2 · 裝備強化（純引擎，使用者定案）——武器實例化的核心，先不碰倉庫/UI/戰鬥。
+
+   精良程度＝**能強化幾次**（charge 預算，從稀有度衍生），本身不加數值。
+   每次強化吃 charge，由不同的人賦予：
+     鐵匠 → 鋒利(+傷害)/平衡(−耐力)，連哪個都隨機、數值也隨機，1 格。
+     導師/女巫 → 詞條 affix，1~3 格；純數值的併進 effWeapon，有效果的訂閱 Hooks（同聖物）。
+   石中劍＝一把預先打滿的實例（charges 用盡＝不能再強化），帶 rally 詞條 → 接 S1 whileEquipped 氣勢。
+   ===================================================================== */
+const WEAPON_QUALITY = { common: 1, uncommon: 2, rare: 3, epic: 4, legendary: 5 };   // 稀有度 → charge 預算
+const qualityOf = (id) => WEAPON_QUALITY[(WEAPONS[id] || {}).rarity] || 1;
+CONFIG.enhance = { sharpMin: 3, sharpMax: 8, balanceMin: 2, balanceMax: 5 };          // 鋒利/平衡的隨機值域
+// 詞條池（迷你聖物）：純數值走 delta；有效果走 hook（poiseAdd 等）；momentum 走 S1；source 限定來源
+const AFFIXES = {
+  piercing: { name: '破甲', charges: 2, delta: { pierceAdd: 0.30 } },
+  keen:     { name: '鋒棱', charges: 1, delta: { dmgAdd: 6 } },
+  flame:    { name: '烈焰', charges: 2, poiseAdd: 12 },                                 // 命中額外體幹傷（Hooks：attackHit）
+  rally:    { name: '戰意', charges: 2, momentum: { amount: 30, lifetime: 'whileEquipped' } },   // 石中劍那條
+  hex:      { name: '巫紋', charges: 3, source: 'witch', delta: { pierceAdd: 0.5 }, momentum: { amount: 15, lifetime: 'whileEquipped' } },   // 女巫專屬
+};
+const AFFIX_IDS = Object.keys(AFFIXES);
+// 武器實例：{ id, quality, enh:[{kind:'sharp'|'balance'|'affix', charges, value?/affix?}] }
+function weaponInst(id, opts) {
+  return { id, quality: (opts && opts.quality != null) ? opts.quality : qualityOf(id), enh: (opts && opts.enh) ? opts.enh.slice() : [] };
+}
+const chargesUsed = (inst) => (inst && inst.enh || []).reduce((n, e) => n + (e.charges || 1), 0);
+const chargesFree = (inst) => Math.max(0, (inst.quality || 1) - chargesUsed(inst));
+const canEnhance = (inst) => !!inst && !WEAPONS[inst.id].noEnhance && chargesFree(inst) >= 1;
+// 鐵匠：1 格，隨機鋒利/平衡 + 隨機值（吃 srand＝可重現）
+function enhanceWeapon(inst) {
+  if (!canEnhance(inst)) return null;
+  const sharp = srand() < 0.5;
+  const value = sharp ? Math.round(CONFIG.enhance.sharpMin + srand() * (CONFIG.enhance.sharpMax - CONFIG.enhance.sharpMin))
+                      : Math.round(CONFIG.enhance.balanceMin + srand() * (CONFIG.enhance.balanceMax - CONFIG.enhance.balanceMin));
+  inst.enh.push({ kind: sharp ? 'sharp' : 'balance', charges: 1, value });
+  return { kind: sharp ? 'sharp' : 'balance', value };
+}
+// 導師/女巫：套一條詞條（吃該詞條的 charges）。source 限定（女巫詞條只有女巫能給）。
+function applyAffix(inst, affixId, opts) {
+  const A = AFFIXES[affixId]; if (!A || !inst || WEAPONS[inst.id].noEnhance) return null;
+  if (A.source && (!opts || opts.source !== A.source)) return null;   // 限定來源
+  if (chargesFree(inst) < (A.charges || 1)) return null;
+  inst.enh.push({ kind: 'affix', affix: affixId, charges: A.charges || 1 });
+  return A;
+}
+// 戰鬥用的 effective 武器：base 淺拷貝 + 鋒利/平衡/純數值詞條併入（hands/melee 等定義屬性不動）
+function effWeapon(inst) {
+  if (!inst) return null;
+  const base = WEAPONS[inst.id]; if (!base) return null;
+  if (!inst.enh || !inst.enh.length) return base;   // 沒強化＝直接用共用定義（省拷貝）
+  const w = Object.assign({}, base);
+  for (const e of inst.enh) {
+    if (e.kind === 'sharp') w.damage = (w.damage || 0) + (e.value || 0);
+    else if (e.kind === 'balance') w.stamCost = Math.max(0, (w.stamCost || 0) - (e.value || 0));
+    else if (e.kind === 'affix') { const A = AFFIXES[e.affix]; if (A && A.delta) { if (A.delta.dmgAdd) w.damage += A.delta.dmgAdd; if (A.delta.pierceAdd) w.pierce = Math.min(1, (w.pierce || 0) + A.delta.pierceAdd); } }
+  }
+  w._inst = inst;   // 讓 Hooks/氣勢掃得到此把的詞條
+  return w;
+}
+// 這把武器的 whileEquipped 氣勢量（rally/hex 等詞條）——之後在 startMission 掃裝著的武器接 S1
+function weaponAffixMomentum(inst) {
+  let amt = 0;
+  for (const e of (inst && inst.enh || [])) if (e.kind === 'affix') { const A = AFFIXES[e.affix]; if (A && A.momentum) amt += A.momentum.amount; }
+  return amt;
+}
+// 石中劍：預先打滿的實例（4 格全用：鋒利+平衡+rally）＝拿到就是這樣、不能再打
+function stoneSwordInst() {
+  return weaponInst('stonesword', { quality: 4, enh: [
+    { kind: 'sharp', charges: 1, value: 8 },
+    { kind: 'balance', charges: 1, value: 5 },
+    { kind: 'affix', affix: 'rally', charges: 2 },
+  ] });
+}
 const randomWeaponPool = (ids) => ids.filter(id => !(WEAPONS[id] && WEAPONS[id].noRandom));   // 抽選用：濾掉 noRandom（喪鐘）＝任何隨機抽選都不會抽到（手動選仍可）
 const isInfiniteAmmo = (id) => id === FLOOR_WEAPON || !!(WEAPONS[id] && (WEAPONS[id].melee || WEAPONS[id].infinite));   // 底線武器/近戰＝彈藥無限不耗備彈
 const handsOf = (id) => { const W = WEAPONS[id]; return W ? (W.hands != null ? W.hands : 1) : 1; };
@@ -1100,7 +1178,8 @@ function makeRecruit(used) {
   // 兩者分開擲才會出現「弓手打法卻是陷陣」這種人——招募到誰因此真的有差別。
   const classId = rngPick(RECRUIT_CLASS_IDS);
   const kit = classLoadout(classId);
-  return { name, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]), classId,
+  return { name, uid: rosterUidSeq++, hue: rngPick(HUE_POOL), strength: rngPick([0.8, 1.0, 1.2]), classId,
+    // **uid**＝穩定身分：名字會被離隊者的後繼重用，追蹤「這個人」（女巫詛咒的見證者）要靠 uid。
     // **裝備由兵種決定，不可自由編輯**（使用者定案）。弓手就是帶弓、槍兵帶槍。
     weaponId: kit.weaponId, offId: kit.offId, armorId: kit.armorId, abilityId: 'mend',
     archetypeId: rngPick(availPool('archetype', ARCHETYPE_IDS)),
@@ -1983,6 +2062,7 @@ const DESTRUCT_PRESETS = [
 ];
 let editDestructPreset = 0;
 let roster;                  // 跨關攜帶的陣容（撤出者存活、陣亡者損失）
+let rosterUidSeq = 1;        // 隊員穩定身分序號（名字會被重用，追蹤「這個人」靠 uid）
 let missionIndex;            // 已清的戰鬥數（用於難度遞增/HUD）
 let restMsg, lastSummary;    // 休息關狀態
 let tutorOffers = null, tutorMsg = '';   // 導師節點：可學清單 / 提示訊息
@@ -2152,7 +2232,7 @@ const rosterFromPlayer = (p) => {
   stashActiveSet(p);   // 先把當前主手狀態存回 set，否則換過手的人會漏掉彈藥/裝填進度
   const m0 = s0 && s0.main ? s0.main : null;
   const free2 = (p.slots && p.slots[2]) || {}, free3 = (p.slots && p.slots[3]) || {};
-  return { name: p.name, hue: p.hue, strength: p.strength, classId: p.classId || null,   // 兵種跨關保留（身體不會因為換關就變）
+  return { name: p.name, uid: p.uid, hue: p.hue, strength: p.strength, classId: p.classId || null,   // uid＝穩定身分；兵種跨關保留
     weaponId: m0 ? m0.weaponId : p.weaponId, offId: s0 ? s0.off : null,
     weaponId2: w2 ? w2.weaponId : null, offId2: s1 ? s1.off : null,
     abilityId: free3.id || p.abilityId, archetypeId: p.archetypeId,
@@ -2602,8 +2682,8 @@ function momentumModActive(m) {
            k.weaponId2 === m.weaponId;
   }
   if (m.lifetime === 'untilGone') {
-    // 見證者還有任何一人在隊上＝詛咒仍在
-    const alive = new Set((roster || []).map(r => r && r.name));
+    // 見證者還有任何一人在隊上＝詛咒仍在。**用 uid 不用 name**——名字會被離隊者的後繼重用。
+    const alive = new Set((roster || []).map(r => r && r.uid));
     return (m.witnesses || []).some(w => alive.has(w));
   }
   return true;   // oneBattle：進場即有效（用完在 consume 清掉）
