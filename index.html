@@ -2766,6 +2766,49 @@ const EVENTS = [
       { label: '只標記位置、回收他丟下的物資（安全）', outcome: { type: 'ammo' } },
       { label: '無視，離開', outcome: { type: 'nothing' } },
     ] },
+  // ── 簡單隨機事件（純換皮：組合現有結果，零新機制；隱藏傾向走 gamble 免掉 onEnter）───────
+  { id: 'food', title: '路旁的糧食', text: '一輛翻覆的補給車，散落著看不出新鮮與否的糧食。',
+    choices: [
+      { label: '飽餐一頓', hint: '70% 次戰士氣高昂 / 否則吃壞肚子(次戰士氣低落)', outcome: { type: 'gamble', p: 0.7, win: { type: 'momentum', amount: 12, lifetime: 'oneBattle', source: '飽餐' }, lose: { type: 'momentum', amount: -8, lifetime: 'oneBattle', source: '食物腐壞' } } },
+      { label: '不碰，繼續趕路', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'peasantsRaided', title: '農民被劫掠', text: '前方一夥盜匪正在劫掠村民，村民向你哀求。',
+    choices: [
+      { label: '拔劍相助', hint: '65% 村民致謝(物資) / 否則寡不敵眾(−全隊10HP)', outcome: { type: 'gamble', p: 0.65, win: { type: 'loot', n: 1 }, lose: { type: 'damage', amt: 10 } } },
+      { label: '不涉入，繞行', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'fleeingSoldier', title: '逃亡的士兵', text: '一名獨行的敗兵認出你甲上的紋章：「……你也是打輸那一仗的人。」',
+    choices: [
+      { label: '招降：同侍一主，入夥吧', hint: '55% 入隊 / 否則翻臉開打', outcome: { type: 'gamble', p: 0.55, win: { type: 'recruit' }, lose: { type: 'combat', map: 'bravo' } } },
+      { label: '拔劍格殺', hint: '進入一場戰鬥', outcome: { type: 'combat', map: 'bravo' } },
+      { label: '放他走', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'shrine', title: '荒野神龕', text: '一座傾頹的路旁神龕，香案上積著厚灰。',
+    choices: [
+      { label: '駐足禱告', hint: '次戰獲得開場氣勢', outcome: { type: 'momentum', amount: 15, lifetime: 'oneBattle', source: '禱告' } },
+      { label: '不驚擾亡者', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'ferry', title: '渡口', text: '一名船夫守著唯一的渡口：「要過河？先付買路財。」',
+    choices: [
+      { label: '付買路財，安然渡河', req: 'gear', outcome: { type: 'trade', cost: 'gear', gain: { type: 'nothing' } } },
+      { label: '硬涉水過河', hint: '60% 安然過 / 否則急流沖擊(−全隊12HP)', outcome: { type: 'gamble', p: 0.6, win: { type: 'nothing' }, lose: { type: 'damage', amt: 12 } } },
+    ] },
+  { id: 'routedCampfire', title: '潰兵的營火', text: '林間一簇營火，幾名離散的敗兵圍坐取暖，戒心很重。',
+    choices: [
+      { label: '招攬入夥', hint: '60% 入隊 / 否則散去', outcome: { type: 'gamble', p: 0.6, win: { type: 'recruit' }, lose: { type: 'nothing' } } },
+      { label: '趁夜打劫', hint: '55% 得手(物資) / 否則反被圍攻(開打)', outcome: { type: 'gamble', p: 0.55, win: { type: 'loot', n: 1 }, lose: { type: 'combat', map: 'bravo' } } },
+      { label: '悄悄繞過', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'scavenge', title: '戰場拾荒', text: '一片舊戰場，屍陣間或許還有沒被撿走的東西——但腐臭引來的不只烏鴉。',
+    choices: [
+      { label: '搜刮屍陣', hint: '65% 撿到道具 / 否則驚動食腐獸(開打)', outcome: { type: 'gamble', p: 0.65, win: { type: 'item' }, lose: { type: 'combat', map: 'bravo' } } },
+      { label: '快步離開', outcome: { type: 'nothing' } },
+    ] },
+  { id: 'tourneyKnight', title: '故識的騎士', text: '對面來了一名騎士，你認得他——當年比武場上交過手。「沒想到在這種地方重逢。來一場？」',
+    choices: [
+      { label: '應戰單挑', hint: '50% 技高一籌(得一件裝備) / 否則落敗掛彩(−全隊12HP)', outcome: { type: 'gamble', p: 0.5, win: { type: 'equip' }, lose: { type: 'damage', amt: 12 } } },
+      { label: '抱拳致意，各奔前程', outcome: { type: 'nothing' } },
+    ] },
   // 女巫的交易（S2×S1）：獻祭一名手下 → 巫紋強化騎士主手，但軍心蒙塵到見證者散盡、且有人憤而離去。
   { id: 'witch', title: '沼澤女巫', text: '霧中一名女巫向你招手：「交出一個追隨你的人，我便讓你的兵刃嗜血如我。」她的眼神讓活著的人都想遠離。',
     choices: [
@@ -2829,7 +2872,7 @@ function applyEventOutcome(o, mi) {
     case 'recruit': { if (typeof restDoAwaken === 'function') { /* 直接加一名 */ } const rec = makeRecruit(new Set(roster.map(r => r.name))); if (typeof autoEquipFromWarehouse === 'function') autoEquipFromWarehouse(rec); roster.push(rec); return `${rec.name} 加入隊伍`; }
     case 'relic': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的拜師禮'; paid = `（付出 ${g}）`; } const nm = teachArt(mi); return nm ? `隱士傳授「${nm}」${paid}（入倉庫，休息關可配裝）` : '隱士已無可傳授的術'; }
     case 'trade': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的代價'; paid = `付出 ${g}，`; } return paid + applyEventOutcome(o.gain, mi); }
-    case 'gamble': { if (srand() < (o.p || 0.5)) return '成功！' + applyEventOutcome(o.win, mi); return '失手！' + applyEventOutcome(o.lose, mi); }
+    case 'gamble': { const hit = srand() < (o.p || 0.5); const inner = applyEventOutcome(hit ? o.win : o.lose, mi); return inner == null ? null : (hit ? '成功！' : '失手！') + inner; }   // inner 為 null（combat/rest 換場）＝整條也回 null，讓 eventPick 乾淨離場（不會拼成「失手！null」）
     case 'momentum': { addRunMomentumMod({ source: o.source || 'event', amount: o.amount || 0, lifetime: o.lifetime || 'oneBattle', witnesses: o.witnesses, weaponId: o.weaponId }); return o.amount >= 0 ? '士氣為之一振' : '士氣蒙上陰影'; }   // S1：事件掛一條跨戰鬥氣勢修正
     case 'witchPact': {   // 女巫的交易：獻祭一名手下（mi）→ 巫紋強化騎士主手 + untilGone 詛咒 + 有些人憤而離去
       if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可獻祭的人';
