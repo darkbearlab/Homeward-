@@ -830,7 +830,11 @@ Phase 4 前的最後一項插隊調整。
    `enhanceWeapon`（鐵匠，隨機鋒利/平衡+隨機值）／`applyAffix`（導師/女巫，`source` 限定）／charge 預算／
    `AFFIXES` 表（破甲/鋒棱/烈焰/戰意/巫紋）／`stoneSwordInst`（預打滿）。11 項測試。
    順帶：隊員加 **`uid` 穩定身分**（女巫詛咒的見證者必須靠 uid——名字會被離隊者的後繼重用，這是真 bug）。
-2. **實例化倉庫/roster**：weapon 存法從 `{id}` → 帶 `{id,quality,enh}`；`makeWeaponSlot` 用 `effWeapon`；掉落/拾取帶著走。
+2. ✅ **實例化倉庫/roster**（已做）：強化紀錄 `{quality, enh}` 穿過整個庫存流——`makeWeaponSlot(…, enhRec)` 用
+   `effWeapon`；roster 加 `enh/quality`(+`enh2/quality2`)、`makePlayer` 鏡像、`equipActiveSet/stashActiveSet` 帶著、
+   `rosterFromPlayer` 抽回、`equip/unequipWeapon` 進出倉庫、掉落/拾取帶著走。石中劍 rally → `applyRunMomentum` 掃裝著的
+   武器自動接 S1。**順帶修一個舊 quirk**：近戰武器原本卸下即消失（被當底線武器）——有強化後武器變貴，改成只有底線短刀會消失。
+   實測全鏈路：精良3 長劍 → 鐵匠平衡−2/鋒利+3 → 導師鋒棱+6 → 39 傷/16 耐力、跨關保留。
 3. **鐵匠 site + 導師加功能 + 配裝卡顯示精良度/詞條**：UI 層。
 4. **接事件**：女巫（獻祭→強化＋S1 詛咒）、石中劍（榮譽 gate→給預打滿實例）。
 
