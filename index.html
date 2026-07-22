@@ -774,15 +774,16 @@ CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數�
 // siteWeights＝休息節點裡實際是什麼（**進入才知道**）：營地整補 / 導師 / 未來的鐵匠・商人・情報販子・營地事件。
 CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
   typeWeights: { COMBAT: 4, EVENT: 5, ARMORY: 1.4, REST: 2.0 },   // 休息牆吃掉整欄，事件權重再拉高補償（隨機欄裡最高）
-  siteWeights: { camp: 3, tutor: 1.5 } };
+  siteWeights: { camp: 3, tutor: 1.5, blacksmith: 1.5 } };
 /* ── 休息節點的「內容」（使用者定案：導師歸類成休息，進入才揭曉）─────────────
    路線圖上所有這些都畫成同一種「休整地」節點，玩家點進去才知道是哪一種——
    除非有斥候隨從或（尚未設計的）偵查被動先探明（見 hasScoutRecon）。
    name/glyph 只在「已知」時才顯示。enter 由 enterSite 依 site 分派。 */
 const REST_SITES = {
-  camp:  { name: '營地', glyph: '⛺' },   // 整補（現有的休息關）
-  tutor: { name: '導師', glyph: '書' },   // 燒卷軸習得（現有的導師關）
-  // 之後：blacksmith 鐵匠 / merchant 商人 / info 情報販子 / event 營地事件
+  camp:       { name: '營地', glyph: '⛺' },   // 整補（現有的休息關）
+  tutor:      { name: '導師', glyph: '書' },   // 燒卷軸習得（現有的導師關）
+  blacksmith: { name: '鐵匠', glyph: '鎚' },   // 強化武器：鋒利/平衡（S2）
+  // 之後：merchant 商人 / info 情報販子 / event 營地事件
 };
 const REST_SITE_IDS = Object.keys(REST_SITES);
 const siteOf = (n) => (n && REST_SITES[n.site] ? n.site : 'camp');   // 缺 site（舊 fallback 圖）＝當作營地
@@ -2361,6 +2362,7 @@ function selectNode(id) {
 // 休息節點的分派：目前 camp→休息關、tutor→導師關。未來鐵匠/商人/情報/營地事件在此加分支。
 function enterSite(site) {
   if (site === 'tutor') enterTutor();
+  else if (site === 'blacksmith') enterBlacksmith();
   else enterRest();
 }
 
@@ -3103,6 +3105,40 @@ function tutorPick(i) {
   return true;
 }
 function tutorLeave() { if (scene !== 'TUTOR') return; tutorOffers = null; tutorMsg = ''; advanceNode(); }
+
+/* ── 鐵匠 site（S2 UI）：強化你有的武器（鋒利/平衡，隨機）───────────────────
+   目標＝騎士當前配的兩把主手（roster 槽 1/2）＋倉庫裡的武器。強化直接改來源的 enh 陣列
+   （roster 欄位或倉庫條目），因為陣列是參照＝就地生效、跨關保留。免費、只受精良度(格數)限制。 */
+let blacksmithMsg = '';
+function enhanceTargets() {
+  const out = [], k = roster && roster[KNIGHT_ID];
+  for (const slot of [1, 2]) {
+    const id = k && k[WF(slot)];
+    if (!id || id === FLOOR_WEAPON || (WEAPONS[id] && WEAPONS[id].noEnhance)) continue;
+    if (!Array.isArray(k[EF(slot)])) k[EF(slot)] = [];
+    if (k[QF(slot)] == null) k[QF(slot)] = qualityOf(id);
+    out.push({ src: '你 · 槽' + slot, id, inst: { id, quality: k[QF(slot)], enh: k[EF(slot)] } });
+  }
+  for (let i = 0; i < warehouse.length; i++) {
+    const it = warehouse[i];
+    if (it.kind !== 'weapon' || it.id === FLOOR_WEAPON || (WEAPONS[it.id] && WEAPONS[it.id].noEnhance)) continue;
+    if (!Array.isArray(it.enh)) it.enh = [];
+    if (it.quality == null) it.quality = qualityOf(it.id);
+    out.push({ src: '倉庫', id: it.id, inst: { id: it.id, quality: it.quality, enh: it.enh } });
+  }
+  return out;
+}
+function enterBlacksmith() { scene = 'BLACKSMITH'; releasePointer(); blacksmithMsg = ''; }
+function blacksmithPick(i) {
+  if (scene !== 'BLACKSMITH') return false;
+  const t = enhanceTargets()[i]; if (!t) return false;
+  if (!canEnhance(t.inst)) { blacksmithMsg = `${WEAPONS[t.id].name}：沒有可強化的格了`; return false; }
+  const r = enhanceWeapon(t.inst);   // 就地改 enh 陣列（參照）
+  if (!r) { blacksmithMsg = '強化失敗'; return false; }
+  blacksmithMsg = `${WEAPONS[t.id].name}　${r.kind === 'sharp' ? '鋒利 +傷害' : '平衡 −耐力'} ${r.value}`;
+  return true;
+}
+function blacksmithLeave() { if (scene !== 'BLACKSMITH') return; blacksmithMsg = ''; advanceNode(); }
 
 // --- 進入休息關：整理臨時背包（彈藥折算進儲備、item 進倉庫 haul）---
 function enterRest(tutorial = false) {
@@ -5073,7 +5109,7 @@ cv.addEventListener('click', () => {
     if (b && mouse.mx >= b.x && mouse.mx <= b.x + b.w && mouse.my >= b.y && mouse.my <= b.y + b.h) { editorOpen(); return; }
     const id = roadNodeAt(mouse.mx, mouse.my); if (id != null) selectNode(id);
   }
-  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR' || scene === 'ORIGIN') restClick(mouse.mx, mouse.my);
+  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR' || scene === 'ORIGIN' || scene === 'BLACKSMITH') restClick(mouse.mx, mouse.my);
   else if (scene === 'EVENT') eventClick(mouse.mx, mouse.my);
   else if (scene === 'RUNEND' || scene === 'RUNWIN') goMenu();
   else if (scene === 'MENU') menuClick(mouse.mx, mouse.my);
@@ -5172,6 +5208,7 @@ window.addEventListener('keydown', e => {
   }
   if (scene === 'ARMORY') { if (k >= '1' && k <= '9') armoryPick(parseInt(k, 10) - 1); return; }
   if (scene === 'TUTOR') { if (k >= '1' && k <= '9') tutorPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') tutorLeave(); return; }
+  if (scene === 'BLACKSMITH') { if (k >= '1' && k <= '9') blacksmithPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') blacksmithLeave(); return; }
   if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(ORIGIN_IDS[parseInt(k, 10) - 1]); return; }
   if (scene === 'RUNEND' || scene === 'RUNWIN') { if (k === 'r') goMenu(); return; }
   if (scene === 'MENU') return;   // 主選單以滑鼠點選
@@ -5422,6 +5459,7 @@ function draw() {
   if (scene === 'EVENT') { drawEvent(); return; }
   if (scene === 'ARMORY') { drawArmory(); return; }
   if (scene === 'TUTOR') { drawTutor(); return; }
+  if (scene === 'BLACKSMITH') { drawBlacksmith(); return; }
   if (scene === 'ORIGIN') { drawOrigin(); return; }
   if (scene === 'RUNEND') { drawRunEnd(); return; }
   if (scene === 'RUNWIN') { drawRunWin(); return; }
@@ -6760,7 +6798,11 @@ function drawLoadoutCard(mi, x, y, w, h) {
     if (selW) { ctx.fillStyle = 'rgba(95,208,107,0.12)'; ctx.fillRect(x + 4, yt, w - 8, 16); }
     ctx.textAlign = 'left'; ctx.font = 'bold 10px Consolas'; ctx.fillStyle = '#bfe6ff'; ctx.fillText('槽' + slot, x + pad, yt + 12);
     ctx.beginPath(); ctx.fillStyle = ww ? rarityColor(ww.rarity) : '#555'; ctx.arc(x + pad + 26, yt + 8, 3.3, 0, Math.PI * 2); ctx.fill();
-    ctx.font = '11px Consolas'; ctx.fillStyle = ww ? '#cdd6e0' : '#7a828c'; ctx.fillText(ww ? `${ww.name} 重${ww.weight}` : '無', x + pad + 34, yt + 12);
+    // S2：武器名後接 ★精良度；若有強化，第二行以金字列出鋒利/平衡/詞條
+    const es = ww ? enhSummary(wid, slot === 2 ? r.quality2 : r.quality, slot === 2 ? r.enh2 : r.enh) : null;
+    ctx.font = '11px Consolas'; ctx.fillStyle = ww ? '#cdd6e0' : '#7a828c';
+    ctx.fillText(ww ? `${ww.name}${es && es.stars ? ' ' + es.stars : ''}` : '無', x + pad + 34, yt + 12);
+    if (es && es.parts.length) { ctx.font = '9px Consolas'; ctx.fillStyle = '#e6b060'; ctx.fillText(es.parts.join('・'), x + pad + 34, yt + 22); }
     if (editable) {
       if (selW) pushRect(x + 4, yt, w - 50, 16, () => equipWeaponFromWarehouse(restSel.idx, mi, slot));
       if (wid && !isInfiniteAmmo(wid)) uiButton(x + w - 42, yt - 1, 34, 16, '▸倉', () => unequipWeapon(mi, slot), { font: '10px Consolas' });
@@ -6982,6 +7024,54 @@ function drawTutor() {
   ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, 180, 40);
   ctx.fillStyle = '#cdd6e0'; ctx.font = '14px Consolas'; ctx.fillText('什麼都不學（Enter）', cv.width / 2, by + 26);
   pushRect(bx, by, 180, 40, () => tutorLeave());
+}
+// 武器強化摘要（配裝卡/鐵匠共用）：★精良度＋鋒利/平衡/詞條
+function enhSummary(id, quality, enh) {
+  const q = quality != null ? quality : qualityOf(id);
+  const used = (enh || []).reduce((n, e) => n + (e.charges || 1), 0);
+  let parts = [];
+  for (const e of (enh || [])) {
+    if (e.kind === 'sharp') parts.push('鋒利+' + e.value);
+    else if (e.kind === 'balance') parts.push('平衡−' + e.value);
+    else if (e.kind === 'affix') parts.push((AFFIXES[e.affix] ? AFFIXES[e.affix].name : e.affix));
+  }
+  return { stars: '★'.repeat(q), free: q - used, used, parts };
+}
+function drawBlacksmith() {
+  restRects = [];
+  ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e6b060'; ctx.font = 'bold 30px Consolas'; ctx.fillText('鐵匠', cv.width / 2, 78);
+  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '14px Consolas';
+  ctx.fillText('打鋒利（+傷害）或平衡（−耐力）——隨機。精良度＝還能打幾次，打完就滿了。', cv.width / 2, 104);
+  ctx.fillStyle = 'rgba(205,214,224,0.45)'; ctx.font = '12px Consolas';
+  ctx.fillText('詞條要找導師。石中劍等打滿的武器動不了。', cv.width / 2, 126);
+
+  const list = enhanceTargets();
+  const bw = 560, bh = 58, gap = 8, y0 = 160;
+  if (!list.length) { ctx.fillStyle = '#8b97a5'; ctx.font = '14px Consolas'; ctx.fillText('沒有可強化的武器（底線短刀與打滿的不算）。', cv.width / 2, y0 + 30); }
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i], y = y0 + i * (bh + gap), x = cv.width / 2 - bw / 2;
+    const s = enhSummary(t.id, t.inst.quality, t.inst.enh), ok = s.free > 0;
+    ctx.fillStyle = ok ? 'rgba(30,26,20,0.97)' : 'rgba(18,16,14,0.9)'; ctx.fillRect(x, y, bw, bh);
+    ctx.lineWidth = 2; ctx.strokeStyle = ok ? '#e6b060' : 'rgba(120,110,95,0.35)'; ctx.strokeRect(x, y, bw, bh);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px Consolas'; ctx.fillStyle = ok ? '#e6b060' : '#5c646f'; ctx.fillText(`[${i + 1}]`, x + 14, y + 25);
+    ctx.fillStyle = ok ? '#e8eef5' : '#6b7580'; ctx.font = '15px Consolas'; ctx.fillText(WEAPONS[t.id].name + '  ' + s.stars, x + 54, y + 25);
+    ctx.font = '11px Consolas'; ctx.fillStyle = '#8b97a5'; ctx.fillText(t.src + '　' + (s.parts.length ? s.parts.join('・') : '白板'), x + 54, y + 45);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = ok ? '#ffd27d' : '#7fffa8'; ctx.font = 'bold 13px Consolas';
+    ctx.fillText(ok ? '還能打 ' + s.free + ' 次' : '已滿', x + bw - 16, y + 25);
+    if (ok) pushRect(x, y, bw, bh, () => blacksmithPick(i));
+  }
+  ctx.textAlign = 'center';
+  if (blacksmithMsg) { ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 14px Consolas'; ctx.fillText(blacksmithMsg, cv.width / 2, y0 + Math.max(1, list.length) * (bh + gap) + 20); }
+  const by = cv.height - 64, bx = cv.width / 2 - 90;
+  ctx.fillStyle = 'rgba(24,30,40,0.97)'; ctx.fillRect(bx, by, 180, 40);
+  ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, 180, 40);
+  ctx.fillStyle = '#cdd6e0'; ctx.font = '14px Consolas'; ctx.fillText('離開（Enter）', cv.width / 2, by + 26);
+  pushRect(bx, by, 180, 40, () => blacksmithLeave());
+  ctx.textAlign = 'left';
 }
 function drawArmory() {
   restRects = [];
