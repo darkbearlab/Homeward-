@@ -88,6 +88,11 @@ const CONFIG = {
   idleFireRateMult: 0.7,    // 待機射速倍率（越低越慢）
   idleTap: { size: 3, gap: 0.55 },  // 點放(TAP)：每 burst 發數 / burst 後停頓秒數（讓 bloom 回復）
   unitHp: 100,
+  // **整體節奏**（使用者定案：先通通拉長 1.2 倍）。這是單一旋鈕：
+  //   時間類（前後搖、預告瞄準）× tempo＝更長；速度類（移動）÷ tempo＝更慢。
+  //   套用點：spdOf（我方移動）、makeEnemy.moveSpeed（敵方移動）、startSwing（揮擊三段）、aimTimeOf（預告）。
+  //   設回 1.0＝恢復原速。刻意不動士氣/CD/耐力回復等純邏輯計時。
+  tempo: 1.2,
   moveSpeed: 110,           // px/s（戰術化：放慢）
   turnSpeed: 480,           // deg/s（預設砲塔轉速；實際以各武器 turnSpeed 為準）
   mouseSensitivity: 0.0035, // FPS 式滑鼠鎖定靈敏度（rad/px）。轉速不夠快時砲塔會追不上＝轉向延遲
@@ -96,7 +101,9 @@ const CONFIG = {
   // 武器數值移至下方 WEAPONS 目錄（可指派、未來可換）
 
   timeBudget: 90,
-  reinforce: { startInterval: 2.0, rampEvery: 10, rampDelta: -0.3, minInterval: 0.4 },
+  // 追兵：**軟取消**（使用者定案）——敵人沒理由特別派人追一個落敗的騎士。
+  // enabled:false ＝計時上限拉到超長（追兵幾乎不會來）且隱藏 UI 計時條；機制與數值都留著，將來要用改回 true 即可。
+  reinforce: { enabled: false, startInterval: 2.0, rampEvery: 10, rampDelta: -0.3, minInterval: 0.4 },
   hysteresisBonus: 25,
   squadSize: 3,
   // 跨關回復：每場戰鬥開始時，存活成員「缺血」回復的比例。
@@ -683,7 +690,8 @@ let lastIntelBreakdown = null;          // 上一局情報點明細（run-end �
 // 成功＝真結局＋最後解鎖；失敗＝Bad End。兩者都只播純文字＋回到挑戰前繼續玩（無刪檔/無軟鎖）。
 CONFIG.finale = { revealWins: 3, linePace: 1.7 };   // 揭示門檻（通關數）；結局每行間隔秒
 // 隨機路線圖生成（genRoadmap，吃種子）。cols＝run 長度（欄數，含起點與王；可調平衡）。
-CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, typeWeights: { COMBAT: 5, EVENT: 2, ARMORY: 1.4, REST: 1.2, TUTOR: 1.0 } };   // TUTOR＝導師（燒卷軸習得），比軍械庫略稀有
+// 事件加權（使用者定案：事件多一點）——事件是招募人手的主要管道，開局單騎後更需要它。
+CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, typeWeights: { COMBAT: 4, EVENT: 4, ARMORY: 1.4, REST: 1.2, TUTOR: 1.0 } };   // TUTOR＝導師（燒卷軸習得），比軍械庫略稀有
 // 閃光彈：落點 360° 噴一批「不傷害」的閃光彈丸，中到的敵人累積暈眩 u.flash（中越多越強，上限 max、每秒 decay）。
 // 暈眩效果隨飽和度 flashF(0~1) 縮放：視錐變窄(coneShrink)、視距變短(rangeMax→rangeMin)、移速降(moveSlow)、發散增(spreadAdd)。
 CONFIG.flash = {
@@ -847,8 +855,8 @@ const classLoadout = (classId) => CLASS_LOADOUT[classId] || CLASS_LOADOUT.footma
 // 我方單位的移速。騎士刻意仍讀 CONFIG.moveSpeed——那是數值面板要能**即時**調的旋鈕；
 // 扈從則吃自己兵種的值（敵人那邊本來就是讀 e.moveSpeed，於是兩邊終於是同一件事）。
 function spdOf(u) {
-  if (!u || u.classId === 'knight') return CONFIG.moveSpeed;
-  return u.moveSpeed != null ? u.moveSpeed : CONFIG.moveSpeed;
+  const base = (!u || u.classId === 'knight') ? CONFIG.moveSpeed : (u.moveSpeed != null ? u.moveSpeed : CONFIG.moveSpeed);
+  return base / CONFIG.tempo;   // 整體節奏：移動 ÷ tempo＝更慢
 }
 
 /* =====================================================================
@@ -2196,7 +2204,9 @@ function initRun() {
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = [];    // 戰役旗標/事件佇列/已見事件重置
   runStats = { events: 0, kia: 0 };                     // 本局情報點累計（事件數/陣亡數）重置
-  roster = baseRoster(); missionIndex = 0;   // baseRoster 僅後備；序章會以三人陣容取代
+  // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
+  // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
+  roster = [makeRecruit(new Set())]; missionIndex = 0;
   warehouse = []; backpack = []; drops = []; grantStartingGear();   // 已解鎖的固定起始裝備(喪鐘)每場自動入倉庫
   ammoStock = {}; for (const id of WEAPON_IDS) ammoStock[id] = WEAPONS[id].silent ? CONFIG.ammo.subsonicStart : CONFIG.ammo.stockStart;  // 共用彈藥儲備（消音武器＝稀少亞音速彈）
   restSel = null;
@@ -2241,7 +2251,8 @@ function startMission() {
   cutscene = null; introActive = false;          // 一般戰鬥/沙盒/編輯試玩：清掉任何殘留的序章演出（只有 startIntro 才設 cutscene）
   buildMapDerived(mapKey);                       // 切換到此節點指定的戰鬥地圖（重建衍生表）
   const nodeTB = (roadCurrent != null && roadNode(roadCurrent).timeBudget);
-  curTimeBudget = nodeTB || MAP.timeBudget || CONFIG.timeBudget;   // 各關時間：節點 > 地圖 > 全域
+  // 追兵軟取消時把上限拉到超長（追兵的觸發條件 simTime > curTimeBudget 幾乎永不成立）
+  curTimeBudget = CONFIG.reinforce.enabled ? (nodeTB || MAP.timeBudget || CONFIG.timeBudget) : 1e9;
   for (const d of MAP.doors) d.open = false;     // 每場戰鬥門重置為關閉
   for (const d of (MAP.destructibles || [])) { d.cur = d.intact; d.curHp = d.hp; }   // 破壞物重置為初始形態/滿 HP
   players = roster.map((r, i) => makePlayer(i, r, spawnPos(i, roster.length)));
@@ -3374,7 +3385,7 @@ function startSwing(u, fireRateMult) {
     return false;
   }
   if (cost > 0) spendStam(u, cost);
-  const rm = 1 / Math.max(0.05, (fireRateMult || 1) * (u.buffFire || 1));   // 攻速 buff＝縮短全段
+  const rm = CONFIG.tempo / Math.max(0.05, (fireRateMult || 1) * (u.buffFire || 1));   // 攻速 buff＝縮短全段；× tempo＝整體前後搖更長
   u.swingDir = -(u.swingDir || -1);   // 左右交替：連續揮擊會是 →、←、→…（不是每次都同一邊）
   u.swing = {
     t: 0, windup: W.windup * rm, active: W.activeT * rm, recover: W.recover * rm,
@@ -3717,7 +3728,7 @@ const enemyFire  = (u, ang) => fireUnit(u, ang, (u.weapon.spreadBase + u.bloom) 
    這裡給 AI（敵人與扈從皆同，對稱才公平）加一段瞄準期，期間 telegraphOf 會回傳長方形彈道預告，
    **填滿的瞬間就是放箭的瞬間**。玩家的手動射擊不經過這裡＝仍是即時。
    回傳 true＝這一幀可以射。 */
-const aimTimeOf = (u) => (u.weapon.aimTime != null ? u.weapon.aimTime : CONFIG.enemy.aimTime);
+const aimTimeOf = (u) => (u.weapon.aimTime != null ? u.weapon.aimTime : CONFIG.enemy.aimTime) * CONFIG.tempo;   // 預告瞄準 × tempo＝填滿更慢
 function aimGate(u, dt, midBurst) {
   if (u.weapon.melee) return true;                       // 近接走揮斬的前搖，不經此
   const need = midBurst ? 0 : aimTimeOf(u);
@@ -3749,6 +3760,9 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const M = CONFIG.melee;
   let poiseDmg = (opts && opts.poiseDmg) || 0;
   if (opts) u.lastKnock = opts.knock || 0;   // 給 breakPoise 算「體幹破當下」的大幅擊退
+  // **見血＝全隊曝光**放在最前面：被攻擊（即使被甲彈開或盾格擋）都算「已經被發現」，
+  // 不能等流血才算——否則板甲騎士被彈開的那一擊會在 return 前跳過曝光（第三方互毆仍不算）。
+  if (!squadRevealed && (u.faction === 'player' || (opts && opts.attacker && opts.attacker.faction === 'player'))) revealSquad();
   // ---- 盾格：正面 blockArcDeg 內才成立；舉盾後 parryWindow 內＝招架（完全格擋 + 攻擊者硬直）----
   // ---- 武器招架（無盾）：判定窗內接到攻擊＝完全格擋 + 重創對方，與盾招架同等回報 ----
   if (fromAng != null && wpWindowOpen(u) && Math.abs(angDiff(fromAng, u.facing)) <= blockArcOf(u) * Math.PI / 360) {
@@ -3851,8 +3865,6 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const dealt = Math.min(raw, Math.max(0, u.hp));
   u.hp -= raw;
   Hooks.fire('hurt', { u, from: (opts && opts.attacker) || null, dealt, raw, melee: !!(opts && opts.melee), blocked });
-  // 見血＝全隊曝光：我方挨打，或我方打了任何人（第三方互毆不算——雙方都不是 player）
-  if (!squadRevealed && (u.faction === 'player' || (opts && opts.attacker && opts.attacker.faction === 'player'))) revealSquad();
   // hpLow：跌破門檻觸發一次（回到門檻上由 tickResources 重新武裝）
   if (u.maxHp && !u._hpLowFired && u.hp > 0 && u.hp / u.maxHp < CONFIG.hooks.hpLowFrac) { u._hpLowFired = true; Hooks.fire('hpLow', { u, frac: u.hp / u.maxHp }); }
   if (u.faction === 'player') u.alertTimer = CONFIG.ghostAlertTime;   // 受傷＝在戰鬥
@@ -4527,7 +4539,7 @@ function patrolStep(e, dt) {
   }
   // 沿路徑走（節點到節點，沿邊＝不穿牆）；視錐朝移動方向
   const np = wp(e.patrolPath[0]).pos;
-  moveToward(e, np, e.moveSpeed * CONFIG.patrol.speedMul * flashMoveMul(e) * dt);
+  moveToward(e, np, e.moveSpeed / CONFIG.tempo * CONFIG.patrol.speedMul * flashMoveMul(e) * dt);
   e.facing = rotToward(e.facing, angTo(e.pos, np), turn);
   if (dist(e.pos, np) < CONFIG.nodeReach) { e.currentNode = e.patrolPath.shift(); if (e.patrolPath.length === 0) startDwell(e); }
 }
@@ -4592,7 +4604,7 @@ function searchMoveTo(e, dt) {   // 走向焦點區最近的未清查節點（�
   if (e.searchTarget == null) { patrolStep(e, dt); return; }
   const turn = e.weapon.turnSpeed * Math.PI / 180 * dt;
   const np = (e.searchPath && e.searchPath.length) ? wp(e.searchPath[0]).pos : wp(e.searchTarget).pos;
-  moveToward(e, np, e.moveSpeed * CONFIG.patrol.speedMul * flashMoveMul(e) * dt);
+  moveToward(e, np, e.moveSpeed / CONFIG.tempo * CONFIG.patrol.speedMul * flashMoveMul(e) * dt);
   e.facing = rotToward(e.facing, angTo(e.pos, np), turn);
   if (dist(e.pos, np) < CONFIG.nodeReach) { if (e.searchPath && e.searchPath.length) e.currentNode = e.searchPath.shift(); else e.currentNode = e.searchTarget; }
 }
@@ -4611,7 +4623,7 @@ function enemyTick(e, dt) {
     const away = ENTRY || { x: e.pos.x, y: e.pos.y };
     const f0 = nearestFriendly(e.pos);
     const goal = f0 ? { x: e.pos.x + (e.pos.x - f0.pos.x), y: e.pos.y + (e.pos.y - f0.pos.y) } : away;   // 背向最近的敵人逃
-    moveToward(e, goal, e.moveSpeed * CONFIG.morale.routSpeedMul * dt);
+    moveToward(e, goal, e.moveSpeed / CONFIG.tempo * CONFIG.morale.routSpeedMul * dt);
     e.facing = rotToward(e.facing, angTo(e.pos, goal), e.weapon.turnSpeed * Math.PI / 180 * dt);
     openDoorsNear(e, false);
     return;
@@ -4679,7 +4691,7 @@ function enemyTick(e, dt) {
     if (!token) releaseAttackToken(e);
   } else if (melee) { releaseAttackToken(e); }
   let goalPos = (seen && (melee || e.weapon.range <= CONFIG.enemy.meleeApproach)) ? aimPos : tn.pos;
-  let spd = e.moveSpeed * flashMoveMul(e);
+  let spd = e.moveSpeed / CONFIG.tempo * flashMoveMul(e);
   if (melee && seen && !token) {
     // 繞行：保持 ringDist，並沿切線橫移（以自己的 id 決定繞哪一邊＝不會全部擠同一側）
     const R = CONFIG.melee.ringDist, d = dist(e.pos, aimPos), a = angTo(aimPos, e.pos);
@@ -5133,7 +5145,7 @@ function update(dt) {
   for (const e of enemies) if (!e.dead) enemyTick(e, dt);
 
   // 4) 軟計時 → 追兵（事件地圖不召追兵）
-  if (!MAP.eventMap && !fieldBrokenFor && simTime > curTimeBudget) {   // 敵軍已潰＝不再召追兵（掃蕩時間）
+  if (CONFIG.reinforce.enabled && !MAP.eventMap && !fieldBrokenFor && simTime > curTimeBudget) {   // 敵軍已潰＝不再召追兵（掃蕩時間）
     reinforceTimer -= dt;
     if (reinforceTimer <= 0) {
       const e = makeEnemy(nearestNode(ENTRY, false), 'rusher', true);
@@ -6200,10 +6212,12 @@ function drawHUD() {
   ctx.textAlign = 'left'; ctx.font = 'bold 14px Consolas'; ctx.fillStyle = '#9fb3c8';
   ctx.fillText(`MISSION ${missionIndex + 1}`, 16, 24);
 
-  // 計時器（上中）
+  // 計時器（上中）——追兵軟取消時整條隱藏（沒有追兵就沒有倒數的意義）
   ctx.textAlign = 'center';
   const remain = curTimeBudget - simTime;
-  if (remain > 0) {
+  if (!CONFIG.reinforce.enabled) {
+    /* 隱藏計時條 */
+  } else if (remain > 0) {
     ctx.fillStyle = '#cdd6e0'; ctx.font = '16px Consolas';
     ctx.fillText(`TIME ${simTime.toFixed(1)} / ${curTimeBudget}s`, cv.width / 2, 26);
     const bw = 320, bx = cv.width / 2 - bw / 2;
