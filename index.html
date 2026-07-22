@@ -879,6 +879,101 @@ const ENEMY_TYPES = {
   dummy_armor:  enemyType('dummy_armor', { weaponId: 'knife',    personality: 'holder',  hue: 285, dummy: true }),       // 測穿甲（鎚 0.95 vs 劍 0.35）與高體幹
 };
 const ENEMY_TYPE_IDS = Object.keys(ENEMY_TYPES);   // 正規 key（編輯器/新內容只能從這裡選）
+
+/* =====================================================================
+   ENCOUNTERS — **遭遇層**（使用者定案：「每一場戰鬥都應該是真的小規模衝突」）
+
+   舊地圖把敵人配置烤死在地圖資料裡（enemySpawns），所以每張圖永遠是同一批人散佈在
+   同一個大場地＝「一個關卡裡撒了 7 個敵人」而不是「一場遭遇」。這一層把**誰／幾個／
+   開場什麼狀態**抽出來，地圖只提供地形與**生成錨點**（encounterAnchors）——遭遇聚在
+   錨點附近，所以自然是小規模衝突而不是逐一清場。
+
+   `opening` 直接對應現有的狀態機（不需要新 AI）：
+     ambush   一開場就 ENGAGED、直接壓上   ＝攔路賊、埋伏的戰團
+     patrol   IDLE 且巡邏中，可迴避或伏擊  ＝巡邏隊
+     sentry   IDLE 靜態守點，被發現才動    ＝哨站
+     threeway 兩個敵對陣營已經在打，你是第三個（跟士氣拉鋸相乘）
+
+   這跟士氣系統相乘：一支四人巡邏隊死一個就崩，那才是完整的 15 秒遭遇弧線。 */
+const ENCOUNTERS = {
+  bandits:  { name: '攔路賊', tier: 1, opening: 'ambush',
+              units: [{ cls: 'levy', pers: 'rusher' }, { cls: 'levy', pers: 'rusher' }, { cls: 'footman', pers: 'flanker' }] },
+  patrol:   { name: '巡邏隊', tier: 1, opening: 'patrol',
+              units: [{ cls: 'footman' }, { cls: 'footman' }, { cls: 'archer' }] },
+  scouts:   { name: '斥候組', tier: 1, opening: 'patrol',
+              units: [{ cls: 'levy', pers: 'flanker' }, { cls: 'archer' }, { cls: 'footman' }] },
+  sentries: { name: '哨站', tier: 2, opening: 'sentry',
+              units: [{ cls: 'spearman' }, { cls: 'arbalest' }, { cls: 'shieldman' }, { cls: 'footman' }] },
+  hounds:   { name: '獵犬隊', tier: 1, opening: 'ambush',
+              units: [{ cls: 'wolf' }, { cls: 'wolf' }, { cls: 'levy', pers: 'rusher' }] },
+  warband:  { name: '戰團', tier: 2, opening: 'ambush',
+              units: [{ cls: 'footman', pers: 'rusher' }, { cls: 'shieldman' }, { cls: 'serjeant' }] },
+  vanguard: { name: '前鋒隊', tier: 3, opening: 'ambush',
+              units: [{ cls: 'footman', pers: 'rusher' }, { cls: 'footman_flank' }, { cls: 'serjeant' }, { cls: 'manatarms' }] },
+  // 第三方混戰：領主巡騎 vs 潰兵，兩邊都 ENGAGED 打對方。你走進去是第三個陣營。
+  clash:    { name: '混戰', tier: 2, opening: 'threeway',
+              units: [{ cls: 'serjeant' }, { cls: 'footman' }, { cls: 'archer' }],
+              factionB: [{ cls: 'levy', pers: 'rusher' }, { cls: 'levy', pers: 'rusher' }, { cls: 'footman_flank' }] },
+};
+const ENCOUNTER_IDS = Object.keys(ENCOUNTERS);
+// 依地圖難度抽一個遭遇（tier 以下皆可，越接近上限越可能）。種子＝可重現。
+function pickEncounter(tier) {
+  const pool = ENCOUNTER_IDS.filter(id => ENCOUNTERS[id].tier <= tier);
+  const use = pool.length ? pool : ENCOUNTER_IDS;
+  return use[Math.floor(srand() * use.length)];
+}
+/* 遭遇的生成錨點：地圖若給 encounterAnchors 就用，否則**退回原本 enemySpawns 的位置**
+   （地圖作者已經擺在合理的守點上，直接借用＝不必為每張圖手刻錨點）。 */
+function encounterAnchorsOf(map) {
+  if (map.encounterAnchors && map.encounterAnchors.length) return map.encounterAnchors;
+  // **讀傳入地圖自己的 waypoints**（不是全域 wp()＝當前作用中地圖）——這樣對任何地圖都安全，
+  // 不必依賴 MAP 已經切到目標圖。借用地圖作者擺好的 spawn 節點當錨點。
+  const nodeById = {}; for (const w of (map.waypoints || [])) nodeById[w.id] = w.pos;
+  const seen = new Set(), out = [];
+  for (const s of (map.enemySpawns || [])) {
+    const p = s.nodeId != null ? nodeById[s.nodeId] : null;
+    if (!p) continue;
+    const key = Math.round(p.x / 120) + ',' + Math.round(p.y / 120);
+    if (seen.has(key)) continue; seen.add(key); out.push({ x: p.x, y: p.y });
+  }
+  return out.length ? out : [{ x: (ENTRY.x + EXTRACT.x) / 2, y: (ENTRY.y + EXTRACT.y) / 2 }];
+}
+// 把一組單位聚在錨點周圍放下（環狀排開，避免疊在一起）。回傳放好的敵人陣列。
+function spawnGroup(units, anchor, faction, opening, facePos) {
+  const out = [];
+  units.forEach((u, i) => {
+    const ang = (i / Math.max(1, units.length)) * Math.PI * 2;
+    const r = units.length > 1 ? 44 : 0;
+    const pos = { x: anchor.x + Math.cos(ang) * r, y: anchor.y + Math.sin(ang) * r };
+    const node = nearestNode(pos, false);
+    const facing = facePos ? angTo(pos, facePos) : Math.PI;
+    const e = makeEnemy(node, u.pers || null, false, facing, u.cls, faction);
+    e.pos = { x: pos.x, y: pos.y };
+    e.homePos = { x: pos.x, y: pos.y };
+    if (opening === 'ambush' || opening === 'threeway') e.state = 'ENGAGED';
+    else if (opening === 'patrol') e.patrols = true;   // sentry＝維持 IDLE 靜態守點
+    commitReservation(e, e.currentNode);
+    out.push(e);
+  });
+  return out;
+}
+/* 依遭遇模板 + 地圖錨點把敵人放進場。回傳生成的敵人（呼叫端 push 進 enemies）。 */
+function placeEncounter(encId, map) {
+  const enc = ENCOUNTERS[encId]; if (!enc) return [];
+  const anchors = encounterAnchorsOf(map);
+  const pick = (n) => anchors[n % anchors.length];
+  const spawned = [];
+  if (enc.opening === 'threeway') {
+    // 兩個敵對陣營，分放兩個錨點、面向對方＝已經在打
+    const aA = pick(0), aB = anchors.length > 1 ? pick(1) : { x: aA.x + 200, y: aA.y };
+    spawned.push(...spawnGroup(enc.units, aA, 'enemy', 'threeway', aB));
+    spawned.push(...spawnGroup(enc.factionB, aB, 'rioter', 'threeway', aA));
+  } else {
+    spawned.push(...spawnGroup(enc.units, pick(0), 'enemy', enc.opening, ENTRY));
+  }
+  return spawned;
+}
+
 /* ── 敵種 key 的解析 ────────────────────────────────────────────────────
    **LEGACY_ENEMY_ALIAS 已刪除**：所有地圖都中世紀化完畢（legacyEnemyUsage() 回 {}），
    對照表完成了它的任務。留下的只是保底——未知 key 回預設兵種而不是讓整張圖炸掉。
@@ -1188,7 +1283,7 @@ const MAP_ARCHETYPE_IDS = MAP_ARCHETYPES.map(a => a.id);
 const MAPS = {
   // alpha＝開闊庭院：無橫貫隔牆，散置掩體島＋草叢＋3×3 路網＝可上/下繞到哨兵側後（繞背）、可叢間潛行。
   alpha: {
-    label: '荒庭', category: 'open', roles: ['normal'], tier: 1, medieval: true,   // roadmap 抽選標籤：category=類型(避免連續同類)、roles=可進哪些池、tier 1~3=難度(依進度抽)
+    label: '荒庭', category: 'open', roles: ['normal'], tier: 1, medieval: true, encounters: true,   // roadmap 抽選標籤：category=類型(避免連續同類)、roles=可進哪些池、tier 1~3=難度(依進度抽)
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1247,7 +1342,7 @@ const MAPS = {
   },
   // bravo：3 區（兩道隔牆，缺口各一扇門）。中段藏閒置敵人＋低矮牆掩體；按鈕 b1 遠端開 door2 通往撤離。
   bravo: {
-    label: '關隘', category: 'gate', roles: ['normal', 'boss'], tier: 2, medieval: true,
+    label: '關隘', category: 'gate', roles: ['normal', 'boss'], tier: 2, medieval: true, encounters: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 },
       { x1: 1240, y1: 40, x2: 1240, y2: 680 },
@@ -1404,56 +1499,49 @@ const MAPS = {
     prisoners: [],
   },
   // vault：金庫（密封容器驗證關）。雙開關(守備房A/B)→雙層門(airlock)→金庫內密封容器；撿走撤離才開封。
-  vault: {
-    label: '地窖寶庫', category: 'vault', roles: ['normal'], tier: 2, eventMap: true, medieval: true,
+  // field：曠野（使用者定案，取代原本的雙門地窖）。超開放、只有幾根柱子散落＝遭遇層的展示場，
+  // 沒有掩體島也沒有走廊，一切都靠站位與陣型。沿用開闊格狀 waypoint（連通度高、適合繞側）。
+  field: {
+    label: '曠野', category: 'field', roles: ['normal'], tier: 1, medieval: true, encounters: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
-      // 金庫室 (x960-1160, y280-440)：左側留內門缺口 y330-390
-      { x1: 960, y1: 280, x2: 1160, y2: 280 }, { x1: 1160, y1: 280, x2: 1160, y2: 440 }, { x1: 960, y1: 440, x2: 1160, y2: 440 },
-      { x1: 960, y1: 280, x2: 960, y2: 330 }, { x1: 960, y1: 390, x2: 960, y2: 440 },
-      // 氣密走廊 airlock (x780-960, y330-390)
-      { x1: 780, y1: 330, x2: 960, y2: 330 }, { x1: 780, y1: 390, x2: 960, y2: 390 },
-      // 守備房分隔（room A 上、room B 下）
-      { x1: 560, y1: 40, x2: 560, y2: 230 }, { x1: 560, y1: 490, x2: 560, y2: 680 },
+      // 散落的石柱（小方塊、擺在格點之間＝不擋 waypoint 邊，只是零星的視線遮蔽）
+      ...rectWalls(450, 250, 490, 290), ...rectWalls(670, 450, 710, 490),
+      ...rectWalls(870, 250, 910, 290), ...rectWalls(650, 250, 690, 290),
+      ...rectWalls(870, 450, 910, 490),
     ],
-    doors: [
-      { id: 'do', x1: 780, y1: 330, x2: 780, y2: 390, open: false },   // 外門（airlock 入口）＝開關A 開
-      { id: 'di', x1: 960, y1: 330, x2: 960, y2: 390, open: false },   // 內門（airlock→金庫）＝開關B 開
+    doors: [], lowWalls: [], buttons: [], destructibles: [], areas: [],
+    bushes: [
+      { x: 250, y: 250, w: 150, h: 120 },   // 進場側一叢草（唯一的軟掩蔽）
+      { x: 900, y: 430, w: 150, h: 120 },   // 近撤離一叢
     ],
-    lowWalls: [
-      { x1: 650, y1: 300, x2: 650, y2: 420 },   // 中央掩體（金庫入口前）
-    ],
-    buttons: [
-      { id: 'bA', x: 300, y: 150, doorId: 'do' },   // 守備房A：開外門
-      { id: 'bB', x: 300, y: 560, doorId: 'di' },   // 守備房B：開內門
-    ],
-    bushes: [], destructibles: [], areas: [],
     waypoints: [
-      { id: 0, pos: { x: 160, y: 360 }, tags: ['spawn'] },     // 入口
-      { id: 1, pos: { x: 300, y: 150 }, tags: ['vantage'] },   // 守備房A（開關A）
-      { id: 2, pos: { x: 300, y: 560 }, tags: ['vantage'] },   // 守備房B（開關B）
-      { id: 3, pos: { x: 450, y: 360 }, tags: ['choke'] },     // 中央
-      { id: 4, pos: { x: 680, y: 360 }, tags: ['cover'] },     // 金庫入口前
-      { id: 5, pos: { x: 870, y: 360 }, tags: ['choke'] },     // airlock 內（兩門之間）
-      { id: 6, pos: { x: 1080, y: 360 }, tags: ['vantage'] },  // 金庫內（容器）
-      { id: 7, pos: { x: 160, y: 150 }, tags: ['patrol'] },
-      { id: 8, pos: { x: 160, y: 560 }, tags: ['patrol'] },
-      { id: 9, pos: { x: 680, y: 560 }, tags: ['patrol'] },    // 下方（往撤離）
-      { id: 10, pos: { x: 1080, y: 560 }, tags: ['patrol'] },  // 撤離側
+      { id: 0,  pos: { x: 130,  y: 360 }, tags: ['patrol', 'spawn'] },
+      { id: 1,  pos: { x: 340,  y: 180 }, tags: ['flank'] },
+      { id: 2,  pos: { x: 340,  y: 360 }, tags: ['patrol'] },
+      { id: 3,  pos: { x: 340,  y: 540 }, tags: ['flank'] },
+      { id: 4,  pos: { x: 560,  y: 180 }, tags: ['flank', 'vantage'] },
+      { id: 5,  pos: { x: 560,  y: 360 }, tags: ['choke'] },
+      { id: 6,  pos: { x: 560,  y: 540 }, tags: ['flank', 'vantage'] },
+      { id: 7,  pos: { x: 760,  y: 180 }, tags: ['flank', 'vantage'] },
+      { id: 8,  pos: { x: 760,  y: 360 }, tags: ['choke'] },
+      { id: 9,  pos: { x: 760,  y: 540 }, tags: ['flank', 'vantage'] },
+      { id: 10, pos: { x: 960,  y: 180 }, tags: ['vantage'] },
+      { id: 11, pos: { x: 960,  y: 360 }, tags: ['patrol'] },
+      { id: 12, pos: { x: 960,  y: 540 }, tags: ['vantage'] },
+      { id: 13, pos: { x: 1140, y: 360 }, tags: ['patrol'] },
     ],
     edges: [
-      [0, 3], [0, 7], [0, 8], [7, 1], [1, 3], [8, 2], [2, 3], [3, 4], [4, 5], [5, 6], [4, 9], [9, 10], [8, 9],
+      [0, 2], [1, 2], [2, 3], [4, 5], [5, 6], [7, 8], [8, 9], [10, 11], [11, 12],
+      [1, 4], [4, 7], [7, 10], [2, 5], [5, 8], [8, 11], [3, 6], [6, 9], [9, 12], [11, 13],
     ],
     entryPoints: [{ x: 110, y: 360 }],
-    extractionPoints: [{ x: 1150, y: 620 }],
-    // 課題＝**窄室裡的破甲**：兩間守備房都關著門，弩手在室內一發很重，門口的軍士退無可退。
+    extractionPoints: [{ x: 1190, y: 360 }],
+    // 課題＝**沒有掩體可躲**：開闊地全靠陣型與站位。遭遇層每次抽不同組成（攔路賊/巡邏隊/哨站…）。
     enemySpawns: [
-      { nodeId: 1, type: 'footman', facing: 0 }, { nodeId: 1, type: 'footman_flank' },   // 守備房A
-      { nodeId: 2, type: 'footman', facing: 0 }, { nodeId: 2, type: 'arbalest' },         // 守備房B：弩手
-      { nodeId: 4, type: 'serjeant', facing: Math.PI },                                   // 寶庫入口前守衛
+      { nodeId: 7, type: 'footman' }, { nodeId: 9, type: 'footman' }, { nodeId: 11, type: 'archer' },
     ],
-    caches: [{ x: 1080, y: 360 }],   // ★密封容器：金庫內、雙層門後
     prisoners: [],
   },
   // intro：第0關（序章/教學）。管制室(左) → 控制台 → 出口門(x900) → 守衛廊道 → 撤離(右)。
@@ -1576,7 +1664,7 @@ const MAPS = {
   },
   // outpost v2＝前哨站：兩處哨點改用「中央短牆＋上下繞道」(不再整道隔牆)，可繞過哨兵側後或叢間潛行。
   outpost: {
-    label: '哨塔', category: 'outpost', roles: ['normal', 'boss'], tier: 2, medieval: true,
+    label: '哨塔', category: 'outpost', roles: ['normal', 'boss'], tier: 2, medieval: true, encounters: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -1618,7 +1706,7 @@ const MAPS = {
   },
   // lanes＝雙線哨廊：兩道平行低矮牆(看得過去/可越)把場地分三道，缺口對齊連接點＝可換道繞到哨兵側後。
   lanes: {
-    label: '雙線迴廊', category: 'corridor', roles: ['normal'], tier: 1, medieval: true,
+    label: '雙線迴廊', category: 'corridor', roles: ['normal'], tier: 1, medieval: true, encounters: true,
     walls: [
       { x1: 40, y1: 40, x2: 1240, y2: 40 }, { x1: 1240, y1: 40, x2: 1240, y2: 680 },
       { x1: 1240, y1: 680, x2: 40, y2: 680 }, { x1: 40, y1: 680, x2: 40, y2: 40 },
@@ -2169,9 +2257,22 @@ function startMission() {
     if (!players.some(p => p.hasFile) && players.length) players[KNIGHT_ID].hasFile = true;
   } else { for (const p of players) p.hasFile = false; }   // Phase 0 恆走此路：遺物機制關閉（沙盒/編輯試玩/最終挑戰本來就不啟用）
   prisoners = (MAP.prisoners || []).map(o => ({ pos: { x: o.x, y: o.y }, freed: false }));   // 俘虜（每場重置）
-  for (const s of MAP.enemySpawns) { const e = makeEnemy(s.nodeId, s.personality, false, s.facing, s.type, s.faction); enemies.push(e); commitReservation(e, e.currentNode); }
-  // 每清一關多放幾名 rusher（暫定的上升張力，待路徑圖時再正式設計難度）
-  if (!MAP.eventMap) for (let k = 0; k < missionIndex; k++) { const sp = MAP.enemySpawns[k % MAP.enemySpawns.length]; enemies.push(makeEnemy(sp.nodeId, 'rusher')); }   // 事件地圖不加難度遞增兵
+  // **遭遇層**（使用者定案）：開了 encounters 的地圖、且不是王節點 → 抽一個小規模遭遇放進場。
+  // 王節點與沒開 encounters 的地圖（riot 手刻第三方、事件圖）仍用烤死的 enemySpawns。
+  const isBoss = (roadCurrent != null && roadNode(roadCurrent).boss);
+  lastEncounter = null;
+  if (MAP.encounters && !isBoss) {
+    const encId = pickEncounter(MAP.tier || 1);
+    lastEncounter = encId;
+    for (const e of placeEncounter(encId, MAP)) enemies.push(e);
+    // 難度遞增：每清一關，往主錨點多丟一名 rusher（張力上升；遭遇本身維持小規模）
+    const anc = encounterAnchorsOf(MAP)[0];
+    for (let k = 0; k < missionIndex; k++) { const e = makeEnemy(nearestNode(anc, false), 'rusher', false, angTo(anc, ENTRY), 'footman'); e.pos = { x: anc.x, y: anc.y }; enemies.push(e); commitReservation(e, e.currentNode); }
+  } else {
+    for (const s of MAP.enemySpawns) { const e = makeEnemy(s.nodeId, s.personality, false, s.facing, s.type, s.faction); enemies.push(e); commitReservation(e, e.currentNode); }
+    // 每清一關多放幾名 rusher（暫定的上升張力，待路徑圖時再正式設計難度）
+    if (!MAP.eventMap) for (let k = 0; k < missionIndex; k++) { const sp = MAP.enemySpawns[k % MAP.enemySpawns.length]; enemies.push(makeEnemy(sp.nodeId, 'rusher')); }   // 事件地圖不加難度遞增兵
+  }
   snapshotFactionForce();             // 陣營戰力快照（士氣扣分的分母）
   patrolPool = computePatrolPool();   // 本場巡邏點池（IDLE grunt 巡邏用）
   searchFocusNode = null; searchSet = null; searchCleared = null; searchConsumedT = -Infinity;   // 重置交戰後搜索
@@ -2461,11 +2562,6 @@ const EVENTS = [
     choices: [
       { label: '趁亂穿過', hint: '進場：駐軍 vs 暴民混戰中繞行撤離（兩派都與你為敵，但會先互打）', outcome: { type: 'combat', map: 'riot' } },   // ★多陣營戰：第三勢力暴民與駐軍互毆，玩家趁亂通過
       { label: '繞遠路（安全離開）', outcome: { type: 'nothing' } },
-    ] },
-  { id: 'vault', title: '封存金庫', text: '情報指出附近一處設施金庫藏有「未登錄」的物資——但被雙層門封死，要在兩間守備室分別觸發開關才進得去。',
-    choices: [
-      { label: '潛入破解（雙開關→密封容器）', hint: '進場：壓制兩間守備室、按下兩個開關開門，撿走密封容器撤離（撤離後才知是什麼）', outcome: { type: 'combat', map: 'vault' } },   // ★密封容器驗證關
-      { label: '情報太冒險，放棄（安全離開）', outcome: { type: 'nothing' } },
     ] },
   { id: 'wounded', title: '傷兵求救', text: '無線電傳來一名落單探員的求救——但這一帶剛有交火，可能是陷阱。',
     choices: [
@@ -4162,6 +4258,7 @@ Hooks.on('parry', 'momentum', (c) => { if (c.u) grantMomentum(c.u.faction, CONFI
    「集中攻擊」指令永遠無視靜默（你明確指了目標＝當然打）。 */
 let squadRevealed = false;
 function revealSquad() { squadRevealed = true; }
+let lastEncounter = null;   // 本場抽到的遭遇 id（HUD 可顯示「攔路賊」等；null＝烤死的 spawn 或王）
 function anchorOf(u) {
   if (!u || u.faction !== 'player' || !u.cmd) return null;   // 目前只有扈從吃指令；敵人維持原本的自由行動
   const C = CONFIG.command, c = u.cmd;
@@ -7571,7 +7668,7 @@ function initSandboxUI() {
 
     const h3b = document.createElement('h3'); h3b.textContent = '地圖'; card.appendChild(h3b);
     const r2 = document.createElement('div'); r2.className = 'row';
-    sandboxMapSel = document.createElement('select'); ['alpha', 'bravo', 'outpost', 'lanes', 'riot', 'vault', 'finale'].forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k + '（' + (MAPS[k] ? MAPS[k].label : k) + '）'; sandboxMapSel.appendChild(o); });
+    sandboxMapSel = document.createElement('select'); ['alpha', 'field', 'bravo', 'outpost', 'lanes', 'riot', 'finale'].forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k + '（' + (MAPS[k] ? MAPS[k].label : k) + '）'; sandboxMapSel.appendChild(o); });
     const fill = document.createElement('button'); fill.textContent = '↧ 載入此內建到下方'; fill.addEventListener('click', () => { sandboxMapText.value = JSON.stringify(MAPS[sandboxMapSel.value], null, 2); });
     const mhint = document.createElement('span'); mhint.className = 'muted'; mhint.textContent = '下方空白＝用左側內建；貼上 JSON＝用貼上的';
     r2.appendChild(sandboxMapSel); r2.appendChild(fill); r2.appendChild(mhint); card.appendChild(r2);
