@@ -4473,8 +4473,15 @@ const hasMorale = (u) => !u.dummy && !(u.faction === 'player' && u.id === KNIGHT
 const isShaken = (u) => u.moraleState === 'shaken' || u.moraleState === 'routed';
 const isRouted = (u) => u.moraleState === 'routed';
 // 依「陣營士氣 vs 自己的門檻」決定狀態；換性格與潰逃都在這裡收斂
+/* 單位是否已進入戰鬥＝崩潰判定的前提（使用者定案）。**未必要見血**，看到對方進入交戰即算。
+   否則在「不是剛開場就交戰」的地圖上，敵人什麼都還沒看到就因別處的士氣下滑而潰散。
+   敵方＝ENGAGED（狀態機的 latch，看到/聽到/被打→永不取消）；我方＝squadRevealed（全隊曝光）。 */
+function moraleEligible(u) {
+  return u.faction === 'player' ? squadRevealed : u.state === 'ENGAGED';
+}
 function refreshMoraleState(u) {
   if (!hasMorale(u)) return;
+  if (!moraleEligible(u)) return;   // 還沒交戰＝不判崩潰（維持 steady）
   const M = CONFIG.morale, prev = u.moraleState;
   const res = resolveOf(u.faction), th = breakAtOf(u);
   if (moraleOf(u.faction) <= 0) u.moraleState = 'routed';                  // **絕對**士氣歸零＝全軍潰逃（氣勢嚇不出擊潰）
