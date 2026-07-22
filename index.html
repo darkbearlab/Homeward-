@@ -788,6 +788,9 @@ CONFIG.witch = { curse: -35, desertChance: 0.25 };
 CONFIG.stoneswordHonor = 120;   // 拔石中劍需要的累積榮譽
 // S3 護送（走散男孩）：抵達團聚＝次戰氣勢+，改道錯過＝次戰氣勢−（皆 oneBattle，使用者定案「輕量插曲」）
 CONFIG.escort = { reuniteMomentum: 18, missMomentum: -12 };
+// B面「救援落難騎士」（使用者定案）：接觸(F)招他入伍＝騎士級（貴氣名、披甲重裝 manatarms + 板甲）＋他身邊僅剩的幾名普通士兵；
+// 沿用俘虜規則——打完活著撤離才永久入隊（餵步驟3「兵力軸」）。raiders＝圍攻他的劫掠隊（＝正規敵軍）人數。
+CONFIG.rescue = { knightClass: 'manatarms', knightKit: { weaponId: 'sword', offId: 'shield', armorId: 'plate' }, soldiers: 2, soldierClasses: ['footman', 'spearman'], raiders: 3 };
 CONFIG.roadmap = { cols: 7, pathCount: 6, rowsPerCol: 4, restEvery: 2,
   typeWeights: { COMBAT: 4, EVENT: 5, ARMORY: 1.4, REST: 2.0 },   // 休息牆吃掉整欄，事件權重再拉高補償（隨機欄裡最高）
   siteWeights: { camp: 3, tutor: 1.5, blacksmith: 1.5 } };
@@ -2363,7 +2366,7 @@ function initRun() {
   knightRelics = new Set(); applyRelicHooks();         // roguelite：聖物 run 中撿、開新 run 清空
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = []; runMomentumMods = [];   // 戰役旗標/事件佇列/已見事件/跨戰鬥氣勢修正重置
-  runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = '';   // S3 護送 + 戰後橫幅 + A/B 幕別重置
+  runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = ''; pendingRescueKnight = false;   // S3 護送 + 戰後橫幅 + A/B 幕別 + 救援旗標重置
   runStats = { events: 0, kia: 0 };                     // 本局榮譽累計（事件數/陣亡數）重置
   // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
   // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
@@ -2475,7 +2478,7 @@ function startMission() {
   if (CONFIG.relicEnabled && !fromSandbox && !fromEditor && !finaleActive) {   // 遺物：本場由 roster 指定的攜帶者背上（保底＝沒人標記就給騎士，遺物不能憑空消失）
     if (!players.some(p => p.hasFile) && players.length) players[KNIGHT_ID].hasFile = true;
   } else { for (const p of players) p.hasFile = false; }   // Phase 0 恆走此路：遺物機制關閉（沙盒/編輯試玩/最終挑戰本來就不啟用）
-  prisoners = (MAP.prisoners || []).map(o => ({ pos: { x: o.x, y: o.y }, freed: false }));   // 俘虜（每場重置）
+  prisoners = (MAP.prisoners || []).map(o => ({ pos: { x: o.x, y: o.y }, freed: false, kind: o.kind }));   // 俘虜（每場重置）；kind:'knight'＝落難騎士
   // **遭遇層**（使用者定案）：開了 encounters 的地圖、且不是王節點 → 抽一個小規模遭遇放進場。
   // 王節點與沒開 encounters 的地圖（riot 手刻第三方、事件圖）仍用烤死的 enemySpawns。
   const isBoss = (roadCurrent != null && roadNode(roadCurrent).boss);
@@ -2492,6 +2495,7 @@ function startMission() {
     // 每清一關多放幾名 rusher（暫定的上升張力，待路徑圖時再正式設計難度）
     if (!MAP.eventMap) for (let k = 0; k < missionIndex; k++) { const sp = MAP.enemySpawns[k % MAP.enemySpawns.length]; enemies.push(makeEnemy(sp.nodeId, 'rusher')); }   // 事件地圖不加難度遞增兵
   }
+  if (pendingRescueKnight) { injectKnightRescue(); pendingRescueKnight = false; }   // B面「救援落難騎士」：注入接觸點 + 圍攻他的劫掠隊（一次性）
   snapshotFactionForce();             // 陣營戰力快照（士氣扣分的分母）
   if (!introActive) applyRunMomentum();   // S1：帶著跨戰鬥的氣勢修正進場（序章不套）
   patrolPool = computePatrolPool();   // 本場巡邏點池（IDLE grunt 巡邏用）
@@ -2737,6 +2741,7 @@ function arenaResetFight() {
 let eventCur = null, eventPhase = 'CHOICE', eventPendingChoice = null, eventMsg = '', eventRects = [], eventSeen = [];
 let runFlags = {}, pendingEvents = [];   // 戰役旗標(儲存玩家選擇,跨節點)＋預定的後續事件佇列(被報位/伏擊…)；initRun 重置
 let runEscort = null;   // S3 護送：{ kind, markNodeId, markCol } or null（帶著一名非戰鬥乘客，抵達註記點＝團聚、改道越過＝錯過）；initRun 重置
+let pendingRescueKnight = false;   // 下一場戰鬥要注入「落難騎士」接觸點（由 lostKnight 事件的 combat 結果設；startMission 消耗一次即清）
 let escortMsg = '';     // 團聚/錯過的當下要在路線圖跳的橫幅（advanceNode 設、drawRoadmap 顯示一次）
 let missionMsg = '';    // 戰後獎勵的橫幅（打贏當下設、drawRoadmap 顯示，selectNode 清）
 const setFlag = (k, v) => { runFlags[k] = (v === undefined ? true : v); };
@@ -2906,6 +2911,12 @@ const EVENTS = [
       { label: '帶上他', hint: '在前方路上約定一處會合——抵達有物資與士氣、改道錯過則下一戰士氣受挫', outcome: { type: 'escortBoy' } },
       { label: '這一路太危險，婉拒', outcome: { type: 'nothing', msg: '你搖了搖頭。男孩失望地退回陰影裡。' } },
     ] },
+  // 落難騎士（B面限定）：一名我方騎士帶著僅剩的殘兵被劫掠隊圍攻。殺進去、接觸他(F)招他入伍、一起撤離＝入隊（騎士級）。
+  { id: 'lostKnight', title: '被圍的騎士', text: '前方傳來廝殺——一名我方騎士帶著僅剩的幾名士兵，正被一隊劫掠者團團圍住，眼看就要撐不住了。', act: 2,
+    choices: [
+      { label: '殺進去解圍', hint: '進入戰鬥：接觸騎士（F 招他入伍），一起活著撤離＝他與殘兵入隊', outcome: { type: 'combat', map: 'alpha', rescue: true } },
+      { label: '避開，這不是你顧得了的', outcome: { type: 'nothing', msg: '你別過臉，繞道而行。廝殺聲漸漸落在身後。' } },
+    ] },
   // 女巫的交易（S2×S1）：獻祭一名手下 → 巫紋強化騎士主手，但軍心蒙塵到見證者散盡、且有人憤而離去。
   { id: 'witch', title: '沼澤女巫', text: '霧中一名女巫向你招手：「交出一個追隨你的人，我便讓你的兵刃嗜血如我。」她的眼神讓活著的人都想遠離。',
     choices: [
@@ -2986,7 +2997,7 @@ function applyEventOutcome(o, mi) {
       return `${victim.name} 化作巫火，你的兵刃染上巫紋（${aff ? aff.name : '？'}）` + (gone.length ? `；${gone.join('、')} 憤而離去` : '') + '。從此軍心蒙塵，直到見證此事的人盡數散去。';
     }
     case 'stonesword': { const s = stoneSwordInst(); warehouse.push({ kind: 'weapon', id: 'stonesword', quality: s.quality, enh: s.enh }); return '你握住劍柄——石中劍應手而出。裝上它，戰意自石中湧生。'; }
-    case 'combat': { forcedMap = o.map || 'bravo'; eventCur = null; startMission(); return null; }   // ★hook：接特製地圖；打完走一般結算
+    case 'combat': { forcedMap = o.map || 'bravo'; if (o.rescue) pendingRescueKnight = true; eventCur = null; startMission(); return null; }   // ★hook：接特製地圖；o.rescue＝注入落難騎士；打完走一般結算
     case 'rest': { eventCur = null; enterRest(); return null; }   // 事件變成休息關（如：父親接待＋補給）→ 休整後 advanceNode
     default: return '無事發生';
   }
@@ -4431,14 +4442,50 @@ function tryInteract() {
   else if (it.type === 'prisoner') freePrisoner(it.prisoner);
   else if (it.type === 'console') { introConsole.used = true; spawnPickup(introConsole); }   // 取得發射密碼
 }
-// 釋放俘虜 → 變成一名我方單位（隨機個性 + 底線 pistol；需自行撤離才永久入隊）
+// 釋放俘虜 → 變成一名我方單位（隨機個性 + 底線武器；需自行撤離才永久入隊）
 function freePrisoner(pr) {
   pr.freed = true;
+  if (pr.kind === 'knight') { rallyStrandedKnight(pr); return; }   // B面：落難騎士＝招他入伍（騎士級 + 他的殘兵）
   const cfg = makeRecruit(new Set(players.map(p => p.name)));
   cfg.weaponId = FLOOR_WEAPON;   // 底線武器（跟喚醒 sleeper 同規則）
   const u = makePlayer(players.length, cfg, { x: pr.pos.x, y: pr.pos.y });
   u.state = 'IDLE'; u.idleAnchor = u.facing;
   players.push(u); spawnHeal(pr.pos);
+}
+// 接觸落難騎士(F)＝招他入伍：貴氣名 + 騎士級身體(manatarms)/板甲/劍盾，帶著身邊僅剩的幾名普通士兵。
+// 一律 IDLE 起手（等你指令），跟俘虜同規則：活著撤離才永久入隊。ralliedKnight 旗標＝步驟3 兵力軸來源。
+function rallyStrandedKnight(pr) {
+  const used = new Set(players.map(p => p.name));
+  const R = CONFIG.rescue;
+  const kcfg = makeRecruit(used, true);   // 貴氣名
+  kcfg.classId = R.knightClass; Object.assign(kcfg, R.knightKit); kcfg.hp = classOf(R.knightClass).hp;
+  const kn = makePlayer(players.length, kcfg, { x: pr.pos.x, y: pr.pos.y });
+  kn.state = 'IDLE'; kn.idleAnchor = kn.facing; kn.rescuedKnight = true;
+  players.push(kn); spawnHeal(pr.pos);
+  for (let i = 0; i < R.soldiers; i++) {   // 他身邊僅剩的普通士兵
+    const scfg = makeRecruit(used);
+    scfg.classId = rngPick(R.soldierClasses); const kit = classLoadout(scfg.classId);
+    scfg.weaponId = kit.weaponId; scfg.offId = kit.offId; scfg.armorId = kit.armorId; scfg.hp = classOf(scfg.classId).hp;
+    const ang = (i / R.soldiers) * Math.PI * 2;
+    const s = makePlayer(players.length, scfg, { x: pr.pos.x + Math.cos(ang) * 34, y: pr.pos.y + Math.sin(ang) * 34 });
+    s.state = 'IDLE'; s.idleAnchor = s.facing;
+    players.push(s);
+  }
+  setFlag('ralliedKnight', (flag('ralliedKnight') || 0) + 1);   // 暫記；步驟3 再細化成「撤離才算」
+}
+// 注入落難騎士接觸點 + 圍攻他的劫掠隊（＝正規敵軍）。接觸點放在遠離入口的深處 waypoint（保證可導航）。
+function injectKnightRescue() {
+  const wps = (MAP.waypoints || []).filter(w => w.tags && (w.tags.includes('vantage') || w.tags.includes('cover') || w.tags.includes('flank')));
+  const wp = (wps.length ? rngPick(wps) : (MAP.waypoints || [])[Math.floor(((MAP.waypoints || []).length) / 2)]) || { pos: { x: 900, y: 360 } };
+  const kp = { x: wp.pos.x, y: wp.pos.y };
+  prisoners.push({ pos: { x: kp.x, y: kp.y }, freed: false, kind: 'knight' });
+  const node = nearestNode(kp, false);
+  for (let i = 0; i < CONFIG.rescue.raiders; i++) {
+    const ang = (i / CONFIG.rescue.raiders) * Math.PI * 2;
+    const e = makeEnemy(node, 'rusher', false, ang + Math.PI, rngPick(['footman', 'spearman']));
+    e.pos = { x: kp.x + Math.cos(ang) * 92, y: kp.y + Math.sin(ang) * 92 }; e.state = 'ENGAGED';
+    enemies.push(e); commitReservation(e, e.currentNode);
+  }
 }
 function updateBullets(dt) {
   for (let i = bullets.length - 1; i >= 0; i--) {
@@ -6285,16 +6332,16 @@ function drawDrops() {
     }
   }
 }
-// 俘虜（未釋放）：青色圈 + 柵欄記號（受迷霧遮蔽，門後看不到）
+// 俘虜（未釋放）：青色圈 + 柵欄記號（受迷霧遮蔽，門後看不到）。落難騎士＝金色圈 + ⚔（不是柵欄，他在頑抗不是被關）。
 function drawPrisoners() {
   for (const pr of (prisoners || [])) {
     if (pr.freed) continue;
-    const pulse = 0.5 + 0.5 * Math.sin(simTime * 4);
-    ctx.strokeStyle = `rgba(120,220,200,${0.5 + pulse * 0.4})`; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(pr.pos.x, pr.pos.y, 11, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#7fe3c0'; ctx.beginPath(); ctx.arc(pr.pos.x, pr.pos.y, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(120,220,200,0.5)'; ctx.lineWidth = 1;
-    for (let gx = -8; gx <= 8; gx += 4) { ctx.beginPath(); ctx.moveTo(pr.pos.x + gx, pr.pos.y - 9); ctx.lineTo(pr.pos.x + gx, pr.pos.y + 9); ctx.stroke(); }
+    const pulse = 0.5 + 0.5 * Math.sin(simTime * 4), knight = pr.kind === 'knight';
+    ctx.strokeStyle = knight ? `rgba(255,205,120,${0.55 + pulse * 0.4})` : `rgba(120,220,200,${0.5 + pulse * 0.4})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(pr.pos.x, pr.pos.y, knight ? 13 : 11, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = knight ? '#ffd27d' : '#7fe3c0'; ctx.beginPath(); ctx.arc(pr.pos.x, pr.pos.y, 5, 0, Math.PI * 2); ctx.fill();
+    if (knight) { ctx.fillStyle = '#ffe8b0'; ctx.font = 'bold 12px Consolas'; ctx.textAlign = 'center'; ctx.fillText('⚔', pr.pos.x, pr.pos.y - 15); ctx.textAlign = 'left'; }
+    else { ctx.strokeStyle = 'rgba(120,220,200,0.5)'; ctx.lineWidth = 1; for (let gx = -8; gx <= 8; gx += 4) { ctx.beginPath(); ctx.moveTo(pr.pos.x + gx, pr.pos.y - 9); ctx.lineTo(pr.pos.x + gx, pr.pos.y + 9); ctx.stroke(); } }
   }
 }
 function drawUnitBody(u, fill, ringColor, ringW) {
@@ -6664,7 +6711,7 @@ function drawScreenOverlays() {
     if (it) {
       const wpos = it.type === 'door' ? doorMid(it.door) : it.type === 'button' ? { x: it.button.x, y: it.button.y } : it.type === 'console' ? { x: introConsole.x, y: introConsole.y } : it.prisoner.pos;
       const ips = w2s(wpos);
-      const label = it.type === 'button' ? 'F：啟動按鈕' : it.type === 'prisoner' ? 'F：釋放俘虜' : it.type === 'console' ? 'F：取得機密檔案' : (it.door.open ? 'F：關門' : 'F：開門');
+      const label = it.type === 'button' ? 'F：啟動按鈕' : it.type === 'prisoner' ? (it.prisoner.kind === 'knight' ? 'F：招他入伍' : 'F：釋放俘虜') : it.type === 'console' ? 'F：取得機密檔案' : (it.door.open ? 'F：關門' : 'F：開門');
       ctx.font = 'bold 12px Consolas'; ctx.textAlign = 'center';
       const tw = ctx.measureText(label).width + 12;
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(ips.x - tw / 2, ips.y - 30, tw, 18);
