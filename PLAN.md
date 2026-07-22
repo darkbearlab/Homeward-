@@ -951,7 +951,7 @@ Phase 4 前的最後一項插隊調整。
   - ✅ **事件 A/B 分流接縫**：`enterEvent` 濾 `e.act`（無＝共用、1＝敵境、2＝故土）。現有事件先全共用（「複製一份」），B 專屬掛 `act:2` 慢慢充實。
   - ✅ **落難騎士**（`lostKnight`，act:2）：**劫掠隊＝正規敵軍**（不另做 faction）；延伸俘虜機制——接觸(F)招他入伍＝騎士級（貴氣名/manatarms/板甲）+ 他僅剩的普通殘兵，撤離才入隊；`ralliedKnight` 旗標＝兵力軸來源。
   - ✅ **農奴/難民事件**（act:2）：護送機制一般化（runEscort 帶 label/mercy，男孩/農奴共用）；`fleeingSerfs`（護送→義名+）、`burnedVillage`（分糧救助/奪走口糧/離開）。新 `score` 結果累加兩軸旗標（義名 `mercy`／兵力 `might`）+ 可選 `then`＝結局象限的種子（與 `ralliedKnight` 並列）。
-- ⏳ **③ 結局**：兩軸旗標累加（兵力/義名）+ 象限表 + 4 段結局文字（回收 `playEnding`）。**種子已埋**：義名＝`runFlags.mercy`（護送抵達/救助 +、見死不救/劫掠 −）；兵力＝`ralliedKnight` + 撤出生還數。
+- ✅ **③ 結局**（先簡版：一段文字演出）：`homecomingAxes`＝義名 `runFlags.mercy` × 兵力（生還同伴數 + `ralliedKnight`×`knightMight`）；`pickEnding` 依 2×2 象限選 `ENDINGS`（率眾光復/鐵血奪回/教堂會師/焦土）；第二幕莊園 boss 完成→`resolveHomecoming`＝結算(wins+1) + `playEnding` 播該象限 5 行文字 → RUNWIN。門檻 `CONFIG.ending`（先佔位、待調）。
 - ⏳ **④ A面內容 + 打磨**：A 事件池、國界 boss 變體（巡邏隊/戰場/兇獸）、莊園/國界專屬地圖、敘事文本。
 
 - [ ] 路線圖節點與場景敘事改寫（焚村/林道/渡口/關隘；野營/鍛冶/路上遭遇）。

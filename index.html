@@ -1290,6 +1290,52 @@ const ACT_INFO = {
   2: { name: '第二幕 · 故土焦原', boss: '奪回莊園', enter: '你翻過了國界——腳下已是自己的國土，卻已被踏成焦原。' },
 };
 const actInfo = () => ACT_INFO[runAct === 2 ? 2 : 1];
+// 莊園結局＝兩軸象限（使用者定案）：義名 mercy（護送/救助 + · 見死不救/劫掠 −）× 兵力 might（生還同伴 + 招到的騎士）。
+// 門檻先隨便填、之後一起調（佔位）。演出走既有 playEnding（ENDING 純文字場景）。
+CONFIG.ending = { mercyThreshold: 2, mightThreshold: 4, knightMight: 2 };
+function homecomingAxes() {
+  const mercy = (runFlags.mercy || 0);
+  const might = Math.max(0, (roster || []).length - 1) + (runFlags.ralliedKnight || 0) * CONFIG.ending.knightMight;   // 生還同伴數 + 招到的騎士加權
+  return { mercy, might, highMercy: mercy >= CONFIG.ending.mercyThreshold, highMight: might >= CONFIG.ending.mightThreshold };
+}
+const ENDINGS = {
+  rally:  { title: '率眾光復', lines: [   // 高兵力 + 高義名
+    '你不是一個人回來的。',
+    '被你護送過的百姓、收攏的殘兵、並肩的騎士——他們都在你身後。',
+    '莊園上飄著劫掠者的旗。今夜，你們會把它扯下來。',
+    '黎明時分，舊主的紋章重新升起。',
+    '家人在門前等著你。你終於，回家了。'] },
+  iron:   { title: '鐵血奪回', lines: [   // 高兵力 + 低義名
+    '你帶回了足以奪回莊園的刀鋒。',
+    '只是這一路，你踏過了太多本不該踏過的人。',
+    '莊園奪回來了——用的是和劫掠者一樣的手。',
+    '家人認得你的臉，卻認不出你的眼神。',
+    '你贏了。可勝利嚐起來，一股鐵鏽味。'] },
+  church: { title: '教堂會師', lines: [   // 低兵力 + 高義名
+    '你幾乎是孤身回到莊園的。沿路能救的你都救了，也就沒剩多少力氣。',
+    '莊園被圍，但你的家人還活著——躲在山坳裡那座小教堂。',
+    '你摸黑潛入，與教堂僅存的守衛裡應外合。',
+    '這是一場慘勝：人少、傷重，可你們守住了彼此。',
+    '鐘聲響起時，你終於能坐下來，好好看一眼母親的臉。'] },
+  ash:    { title: '焦土',     lines: [   // 低兵力 + 低義名
+    '你回到莊園時，只剩灰。',
+    '沿路你只顧自己，能繞的都繞了；如今，也沒人來幫你。',
+    '斷壁間沒有旗幟，沒有守軍，沒有任何一張你認得的臉。',
+    '你在冷掉的爐灶前站了很久，很久。',
+    '故鄉還在。只是，已經沒有家了。'] },
+};
+function pickEnding() {
+  const a = homecomingAxes();
+  const key = a.highMight ? (a.highMercy ? 'rally' : 'iron') : (a.highMercy ? 'church' : 'ash');
+  return { key, title: ENDINGS[key].title, lines: ENDINGS[key].lines, axes: a };
+}
+// 第二幕（莊園）boss 完成＝依象限播一段文字結局 → 結算 → RUNWIN。
+function resolveHomecoming() {
+  const e = pickEnding();
+  Hooks.fire('homecoming', { ending: e.key, axes: e.axes });
+  metaOnRunEnd(true);   // 先結算榮譽/里程碑/存檔（wins+1）
+  playEnding(e.lines, () => { scene = 'RUNWIN'; releasePointer(); }, '歸鄉 · ' + e.title);
+}
 function genRoadmap() {   // 每局程序生成（在 srandSeed 後呼叫）；依 runAct 分流（目前先分王節點的顯示身分，內容池之後接）
   const C = CONFIG.roadmap;
   const cols = Math.max(3, C.cols | 0), rows = Math.max(1, C.rowsPerCol | 0), body = cols - 1;
@@ -2453,7 +2499,7 @@ function advanceNode() {
   if (!succ || succ.length === 0) {   // 走完這一幕的路線
     if (finaleActive) { resolveFinale(true); return; }   // （舊 finale 死碼；已停用不會進來）
     if (runAct === 1) { beginAct2(); return; }            // 第一幕完成＝翻過國界，續生第二幕（不結算）
-    scene = 'RUNWIN'; metaOnRunEnd(true);                 // 第二幕（莊園）完成＝通關；結局象限在步驟3接
+    resolveHomecoming(); return;                          // 第二幕（莊園）完成＝依兩軸象限播文字結局 → 結算 → RUNWIN
   }
   else { roadAvailable = succ.slice(); scene = 'MAP'; }
   releasePointer();
