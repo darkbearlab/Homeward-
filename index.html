@@ -869,20 +869,29 @@ const isAvailable = (kind, id) => { const u = unlockDef(kind, id); return !u || 
 const availPool = (kind, ids) => { const p = ids.filter(id => isAvailable(kind, id)); return p.length ? p : ids; };   // 過濾未解鎖；空了保底回全集(不崩)
 function checkMilestoneUnlocks() { let any = false; for (const u of UNLOCKS) if (u.via === 'milestone' && u.cond && u.cond(meta.stats) && !meta.unlocked[u.kind][u.id]) { meta.unlocked[u.kind][u.id] = true; any = true; } return any; }
 function unlockWithHonor(kind, id) { const u = unlockDef(kind, id); if (!u || u.via !== 'honor' || meta.unlocked[kind][id] || meta.honor < u.cost) return false; meta.honor -= u.cost; meta.unlocked[kind][id] = true; saveMeta(); return true; }
+// 戰後獎勵（使用者定案：升等移除後把「清關榮譽」從 run-end 挪到打贏當下＝即時、看得見的一幕）。
+// **這是之後接 run 內經濟/道具的單一鉤子**——現在先發小額榮譽墊檔，改內容只改這裡。
+function grantCombatReward() {
+  const r = CONFIG.meta.honorPerMission;
+  meta.honor += r; saveMeta();
+  missionMsg = `戰功 · 榮譽 +${r}`;
+  Hooks.fire('combatReward', { honor: r });
+  return r;
+}
 function metaOnRunEnd(won) {   // run 結束結算：榮譽 + stats + 里程碑自動解鎖 + 存檔
   meta.stats.runs = (meta.stats.runs || 0) + 1;
   const mi = (typeof missionIndex === 'number' ? missionIndex : 0);
   meta.stats.missions = (meta.stats.missions || 0) + mi;
   const M = CONFIG.meta, rs = runStats || { events: 0, kia: 0 };
-  const missionPart = M.honorPerMission * mi;            // 清關進度
+  const missionAwarded = M.honorPerMission * mi;        // 清關榮譽已在打贏當下即時發放（grantCombatReward），這裡不再重複計入 gross
   const winPart = won ? M.honorWin : 0;                  // 通關保底
   const eventPart = M.honorPerEvent * (rs.events || 0);  // 事件記錄加分
-  const gross = missionPart + winPart + eventPart;
+  const gross = winPart + eventPart;
   const rawPenalty = M.honorPerKIA * (rs.kia || 0);
-  const penalty = Math.min(rawPenalty, Math.floor(gross * M.kiaPenaltyCapFrac));   // 陣亡扣分封頂＝只是扣意思
+  const penalty = Math.min(rawPenalty, Math.floor((missionAwarded + gross) * M.kiaPenaltyCapFrac));   // 封頂仍以「整局榮譽」為基準＝扣分幅度與舊版一致（總量不變）
   const gain = Math.max(0, gross - penalty);
   meta.honor += gain;
-  lastHonorBreakdown = { mi, missionPart, winPart, eventPart, events: rs.events || 0, kia: rs.kia || 0, penalty, gain, won };
+  lastHonorBreakdown = { mi, missionAwarded, winPart, eventPart, events: rs.events || 0, kia: rs.kia || 0, penalty, gain, won };
   if (won) { meta.stats.wins = (meta.stats.wins || 0) + 1; for (const r of (roster || [])) if (r && r.classId) meta.stats.winArch[r.classId] = (meta.stats.winArch[r.classId] || 0) + 1; }
   checkMilestoneUnlocks(); saveMeta();
 }
@@ -2339,7 +2348,7 @@ function initRun() {
   knightRelics = new Set(); applyRelicHooks();         // roguelite：聖物 run 中撿、開新 run 清空
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = []; runMomentumMods = [];   // 戰役旗標/事件佇列/已見事件/跨戰鬥氣勢修正重置
-  runEscort = null; escortMsg = '';   // S3 護送狀態重置
+  runEscort = null; escortMsg = ''; missionMsg = '';   // S3 護送狀態 + 戰後獎勵橫幅重置
   runStats = { events: 0, kia: 0 };                     // 本局榮譽累計（事件數/陣亡數）重置
   // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
   // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
@@ -2361,7 +2370,7 @@ function initRun() {
 // 在路線圖選擇一個可前往的節點
 function selectNode(id) {
   if (!roadAvailable.includes(id) || roadCompleted.has(id)) return;
-  escortMsg = '';   // 團聚/錯過橫幅只顯示到玩家挑下一個節點
+  escortMsg = ''; missionMsg = '';   // 團聚/錯過、戰功橫幅只顯示到玩家挑下一個節點
   roadCurrent = id;
   const node = roadNode(id), t = node.type;
   if (t === 'COMBAT') startMission();
@@ -2486,7 +2495,7 @@ function endMission() {
   const cacheReveal = [];   // 密封容器開封＝事後抽選（排除基本階、含未解鎖、run 限定進倉庫）：僅過關時開
   if (win) { const cachesOut = survivors.reduce((n, p) => n + (p.caches || 0), 0); for (let i = 0; i < cachesOut; i++) cacheReveal.push(rollMysteryLoot()); }
   lastSummary = { mission: missionIndex + 1, extracted: survivors.map(p => p.name), dead: players.filter(p => p.state === 'DEAD').map(p => p.name), fileSafe, cacheReveal };
-  if (win) { roster = survivors.map(rosterFromPlayer); missionIndex++; advanceNode(); return; }   // 勝利→**直接回路線圖**（戰果升階已移除）
+  if (win) { roster = survivors.map(rosterFromPlayer); missionIndex++; grantCombatReward(); advanceNode(); return; }   // 勝利→戰後獎勵（榮譽即時發放）→直接回路線圖（原本的戰果升階已移除）
   if (finaleActive) { resolveFinale(false); return; }   // 最終挑戰全滅＝Bad End（不走一般 RUNEND）
   scene = 'RUNEND'; result = 'LOSE'; loseReason = (kn && kn.state !== 'EXTRACTED' && !fileSafe) ? '遺物遺失' : '騎士陣亡'; metaOnRunEnd(false); releasePointer();   // 一般 run 失敗：局外結算
 }
@@ -2704,6 +2713,7 @@ let eventCur = null, eventPhase = 'CHOICE', eventPendingChoice = null, eventMsg 
 let runFlags = {}, pendingEvents = [];   // 戰役旗標(儲存玩家選擇,跨節點)＋預定的後續事件佇列(被報位/伏擊…)；initRun 重置
 let runEscort = null;   // S3 護送：{ kind, markNodeId, markCol } or null（帶著一名非戰鬥乘客，抵達註記點＝團聚、改道越過＝錯過）；initRun 重置
 let escortMsg = '';     // 團聚/錯過的當下要在路線圖跳的橫幅（advanceNode 設、drawRoadmap 顯示一次）
+let missionMsg = '';    // 戰後獎勵的橫幅（打贏當下設、drawRoadmap 顯示，selectNode 清）
 const setFlag = (k, v) => { runFlags[k] = (v === undefined ? true : v); };
 const flag = (k) => runFlags[k];
 
@@ -7378,9 +7388,9 @@ function drawRestTutorial() {
 function drawHonorBreakdown(cx, y) {
   const b = lastHonorBreakdown; if (!b) return y;
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffd27a'; ctx.font = 'bold 22px Consolas'; ctx.fillText('榮譽 +' + b.gain, cx, y); y += 26;
+  ctx.fillStyle = '#ffd27a'; ctx.font = 'bold 22px Consolas'; ctx.fillText('本次結算 榮譽 +' + b.gain, cx, y); y += 26;
   ctx.fillStyle = 'rgba(180,195,210,0.78)'; ctx.font = '13px Consolas';
-  const parts = ['清關 ' + b.mi + '　+' + b.missionPart];
+  const parts = ['清關 ' + b.mi + '（戰功已即時發放 +' + b.missionAwarded + '）'];
   parts.push('通關保底 ' + (b.won ? '+' + b.winPart : '—'));
   parts.push('事件 ' + b.events + '　+' + b.eventPart);
   parts.push('陣亡 ' + b.kia + (b.penalty ? '　−' + b.penalty : '　0'));
@@ -7485,13 +7495,15 @@ function drawRoadmap() {
   ctx.fillStyle = hsl(48, 75, 58); ctx.fillText('★ 軍械庫', cv.width / 2 + 120, 102);
   ctx.fillStyle = hsl(150, 60, 55); ctx.fillText('＋ 休息', cv.width / 2 + 230, 102);
 
-  // S3 護送：團聚/錯過的當下橫幅（selectNode 清掉）；護送中則提示「去 ⚑ 會合」
+  // 頂部橫幅堆疊：戰後獎勵（綠）＋ S3 護送團聚/錯過（金）；兩者皆 selectNode 清掉。護送中則常駐提示。
+  let by = 120;
+  if (missionMsg) { ctx.fillStyle = '#8fe3a0'; ctx.font = 'bold 14px Consolas'; ctx.fillText('⚔ ' + missionMsg, cv.width / 2, by); by += 22; }
   if (escortMsg) {
-    ctx.fillStyle = 'rgba(40,34,20,0.92)'; ctx.fillRect(cv.width / 2 - 380, 114, 760, 30);
-    ctx.strokeStyle = 'rgba(255,210,125,0.7)'; ctx.lineWidth = 1.5; ctx.strokeRect(cv.width / 2 - 380, 114, 760, 30);
-    ctx.fillStyle = '#ffd27d'; ctx.font = '13px Consolas'; ctx.fillText(escortMsg, cv.width / 2, 134);
-  } else if (runEscort) {
-    ctx.fillStyle = '#ffd27d'; ctx.font = '12px Consolas'; ctx.fillText('⚑ 護送中：帶男孩到標記的會合點（走岔了他會跟丟）', cv.width / 2, 132);
+    ctx.fillStyle = 'rgba(40,34,20,0.92)'; ctx.fillRect(cv.width / 2 - 380, by - 14, 760, 26);
+    ctx.strokeStyle = 'rgba(255,210,125,0.7)'; ctx.lineWidth = 1.4; ctx.strokeRect(cv.width / 2 - 380, by - 14, 760, 26);
+    ctx.fillStyle = '#ffd27d'; ctx.font = '13px Consolas'; ctx.fillText(escortMsg, cv.width / 2, by + 4);
+  } else if (runEscort && !missionMsg) {
+    ctx.fillStyle = '#ffd27d'; ctx.font = '12px Consolas'; ctx.fillText('⚑ 護送中：帶男孩到標記的會合點（走岔了他會跟丟）', cv.width / 2, by);
   }
 
   const avail = roadAvailable.filter(id => !roadCompleted.has(id));
@@ -8097,7 +8109,7 @@ function enterFinaleSetup() { finaleSeedBuf = ''; scene = 'FINALE'; releasePoint
 // 跳過序章直接進路線圖；走完整條＝真結局＋解 Siren，途中 run 失敗＝Bad End（皆回選單，無刪檔）。
 function startFinale(seedStr) {
   srandSeed((seedStr && seedStr.length) ? seedFromStr(seedStr) : Math.floor(Math.random() * 0xFFFFFFFF));
-  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 }; runEscort = null; escortMsg = '';
+  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 }; runEscort = null; escortMsg = ''; missionMsg = '';
   warehouse = []; backpack = []; drops = []; grantStartingGear();
   ammoStock = {}; for (const id of WEAPON_IDS) ammoStock[id] = WEAPONS[id].silent ? CONFIG.ammo.subsonicStart : CONFIG.ammo.stockStart;
   roster = baseRoster(); missionIndex = 0;
