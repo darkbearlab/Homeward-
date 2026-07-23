@@ -177,7 +177,8 @@ const CONFIG = {
   // 戰爭迷霧 / 視野（敵我共用）：前方 90° 視錐(距離無限、被牆遮斷) + 360° 近身感知
   vision: {
     coneHalfDeg: 45,        // 視錐半角（總 90°）
-    senseRadius: 90,        // 近身感知半徑（基礎；× 單位 strength，越強越長）
+    senseRadius: 30,        // 近身感知半徑（基礎；× 單位 strength/senseMul）。**刻意 < 所有近戰觸及**（短刀 38…），
+                            // 讓「繞背偷襲/背刺」成立——只在幾乎貼身(≈30)時才無視朝向被察覺＝保留最低保底、不讓你站進他體內。野獸(senseMul 1.5)自動更靈敏。
     fanRays: 28,            // 視錐渲染射線數
     coneMax: 2200,          // 視錐射線最大長度（≈無限，實際被牆截斷）
   },
@@ -3917,7 +3918,7 @@ function startSwing(u, fireRateMult) {
   u.blocking = false;   // 揮擊即放下盾
   if (arenaMode && u.id === KNIGHT_ID && u.faction === 'player') { arenaStats.swings++; arenaStats.lastHits = 0; arenaStats.lastDmg = 0; }
   Hooks.fire('attackStart', { u, W, melee: true });
-  Sfx.play('swing', u.pos);
+  Sfx.play('swing', u.pos, swingPingR(u.weapon));   // 揮擊聲半徑隨武器重量
   return true;
 }
 // 判定窗內的進度 0→1（前搖期間為 0＝刀停在起始側，後搖期間為 1＝刀停在收尾側）
@@ -5375,9 +5376,9 @@ function separate(units) {
 /* =====================================================================
    Particles
    ===================================================================== */
-function spawnHit(p) { Sfx.play('hit'); for (let i = 0; i < 4; i++) particles.push(mkPart(p, 90, 0.25, '#ffd27d')); }
-function spawnBlock(p) { Sfx.play('block'); for (let i = 0; i < 6; i++) particles.push(mkPart(p, 130, 0.28, '#bcd2ff')); }   // 裝甲彈開「鏘」的火花
-function spawnCrit(p) { Sfx.play('crit'); for (let i = 0; i < 9; i++) particles.push(mkPart(p, 170, 0.4, '#ff5a6e')); }     // 繞背/突襲＝紅色重擊火花
+function spawnHit(p) { Sfx.play('hit', p); for (let i = 0; i < 4; i++) particles.push(mkPart(p, 90, 0.25, '#ffd27d')); }
+function spawnBlock(p) { Sfx.play('block', p); for (let i = 0; i < 6; i++) particles.push(mkPart(p, 130, 0.28, '#bcd2ff')); }   // 裝甲彈開「鏘」的火花
+function spawnCrit(p) { Sfx.play('crit', p); for (let i = 0; i < 9; i++) particles.push(mkPart(p, 170, 0.4, '#ff5a6e')); }     // 繞背/突襲＝紅色重擊火花
 function spawnDeath(p) { Sfx.play('death', p); for (let i = 0; i < 14; i++) particles.push(mkPart(p, 180, 0.5, '#ff6b6b')); }
 function spawnHeal(p) { Sfx.play('heal'); for (let i = 0; i < 12; i++) particles.push(mkPart(p, 70, 0.55, '#7fffa8')); }
 function spawnPickup(p) { Sfx.play('pickup'); for (let i = 0; i < 10; i++) particles.push(mkPart(p, 90, 0.5, '#ffe08a')); }
@@ -5394,16 +5395,24 @@ function spawnBlood(pos, ang) { for (let i = 0; i < 7; i++) { const a = ang + (M
 function pushDecal(x, y, r, col) { decals.push({ x, y, r, col }); if (decals.length > 160) decals.shift(); }   // 地上血漬（上限淘汰）
 // 視覺化聲音：依音效 id 給「邊框發光」提示（控制角色看不到的方向才提示）。SLEEPER/arcade 共用。
 const SOUND_PINGS = {
-  shot:    { r: 120, life: 0.5,  col: '255,180,90' },
-  shotgun: { r: 150, life: 0.6,  col: '255,150,70' },
-  silshot: { r: 55,  life: 0.35, col: '180,200,220' },   // 消音＝小而短
-  death:   { r: 110, life: 0.7,  col: '255,90,90' },
+  // 遠程：弓弩本就相對輕聲（使用者定案調小）；消音更小。
+  shot:    { r: 70,  life: 0.45, col: '255,180,90' },
+  shotgun: { r: 100, life: 0.55, col: '255,150,70' },
+  silshot: { r: 45,  life: 0.32, col: '180,200,220' },
+  death:   { r: 110, life: 0.7,  col: '255,90,90' },     // 陣亡/爆炸/開門＝維持不動
   door:    { r: 80,  life: 0.5,  col: '160,210,255' },
   grenade: { r: 175, life: 0.75, col: '255,170,60' },
+  // 交戰聲（納入視覺化）：揮擊半徑與武器重量掛勾（swingPingR 動態覆寫 r）；打擊/格擋/招架/背刺各有色。
+  swing:   { r: 44,  life: 0.28, col: '200,200,210' },   // r 由 swingPingR(武器重量) 覆寫
+  hit:     { r: 55,  life: 0.30, col: '255,210,140' },
+  block:   { r: 66,  life: 0.34, col: '190,210,255' },   // 兵刃相交/擋格的「鏘」
+  parry:   { r: 62,  life: 0.32, col: '190,210,255' },
+  crit:    { r: 84,  life: 0.4,  col: '255,110,120' },   // 背刺/重擊＝較響
 };
-function pingSound(id, pos) {
+const swingPingR = (W) => clamp(26 + ((W && W.weight) || 1) * 16, 28, 78);   // 揮擊聲半徑＝隨武器重量（短刀 ≈29、長劍 ≈50、戰鎚 ≈64、喪鐘 ≈71）
+function pingSound(id, pos, rOverride) {
   const s = SOUND_PINGS[id]; if (!s || !pos) return;
-  soundPings.push({ x: pos.x, y: pos.y, life: s.life, max: s.life, r: s.r, col: s.col });
+  soundPings.push({ x: pos.x, y: pos.y, life: s.life, max: s.life, r: rOverride || s.r, col: s.col });
   if (soundPings.length > 40) soundPings.shift();
 }
 function updateParticles(dt) { for (let i = particles.length - 1; i >= 0; i--) { const q = particles[i]; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) particles.splice(i, 1); } }
@@ -5437,7 +5446,7 @@ const Input = {
   get aim() { return aimDir; }, set aim(v) { aimDir = v; },   // 砲塔目標朝向（世界角）
   get mx() { return mouse.mx; }, get my() { return mouse.my; },
 };
-const Sfx = { play(id, pos) { /* no-op 音訊佔位（未來接 WebAudio）；給了 pos 就同時做「視覺化聲音」邊框提示 */ if (pos) pingSound(id, pos); } };
+const Sfx = { play(id, pos, r) { /* no-op 音訊佔位（未來接 WebAudio）；給了 pos 就同時做「視覺化聲音」邊框提示（r＝可選半徑覆寫，如揮擊依重量） */ if (pos) pingSound(id, pos, r); } };
 
 // 點擊：戰鬥→鎖定滑鼠開始；路線圖→選節點；結算畫面→重開
 cv.addEventListener('click', () => {
