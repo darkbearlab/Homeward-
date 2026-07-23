@@ -5807,9 +5807,9 @@ window.addEventListener('keydown', e => {
   }
   if (scene === 'BLACKSMITH') { if (k >= '1' && k <= '9') blacksmithPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') blacksmithLeave(); return; }
   if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(originList[parseInt(k, 10) - 1]); return; }
-  if (scene === 'OATHS') {   // 配誓約：數字鍵切換自選誓約、Enter/空白＝出發、Esc＝回出身
-    if (k === 'Enter' || k === ' ') { departFromOrigin(); return; }
-    if (k === 'Escape') { enterOrigin(); return; }
+  if (scene === 'OATHS') {   // 配誓約：數字鍵切換自選誓約、Enter/空白＝出發、Esc＝回出身（k 已 toLowerCase）
+    if (k === 'enter' || k === ' ') { departFromOrigin(); return; }
+    if (k === 'escape') { enterOrigin(); return; }
     if (k >= '1' && k <= '9') { const id = oathPickList[parseInt(k, 10) - 1]; if (id) toggleOathEquip(id); return; }
     return;
   }
