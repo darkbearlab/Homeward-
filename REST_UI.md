@@ -96,7 +96,7 @@
    - 填/卸：`equipFreeExtraFromWarehouse` / `unequipFreeExtra`（Phase 1 的 PoE 面板會直接用）。
    - 戰鬥鍵：**數字鍵 `1~N`＝施展第 N 個自由位**；退役 1/2-切裝與空白鍵；換裝＝滾輪/X。HUD 底部提示已更新。
    - **注意**：目前「填自由位 2+」只有資料 API，**還沒接進 UI**——所以買了「行囊」會多出空的自由位，要等 Phase 1 的面板才填得進去（引擎已就緒，headless 測過）。
-1. **右側面板骨架**：`drawKnightPanel`（裝備上半 + 倉庫下半），先用點選（既有 equip 函式）驗證資料流與型別守門。移除扈從配裝卡、加只讀隊伍列。
+1. ✅ **右側面板骨架（已做）**：`drawRest` 重排＝右側 PoE 面板（`drawLoadoutCard` 騎士版：自由位迴圈、高度自適應）＋下半倉庫（`drawRestWarehouse` 面板版）；左側 `drawRosterStrip`（只讀隊伍列，TARGET 在此指派）＋動作列（`drawRestActionBar(cx)` 擺左區）。扈從配裝卡已移除。互動仍點選式（拖曳＝Phase 2）。
 2. **拖曳輸入**：休息房接 mousedown/move/up + ghost + 落點型別判定 → 呼叫 equip/unequip；雙擊快速裝備；退役 `restSel`。
 3. **戰鬥操作收尾**：滾輪換裝（維持）、`X` 別名；退役 1/2-切裝與空白；HUD 鍵位提示定案。
 4. **打磨**：offers/TARGET 指定對象改讀新隊伍列；版面微調、動效。
