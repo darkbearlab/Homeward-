@@ -2,7 +2,7 @@
 
 > 敗騎的**誓約**：刻在身與心上的約束。**綁定誓約**是一位騎士的本質（不可卸）；**自選誓約**是靠行動證明、解鎖後可帶的 build 層。
 > 這份是獨立維護的目錄——條目會愈長，PLAN.md 只放摘要並指向這裡。
-> **狀態：第一階段（誓約引擎 + 7 位騎士綁定誓約）已實作。** 配誓約 UI / 槽數升級 / 解鎖條件 / 自選誓約池仍待做。
+> **狀態：全五階段已實作**（引擎 + 綁定誓約 + 自選誓約池 + 解鎖框架 + 槽數升級 + 配誓約畫面）。內容擴充（更多自選誓約、雙刃/鎚騎士、複數格、解鎖閘門/C 面）持續進行。
 
 ---
 
@@ -113,10 +113,19 @@ OATHS = { id: {
    - 綁定誓約 id：`bulwark`(守備) / `unbowed`(陷陣) / `gale`(遊獵) / `incant`(習術) / `reachvow`(長槍) / `heavybolt`(弩) / `leyline`(術士)。
    - 出身選單卡片右上顯示「◈ 誓約 · 名稱」徽章（卡片夠高再多顯示本質敘述）。
    - 尚未做：自選誓約的 hooks 註冊（Phase 2 隨 loadout 一起，用穩定 id off-first 避免每場重複掛）。
-2. **配誓約畫面（B）**：出身後一步，把已解鎖自選誓約裝進自由槽（綁定自動補、顯示鎖定）；run 中鎖定。`meta.oathLoadout` 持久。
-3. **槽數升級**：`UPGRADES` 加 `oathSlots`（自由槽 base 2 → +1/級 → 上限 5）。
-4. **解鎖條件框架**：run 統計補齊（§5）+ `metaOnRunEnd` 查解鎖 + 提示。
-5. **內容擴充**：自選誓約池慢慢加；未來 2 位騎士（雙刃/鎚）+ 綁定誓約。
+2. ✅ **配誓約畫面（B）（已做）**：出身後進 `scene='OATHS'`（`chooseOrigin`→`enterOathLoadout`，按「出發」`departFromOrigin` 才真正開局＝run 中鎖定）。`drawOathLoadout` 顯示綁定誓約（金框、不佔槽）＋自由槽格（used/cap）＋自選誓約清單（已解鎖可點選/數字鍵切換、未解鎖灰顯示解鎖條件）。`toggleOathEquip` 依 `slotCost` 擋超格。`meta.oathLoadout` 持久（saveMeta）。
+3. ✅ **槽數升級（已做）**：`UPGRADES` 加 `oathSlots`（per 1、max 3、cost 70）；`oathFreeSlots()`＝`CONFIG.oath.baseSlots(2) + upgLevel('oathSlots')`＝2→5。HQ「升級」自動顯示。
+4. ✅ **解鎖條件框架（已做）**：`freshRunStats()` 加 `kills/eliteKills`（`killUnit` 累計）；`metaOnRunEnd` 累加生涯 `meta.stats.eliteKills`、組合 `snap`（本局+生涯）呼叫 `checkOathUnlocks` → `meta.unlockedOaths`；`lastOathUnlocks` 於 RUNEND/RUNWIN 報「解鎖新誓約」。
+5. **內容擴充（進行中）**：目前自選誓約池 5 個（無畏/堅忍/復仇/守護/掠奪，見 §4 已實作值）；未來 2 位騎士（雙刃/鎚）+ 綁定誓約、複數格誓約、§8b 解鎖閘門/C 面待做。
+
+### 已實作的自選誓約效果（對照 §4，實際數值）
+| id | 名稱 | 效果 | 解鎖 |
+|---|---|---|---|
+| dauntless | 無畏之誓 | 生命<35% 時輸出 ×1.3（`outDmgMul`，近接/遠程同尺） | 一個 run 擊殺 40 |
+| endurance | 堅忍之誓 | 耐力回復 ×1.35、耐力上限 +15（mods） | 一個 run 清 5 關 |
+| vengeance | 復仇之誓 | 斬將後 4s 移速/攻速 ×1.15（`killUnit` 給 buff，`hasOath` gate） | 累計斬將 8 |
+| guardian | 守護之誓 | 扈從崩潰門檻 −8（`breakPctOf`，`hasOath` gate） | 無人陣亡通關 |
+| plunder | 掠奪之誓 | 榮譽獲得 +10%（`honorMul`，`hasOath` gate） | 累計清 20 關 |
 
 ## 7. 待決/風險備忘
 - 綁定誓約的效果 vs 出身起始裝的重疊：要確保「綁定誓約」有給到出身**沒有**的東西（行為/被動），不只是換句話說。

@@ -665,7 +665,8 @@ function applyRelicHooks() {    // 重掛（撿到/失去聖物後呼叫）
   }
 }
 
-/* 誓約（OATHS）— 可裝備的被動 build 層（詳見 OATHS.md）。第一階段只做「引擎 + 綁定誓約」：
+CONFIG.oath = { baseSlots: 2, plunderHonor: 0.1, guardianBreak: 8, vengeanceBuffT: 4, vengeanceMove: 1.15, vengeanceFire: 1.15 };   // 誓約系統參數（自由槽基礎數、各自選誓約的數值）
+/* 誓約（OATHS）— 可裝備的被動 build 層（詳見 OATHS.md）。引擎 + 綁定誓約 + 自選誓約池：
    每位騎士由出身綁定 1 個常駐誓約（不可卸）＝本質區分不同騎士。效果全走 `mods(k)`＝開局改騎士數值/旋鈕
    （u.weapon 是 WEAPONS 共用參照，絕不可改，一律用 per-unit 旋鈕：parryWinMul/reachMul/knockMul/
    pierceBonus/artCdMul/castMul/magicPierce）。自選誓約池 + 解鎖 + 配裝 UI 是後續階段。 */
@@ -686,17 +687,53 @@ const OATHS = {
               mods(k) { k.reloadMul = (k.reloadMul || 1) * 0.6; k.pierceBonus = (k.pierceBonus || 0) + 0.15; } },
   leyline:  { name: '法脈之誓', kind: 'bound', boundTo: 'mageknight', desc: '法脈：魔法彈貫穿一直線（穿透 2 名）、傷害 +。',
               mods(k) { k.magicPierce = (k.magicPierce || 0) + 2; k.dmgMul = (k.dmgMul || 1) * 1.1; } },
+  // ── 自選誓約（kind:'free'）：達成條件解鎖後可裝進自由槽。slotCost 預設 1（複數格是未來的事）。
+  //    unlock(rs) 在 run 結束查（rs＝本局統計 + 生涯統計的合併快照）；效果分三路：mods 改騎士、
+  //    非騎士效果走 hasOath() 全域查詢（守護改扈從門檻、掠奪加榮譽、復仇在 killUnit 給 buff）。
+  dauntless:{ name: '無畏之誓', kind: 'free', slotCost: 1, desc: '背水：生命低於 35% 時，輸出 ×1.3。',
+              unlockHint: '一個 run 內擊殺 40 名敵人', unlock: (rs) => (rs.kills || 0) >= 40,
+              mods(k) { k.berserk = { frac: 0.35, mul: 1.3 }; } },
+  endurance:{ name: '堅忍之誓', kind: 'free', slotCost: 1, desc: '不倦：耐力回復 ×1.35、耐力上限 +15。',
+              unlockHint: '一個 run 內清滿 5 關', unlock: (rs) => (rs.missions || 0) >= 5,
+              mods(k) { k.stamRegenMul = (k.stamRegenMul || 1) * 1.35; k.stamMax += 15; k.stam = k.stamMax; } },
+  vengeance:{ name: '復仇之誓', kind: 'free', slotCost: 1, desc: '斬將：擊殺菁英後 4 秒內移速/攻速提升。',
+              unlockHint: '累計斬將（擊殺菁英）8 次', unlock: (rs) => (rs.lifetimeElite || 0) >= 8 },
+  guardian: { name: '守護之誓', kind: 'free', slotCost: 1, desc: '扈從崩潰門檻 −8＝更難潰逃。',
+              unlockHint: '無人陣亡通關一次', unlock: (rs) => !!rs.won && (rs.kia || 0) === 0 },
+  plunder:  { name: '掠奪之誓', kind: 'free', slotCost: 1, desc: '榮譽獲得 +10%。',
+              unlockHint: '累計清 20 關', unlock: (rs) => (rs.lifetimeMissions || 0) >= 20 },
 };
+const OATH_IDS = Object.keys(OATHS);
 const boundOathFor = (originId) => {
-  for (const id of Object.keys(OATHS)) { const o = OATHS[id]; if (o.kind === 'bound' && o.boundTo === originId) return id; }
+  for (const id of OATH_IDS) { const o = OATHS[id]; if (o.kind === 'bound' && o.boundTo === originId) return id; }
   return null;
 };
-// 套用騎士的誓約（第一階段＝只有綁定；自選 loadout 之後接）。在 makePlayer 造好騎士後呼叫＝每場重套（欄位每場重建）。
+const oathUnlocked = (id) => !!(meta.unlockedOaths && meta.unlockedOaths[id]);
+const oathFreeSlots = () => CONFIG.oath.baseSlots + upgLevel('oathSlots');   // 自由槽數＝基礎 + 升級「誓約」
+// 自選誓約解析：meta.oathLoadout → 過濾成「已解鎖、且依 slotCost 塞得進自由槽」的清單（保序）
+function resolvedFreeOaths() {
+  const out = []; let used = 0; const cap = oathFreeSlots();
+  for (const id of (meta.oathLoadout || [])) {
+    const o = OATHS[id];
+    if (!o || o.kind !== 'free' || !oathUnlocked(id)) continue;
+    const cost = o.slotCost || 1;
+    if (used + cost > cap) continue;
+    out.push(id); used += cost;
+  }
+  return out;
+}
+let activeOaths = new Set();                    // 本場生效的誓約 id（綁定 + 已裝上的自選）——非騎士系統查詢用
+const hasOath = (id) => activeOaths.has(id);
+// 套用騎士的誓約（綁定 + 自選 loadout）。在 makePlayer 造好騎士後對騎士呼叫＝每場重套（欄位每場重建）；
+// 同時重建 activeOaths（騎士＝ roster[0]＝每場最先造，故扈從/戰鬥查 hasOath 時已就緒）。
 function applyOathLoadout(k) {
+  activeOaths = new Set();
   if (!k) return;
   k.oaths = [];
+  const apply = (id) => { const o = OATHS[id]; if (!o) return; if (o.mods) o.mods(k); k.oaths.push(id); activeOaths.add(id); };
   const b = boundOathFor(k.originId);
-  if (b && OATHS[b]) { if (OATHS[b].mods) OATHS[b].mods(k); k.oaths.push(b); }
+  if (b) apply(b);
+  for (const id of resolvedFreeOaths()) apply(id);
 }
 
 // 技能：目前全部佔位＝恢復生命，有 CD（僅手動可用）。多種＝倉庫換技能有取捨（量/CD 不同）。
@@ -820,7 +857,8 @@ CONFIG.meta = {
   honorPerKIA: 4,          // 每名我方陣亡的扣分（象徵性）
   kiaPenaltyCapFrac: 0.25, // 扣分上限＝該局總得分 × 此比例（確保扣分永遠只是小意思）
 };
-let runStats = { events: 0, kia: 0 };   // 本局累計：處理過的事件數 / 陣亡人數（initRun 重置）
+const freshRunStats = () => ({ events: 0, kia: 0, kills: 0, eliteKills: 0 });   // 本局累計：事件數 / 陣亡 / 擊殺 / 斬將（誓約解鎖用）
+let runStats = freshRunStats();   // 本局累計（initRun 重置）
 let lastHonorBreakdown = null;          // 上一局榮譽明細（run-end 畫面顯示）
 
 // 最終真相挑戰：通關 revealWins 次後揭示「這一切是洗腦養成」→ 主選單多「最終潛入」入口（鐵人/選種子）。
@@ -904,13 +942,15 @@ const FINALE_BAD_END = [
   '（不會有人記得你。）',
 ];
 const META_KEY = 'sleeper_meta_v1';
-let meta = { honor: 0, unlocked: { weapon: {}, equip: {}, archetype: {}, ability: {}, origin: {} }, upgrades: {}, stats: { runs: 0, wins: 0, missions: 0, winArch: {} }, revealSeen: false, finaleWon: false };
+let meta = { honor: 0, unlocked: { weapon: {}, equip: {}, archetype: {}, ability: {}, origin: {} }, upgrades: {}, unlockedOaths: {}, oathLoadout: [], stats: { runs: 0, wins: 0, missions: 0, winArch: {} }, revealSeen: false, finaleWon: false };
 function normalizeMeta() {
   if (!meta || typeof meta !== 'object') meta = {};
   if (meta.honor == null && meta.intel != null) { meta.honor = meta.intel; delete meta.intel; }   // 情報→榮譽 舊存檔遷移
   meta.honor = meta.honor || 0;
   meta.unlocked = meta.unlocked || {}; for (const k of ['weapon', 'equip', 'archetype', 'ability', 'origin']) meta.unlocked[k] = meta.unlocked[k] || {};
   meta.upgrades = meta.upgrades || {};   // meta 升級的等級表 { id: level }
+  meta.unlockedOaths = meta.unlockedOaths || {};   // 已解鎖的自選誓約 { id: true }
+  if (!Array.isArray(meta.oathLoadout)) meta.oathLoadout = [];   // 裝上的自選誓約 id（保序、持久）
   meta.stats = meta.stats || {}; meta.stats.winArch = meta.stats.winArch || {};
   meta.revealSeen = !!meta.revealSeen; meta.finaleWon = !!meta.finaleWon;
 }
@@ -950,6 +990,7 @@ const UPGRADES = [
   { id: 'luck',       name: '運氣', desc: '賭博失敗時 25% / 級 重擲一次', per: 0.25, max: 3, cost: 55 },
   { id: 'honor',      name: '榮光', desc: '榮譽獲得 +15% / 級',     per: 0.15, max: 4, cost: 60 },
   { id: 'deathSave',  name: '不屈', desc: '瀕死鎖 1 血 + 無敵 1.2s / 級（每 run 一次）', per: 1.2, max: 3, cost: 120 },
+  { id: 'oathSlots',  name: '誓約', desc: '自由誓約槽 +1 / 級（基礎 2 → 最多 5）', per: 1, max: 3, cost: 70 },
 ];
 const upgDef = (id) => UPGRADES.find(u => u.id === id);
 const upgLevel = (id) => (meta.upgrades && meta.upgrades[id]) || 0;
@@ -963,28 +1004,43 @@ function buyUpgrade(id) {
 }
 // 戰後獎勵（使用者定案：升等移除後把「清關榮譽」從 run-end 挪到打贏當下＝即時、看得見的一幕）。
 // **這是之後接 run 內經濟/道具的單一鉤子**——現在先發小額榮譽墊檔，改內容只改這裡。
+const honorMul = () => 1 + upgVal('honor') + (hasOath('plunder') ? CONFIG.oath.plunderHonor : 0);   // 榮譽加成＝meta「榮光」+ 誓約「掠奪」
 function grantCombatReward() {
-  const r = Math.round(CONFIG.meta.honorPerMission * (1 + upgVal('honor')));   // meta 升級「榮光」：榮譽獲得加成
+  const r = Math.round(CONFIG.meta.honorPerMission * honorMul());   // meta 升級「榮光」+ 誓約「掠奪」：榮譽獲得加成
   meta.honor += r; saveMeta();
   missionMsg = `戰功 · 榮譽 +${r}`;
   Hooks.fire('combatReward', { honor: r });
   return r;
 }
-function metaOnRunEnd(won) {   // run 結束結算：榮譽 + stats + 里程碑自動解鎖 + 存檔
+function checkOathUnlocks(rs) {   // run 結束查自選誓約解鎖（rs＝本局+生涯合併快照）；回傳本次新解鎖的 id 陣列
+  const newly = [];
+  for (const id of OATH_IDS) {
+    const o = OATHS[id];
+    if (o.kind !== 'free' || !o.unlock || meta.unlockedOaths[id]) continue;
+    if (o.unlock(rs)) { meta.unlockedOaths[id] = true; newly.push(id); }
+  }
+  return newly;
+}
+let lastOathUnlocks = [];   // 上一 run 新解鎖的自選誓約（RUNEND 顯示用）
+function metaOnRunEnd(won) {   // run 結束結算：榮譽 + stats + 里程碑/誓約自動解鎖 + 存檔
   meta.stats.runs = (meta.stats.runs || 0) + 1;
   const mi = (typeof missionIndex === 'number' ? missionIndex : 0);
   meta.stats.missions = (meta.stats.missions || 0) + mi;
   const M = CONFIG.meta, rs = runStats || { events: 0, kia: 0 };
+  meta.stats.eliteKills = (meta.stats.eliteKills || 0) + (rs.eliteKills || 0);   // 生涯斬將累計（誓約「復仇」解鎖用）
   const missionAwarded = M.honorPerMission * mi;        // 清關榮譽已在打贏當下即時發放（grantCombatReward），這裡不再重複計入 gross
   const winPart = won ? M.honorWin : 0;                  // 通關保底
   const eventPart = M.honorPerEvent * (rs.events || 0);  // 事件記錄加分
   const gross = winPart + eventPart;
   const rawPenalty = M.honorPerKIA * (rs.kia || 0);
   const penalty = Math.min(rawPenalty, Math.floor((missionAwarded + gross) * M.kiaPenaltyCapFrac));   // 封頂仍以「整局榮譽」為基準＝扣分幅度與舊版一致（總量不變）
-  const gain = Math.round(Math.max(0, gross - penalty) * (1 + upgVal('honor')));   // meta 升級「榮光」：run-end 榮譽也吃加成
+  const gain = Math.round(Math.max(0, gross - penalty) * honorMul());   // meta 升級「榮光」+ 誓約「掠奪」：run-end 榮譽也吃加成
   meta.honor += gain;
   lastHonorBreakdown = { mi, missionAwarded, winPart, eventPart, events: rs.events || 0, kia: rs.kia || 0, penalty, gain, won };
   if (won) { meta.stats.wins = (meta.stats.wins || 0) + 1; for (const r of (roster || [])) if (r && r.classId) meta.stats.winArch[r.classId] = (meta.stats.winArch[r.classId] || 0) + 1; }
+  const snap = { won: !!won, kills: rs.kills || 0, eliteKills: rs.eliteKills || 0, missions: mi, events: rs.events || 0, kia: rs.kia || 0,
+                 lifetimeElite: meta.stats.eliteKills || 0, lifetimeMissions: meta.stats.missions || 0, wins: meta.stats.wins || 0, runs: meta.stats.runs || 0 };
+  lastOathUnlocks = checkOathUnlocks(snap);
   checkMilestoneUnlocks(); saveMeta();
 }
 
@@ -2512,9 +2568,24 @@ function chooseOrigin(id) {
   k.allocatedAmmo = isInfiniteAmmo(k.weaponId) ? 0 : CONFIG.ammo.defaultAlloc;
   k.allocatedAmmo2 = isInfiniteAmmo(k.weaponId2) ? 0 : CONFIG.ammo.defaultAlloc;
   Hooks.fire('originChosen', { id, origin: O });
+  enterOathLoadout();   // 配誓約（出發前）：綁定誓約已定、這裡挑自選誓約裝進自由槽；按「出發」才真正開局
+  return true;
+}
+function enterOathLoadout() { scene = 'OATHS'; releasePointer(); }
+function departFromOrigin() {   // 配完誓約、按「出發」→ 本局真正開始
   if (CONFIG.introEnabled) startIntro();   // 選完出身＝敗騎自屍山醒來的序章（Esc 可跳過）
   else { scene = 'MAP'; releasePointer(); }
-  return true;
+}
+// 裝上/卸下一個自選誓約（run 外可改；裝上要檢查剩餘自由槽依 slotCost 夠不夠）
+function toggleOathEquip(id) {
+  const o = OATHS[id];
+  if (!o || o.kind !== 'free' || !oathUnlocked(id)) return false;
+  meta.oathLoadout = meta.oathLoadout || [];
+  const idx = meta.oathLoadout.indexOf(id);
+  if (idx >= 0) { meta.oathLoadout.splice(idx, 1); saveMeta(); return true; }   // 卸下
+  const used = resolvedFreeOaths().reduce((s, x) => s + (OATHS[x].slotCost || 1), 0);
+  if (used + (o.slotCost || 1) > oathFreeSlots()) return false;   // 槽不夠＝裝不上
+  meta.oathLoadout.push(id); saveMeta(); return true;
 }
 function initRun() {
   arenaMode = false;   // 離開近戰試作場
@@ -2522,7 +2593,7 @@ function initRun() {
   srandSeed(Math.floor(Math.random() * 0xFFFFFFFF));   // 本局非戰鬥 RNG 種子（之後全部可重現）
   runFlags = {}; pendingEvents = []; eventSeen = []; runMomentumMods = [];   // 戰役旗標/事件佇列/已見事件/跨戰鬥氣勢修正重置
   runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = ''; pendingRescueKnight = false;   // S3 護送 + 戰後橫幅 + A/B 幕別 + 救援旗標重置
-  runStats = { events: 0, kia: 0 };                     // 本局榮譽累計（事件數/陣亡數）重置
+  runStats = freshRunStats();                          // 本局榮譽累計（事件/陣亡/擊殺/斬將）重置
   // **開局只有騎士一個人**（使用者定案）：敗騎孤身上路，人手要在旅途中招募（事件/俘虜/潰兵）。
   // roster[0] 由 chooseOrigin 覆寫成騎士；不再開場就塞三名扈從。
   roster = [makeRecruit(new Set(), true)]; missionIndex = 0;   // roster[0]＝騎士，抽貴氣名
@@ -2803,7 +2874,7 @@ function enterArena(modeKey) {
   arenaWIdx = arenaWIdxOf(M.weapon);                     // 各場地的預設武器（近戰場＝劍、射擊場＝長弓）
   warehouse = warehouse || []; backpack = backpack || []; drops = [];
   ammoStock = ammoStock || {}; for (const id of WEAPON_IDS) if (ammoStock[id] == null) ammoStock[id] = CONFIG.ammo.stockStart;
-  runStats = { events: 0, kia: 0 };
+  runStats = freshRunStats();
   roster = arenaRoster();
   startMission();          // 沿用一般開場流程（建地圖衍生表/我方單位/相機），試作場地圖的 enemySpawns 為空
   arenaSpawn();            // 再放測試對象
@@ -4054,6 +4125,8 @@ function tickMelee(u, dt) {
   }
   return true;
 }
+// 輸出傷害倍率＝meta 升級「鋒銳」(dmgMul) × 誓約「無畏」(低血背水)；近接與遠程同一把尺。
+const outDmgMul = (u) => (u.dmgMul || 1) * ((u.berserk && u.hp < u.maxHp * u.berserk.frac) ? u.berserk.mul : 1);
 // 刀刃掃過的角度帶判定：只有「上一幀→本幀」之間掃過的角度算命中（再各放寬 bladeHalfDeg＝刀刃厚度）。
 // 距離吃 reach × 當下刀尖伸出比例；視線被牆擋則打不到。同一目標每次揮擊只吃一下。
 function meleeHitTest(u, s) {
@@ -4077,7 +4150,7 @@ function meleeHitTest(u, s) {
     s.hits.add(t); s.n++;
     const fromAng = angTo(t.pos, u.pos);                  // 目標→攻擊者＝來向（damageUnit 用來判繞背/格擋）
     const back = Math.abs(angDiff(fromAng, t.facing)) > Math.PI / 2;   // 從目標背面砍＝短劍背刺加成
-    let dmg = W.damage * (back ? (W.backstabMul || 1) : 1) * (u.dmgMul || 1);   // meta 升級：攻擊力加成
+    let dmg = W.damage * (back ? (W.backstabMul || 1) : 1) * outDmgMul(u);   // meta 升級「鋒銳」+ 誓約「無畏」
     if (u.faction !== 'player' && t.faction === 'player') dmg *= CONFIG.enemy.meleeDmgMul;   // 英雄 vs 群體：AI 近接對我方減傷
     if (isFriendlyHit(u.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;                      // 誤傷倍率
     const hp0 = t.hp, stag0 = t.staggerT || 0, swing0 = !!t.swing;
@@ -4176,7 +4249,7 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
     bullets.push({
       x: u.pos.x + Math.cos(angle) * (u.radius + 2), y: u.pos.y + Math.sin(angle) * (u.radius + 2),
       vx: Math.cos(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul, vy: Math.sin(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul,   // 碰撞是掃描式（不穿透），所以放慢彈速不會漏判
-      dmg: W.damage * dmgF * (u.dmgMul || 1), faction: u.faction, range: W.range, traveled: 0,   // meta 升級：攻擊力加成
+      dmg: W.damage * dmgF * outDmgMul(u), faction: u.faction, range: W.range, traveled: 0,   // meta 升級「鋒銳」+ 誓約「無畏」
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
       pierce: clamp((W.pierce || 0) + (u.pierceBonus || 0), 0, 1),   // 穿甲：對裝甲敵人的擋格率衰減（誓約「重弩/長驅」：pierceBonus +）
       pierceThru: u.magicPierce || 0,   // 貫穿：可穿過幾名敵人繼續飛（誓約「法脈」＝魔法彈直線貫穿）
@@ -4530,6 +4603,15 @@ function killUnit(u, killer) {
   }
   Hooks.fire('death', { u, killer: killer || null });
   if (killer) Hooks.fire('kill', { killer, victim: u, elite: !!(u.type && u.type.elite), boss: !!(u.type && u.type.boss) });
+  // 誓約解鎖統計 + 復仇之誓：我方擊殺敵人才計（序章/沙盒/試玩不算）
+  if (killer && killer.faction === 'player' && u.faction !== 'player' && !fromSandbox && !playtestMode && !introActive) {
+    runStats.kills = (runStats.kills || 0) + 1;
+    const elite = !!(u.type && (u.type.elite || u.type.boss));
+    if (elite) runStats.eliteKills = (runStats.eliteKills || 0) + 1;
+    if (elite && killer.id === KNIGHT_ID && hasOath('vengeance')) {   // 斬將 → 短暫全能+（沿用道具 buff 欄位）
+      const O = CONFIG.oath; killer.buffT = Math.max(killer.buffT || 0, O.vengeanceBuffT); killer.buffMove = O.vengeanceMove; killer.buffFire = O.vengeanceFire;
+    }
+  }
   spawnDeath(u.pos);
   if (u.faction !== 'player' && u.combatDeath) alertEnemiesNear(u.pos, CONFIG.hearing.death);   // 交戰中陣亡＝聲響驚動附近；潛行擊殺(未察覺者)＝無聲，潛行成立
   hitstop(CONFIG.juice.hitstopKill); addShakeAt(u.pos, CONFIG.juice.shakeKill);   // 擊殺：頓幀 + 較大震動
@@ -4795,7 +4877,8 @@ const unitWeight = (u) => (u.type && u.type.elite) ? CONFIG.morale.eliteWeight :
 // 測試要決定論時把 u.breakJitter 設 0 即可拿到純基準值。
 function breakPctOf(u) {
   const key = u.faction === 'player' ? u.classId : u.typeId;
-  const base = BREAK_PCT[key] != null ? BREAK_PCT[key] : 55;
+  let base = BREAK_PCT[key] != null ? BREAK_PCT[key] : 55;
+  if (u.faction === 'player' && hasOath('guardian')) base -= CONFIG.oath.guardianBreak;   // 誓約「守護」：扈從崩潰門檻更低＝更難潰逃
   if (u.breakJitter == null) u.breakJitter = (Math.random() * 2 - 1) * CONFIG.morale.breakJitterPct;
   return clamp(base + u.breakJitter, 5, 98);
 }
@@ -5573,7 +5656,7 @@ cv.addEventListener('click', () => {
     if (b && mouse.mx >= b.x && mouse.mx <= b.x + b.w && mouse.my >= b.y && mouse.my <= b.y + b.h) { editorOpen(); return; }
     const id = roadNodeAt(mouse.mx, mouse.my); if (id != null) selectNode(id);
   }
-  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR' || scene === 'ORIGIN' || scene === 'BLACKSMITH') restClick(mouse.mx, mouse.my);
+  else if (scene === 'REST' || scene === 'ARMORY' || scene === 'TUTOR' || scene === 'ORIGIN' || scene === 'OATHS' || scene === 'BLACKSMITH') restClick(mouse.mx, mouse.my);
   else if (scene === 'EVENT') eventClick(mouse.mx, mouse.my);
   else if (scene === 'RUNEND' || scene === 'RUNWIN') goMenu();
   else if (scene === 'MENU') menuClick(mouse.mx, mouse.my);
@@ -5685,6 +5768,12 @@ window.addEventListener('keydown', e => {
   }
   if (scene === 'BLACKSMITH') { if (k >= '1' && k <= '9') blacksmithPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') blacksmithLeave(); return; }
   if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(originList[parseInt(k, 10) - 1]); return; }
+  if (scene === 'OATHS') {   // 配誓約：數字鍵切換自選誓約、Enter/空白＝出發、Esc＝回出身
+    if (k === 'Enter' || k === ' ') { departFromOrigin(); return; }
+    if (k === 'Escape') { enterOrigin(); return; }
+    if (k >= '1' && k <= '9') { const id = oathPickList[parseInt(k, 10) - 1]; if (id) toggleOathEquip(id); return; }
+    return;
+  }
   if (scene === 'RUNEND' || scene === 'RUNWIN') { if (k === 'r') goMenu(); return; }
   if (scene === 'MENU') return;   // 主選單以滑鼠點選
   if (scene === 'HQ') { if (k === 'escape' || k === 'backspace') { goMenu(); e.preventDefault(); } return; }   // 總部：Esc/Backspace 回選單，其餘以滑鼠點選
@@ -5940,6 +6029,7 @@ function draw() {
   if (scene === 'TUTOR') { drawTutor(); return; }
   if (scene === 'BLACKSMITH') { drawBlacksmith(); return; }
   if (scene === 'ORIGIN') { drawOrigin(); return; }
+  if (scene === 'OATHS') { drawOathLoadout(); return; }
   if (scene === 'RUNEND') { drawRunEnd(); return; }
   if (scene === 'DEBRIEF') { drawDebrief(); return; }
   if (scene === 'RUNWIN') { drawRunWin(); return; }
@@ -7482,6 +7572,84 @@ function drawOrigin() {
   ctx.fillText('點選或按數字鍵 1–' + avail.length + '　·　扈從仍是沿途隨機招募，這一頁只決定你自己', cv.width / 2, y0 + avail.length * (bh + gap) + 22);
   ctx.textAlign = 'left';
 }
+let oathPickList = [];   // 配誓約畫面：可切換的自選誓約清單（鍵盤數字對應）
+function drawOathLoadout() {
+  restRects = []; oathPickList = [];
+  ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e8eef5'; ctx.font = 'bold 30px Consolas'; ctx.fillText('出發前 · 誓約', cv.width / 2, 58);
+  ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '13px Consolas';
+  ctx.fillText('綁定誓約是這位騎士的本質（不可卸）；自選誓約裝進自由槽——出發後即鎖定，不可更改。', cv.width / 2, 84);
+
+  const oid = originPick || (roster[KNIGHT_ID] && roster[KNIGHT_ID].originId);
+  const bid = boundOathFor(oid);
+  const cap = oathFreeSlots();
+  const equipped = resolvedFreeOaths();
+  const used = equipped.reduce((s, x) => s + (OATHS[x].slotCost || 1), 0);
+  const bx = cv.width / 2 - 470, bw = 940;
+  ctx.textAlign = 'left';
+
+  // 綁定誓約卡（金框）
+  let y = 104;
+  if (bid) {
+    const OB = OATHS[bid];
+    ctx.fillStyle = 'rgba(30,26,20,0.95)'; ctx.fillRect(bx, y, bw, 50);
+    ctx.lineWidth = 2; ctx.strokeStyle = '#caa15a'; ctx.strokeRect(bx, y, bw, 50);
+    ctx.font = 'bold 16px Consolas'; ctx.fillStyle = '#e8c877'; ctx.fillText('◈ 綁定 · ' + OB.name, bx + 16, y + 21);
+    ctx.font = '12px Consolas'; ctx.fillStyle = '#b9a888'; ctx.fillText(OB.desc.replace(/\*\*/g, ''), bx + 16, y + 40);
+    ctx.textAlign = 'right'; ctx.font = '11px Consolas'; ctx.fillStyle = '#8a7c64'; ctx.fillText('常駐 · 不佔自由槽', bx + bw - 14, y + 21); ctx.textAlign = 'left';
+  }
+
+  // 自由槽指示 + 槽格
+  y += 70;
+  ctx.font = 'bold 15px Consolas'; ctx.fillStyle = '#cfe0f0';
+  ctx.fillText('自由誓約槽　' + used + ' / ' + cap + (upgLevel('oathSlots') < 3 ? '　（可在「升級」提升上限，最多 5）' : ''), bx, y);
+  const sw = 150, sgap = 10;
+  for (let i = 0; i < cap; i++) {
+    const sx = bx + i * (sw + sgap), sy = y + 12, full = i < equipped.length;
+    ctx.fillStyle = full ? 'rgba(30,52,44,0.95)' : 'rgba(20,24,30,0.8)'; ctx.fillRect(sx, sy, sw, 30);
+    ctx.lineWidth = 1.6; ctx.strokeStyle = full ? '#5fcf9e' : 'rgba(120,130,145,0.4)'; ctx.strokeRect(sx, sy, sw, 30);
+    ctx.textAlign = 'center'; ctx.font = (full ? 'bold ' : '') + '13px Consolas'; ctx.fillStyle = full ? '#c8f0dd' : '#5c646f';
+    ctx.fillText(full ? OATHS[equipped[i]].name : '（空）', sx + sw / 2, sy + 20); ctx.textAlign = 'left';
+  }
+
+  // 自選誓約清單：已解鎖可切換（數字鍵），未解鎖灰顯示解鎖條件
+  y += 60;
+  ctx.font = 'bold 14px Consolas'; ctx.fillStyle = '#9fb3c8'; ctx.fillText('自選誓約', bx, y);
+  const freeIds = OATH_IDS.filter(id => OATHS[id].kind === 'free');
+  const rh = 46, rgap = 8; y += 12;
+  freeIds.forEach((id) => {
+    const O = OATHS[id], unlocked = oathUnlocked(id), on = (meta.oathLoadout || []).indexOf(id) >= 0;
+    const ry = y; y += rh + rgap;
+    ctx.fillStyle = on ? 'rgba(28,44,38,0.96)' : (unlocked ? 'rgba(24,30,40,0.96)' : 'rgba(16,19,24,0.9)');
+    ctx.fillRect(bx, ry, bw, rh);
+    ctx.lineWidth = 2; ctx.strokeStyle = on ? '#5fcf9e' : (unlocked ? 'rgba(120,150,190,0.5)' : 'rgba(90,98,110,0.35)'); ctx.strokeRect(bx, ry, bw, rh);
+    if (unlocked) {
+      oathPickList.push(id);
+      ctx.font = 'bold 14px Consolas'; ctx.fillStyle = on ? '#5fcf9e' : '#9fc0e0'; ctx.fillText('[' + oathPickList.length + ']', bx + 14, ry + 28);
+      ctx.font = 'bold 16px Consolas'; ctx.fillStyle = '#e8eef5'; ctx.fillText(O.name, bx + 54, ry + 22);
+      ctx.font = '12px Consolas'; ctx.fillStyle = '#9fb3c8'; ctx.fillText(O.desc.replace(/\*\*/g, ''), bx + 54, ry + 40);
+      ctx.textAlign = 'right'; ctx.font = 'bold 13px Consolas'; ctx.fillStyle = on ? '#5fcf9e' : '#6f7b89';
+      ctx.fillText(on ? '✓ 已裝備' : ((O.slotCost || 1) + ' 格 · 點選裝備'), bx + bw - 14, ry + 28); ctx.textAlign = 'left';
+      pushRect(bx, ry, bw, rh, () => toggleOathEquip(id));
+    } else {
+      ctx.font = 'bold 14px Consolas'; ctx.fillStyle = '#5c646f'; ctx.fillText('🔒', bx + 16, ry + 28);
+      ctx.font = 'bold 16px Consolas'; ctx.fillStyle = '#7b8492'; ctx.fillText(O.name, bx + 54, ry + 22);
+      ctx.font = '12px Consolas'; ctx.fillStyle = '#5c646f'; ctx.fillText('解鎖：' + (O.unlockHint || '—'), bx + 54, ry + 40);
+    }
+  });
+  if (!freeIds.some(oathUnlocked)) { ctx.fillStyle = 'rgba(180,190,205,0.45)'; ctx.font = '12px Consolas'; ctx.fillText('（尚無已解鎖的自選誓約——達成上面的條件即可解鎖。）', bx + 54, y + 4); }
+
+  // 出發按鈕
+  const dw = 240, dh = 44, dxb = cv.width / 2 - dw / 2, dyb = 662;
+  ctx.fillStyle = 'rgba(40,60,52,0.98)'; ctx.fillRect(dxb, dyb, dw, dh);
+  ctx.lineWidth = 2; ctx.strokeStyle = '#6fdfae'; ctx.strokeRect(dxb, dyb, dw, dh);
+  ctx.textAlign = 'center'; ctx.font = 'bold 18px Consolas'; ctx.fillStyle = '#d8ffee'; ctx.fillText('出發 ▸', cv.width / 2, dyb + 28);
+  pushRect(dxb, dyb, dw, dh, () => departFromOrigin());
+  ctx.fillStyle = 'rgba(205,214,224,0.4)'; ctx.font = '11px Consolas';
+  ctx.fillText('數字鍵切換誓約　·　Enter 出發　·　Esc 回出身', cv.width / 2, dyb + dh + 18);
+  ctx.textAlign = 'left';
+}
 function drawTutor() {
   restRects = [];
   ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -7712,6 +7880,12 @@ function drawHonorBreakdown(cx, y) {
   ctx.fillText(parts.join('　·　'), cx, y); y += 20;
   return y;
 }
+function drawOathUnlockNotice(cx, y) {   // run 結束若解鎖了新自選誓約，在結算下方報一行
+  if (!lastOathUnlocks || !lastOathUnlocks.length) return y;
+  ctx.fillStyle = '#e8c877'; ctx.font = 'bold 15px Consolas';
+  ctx.fillText('◈ 解鎖新誓約：' + lastOathUnlocks.map(id => (OATHS[id] ? OATHS[id].name : id)).join('、'), cx, y + 8);
+  return y + 22;
+}
 function drawRunEnd() {
   ctx.fillStyle = 'rgba(8,10,14,0.95)'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
@@ -7722,6 +7896,7 @@ function drawRunEnd() {
   ctx.fillStyle = '#9fb3c8'; ctx.font = '14px Consolas';
   ctx.fillText(lostFile ? '（撤離時遺物不在身上 = 歸途中斷）' : '（騎士倒下 = 歸途中斷）', cv.width / 2, cv.height / 2 - 16);
   let y = drawHonorBreakdown(cv.width / 2, cv.height / 2 + 24);
+  y = drawOathUnlockNotice(cv.width / 2, y + 16);
   ctx.fillStyle = '#cdd6e0'; ctx.font = '16px Consolas'; ctx.fillText('按 R / 點擊 重新開始一輪 run', cv.width / 2, y + 40);
   ctx.textAlign = 'left';
 }
@@ -7732,6 +7907,7 @@ function drawRunWin() {
   ctx.fillStyle = '#cdd6e0'; ctx.font = '18px Consolas'; ctx.fillText(`走完路線 — 清掉 ${missionIndex} 場戰鬥`, cv.width / 2, cv.height / 2 - 40);
   ctx.fillStyle = '#9fb'; ctx.font = '14px Consolas'; ctx.fillText(`生還陣容: ${(roster || []).map(r => r.name).join(', ')}`, cv.width / 2, cv.height / 2 - 16);
   let y = drawHonorBreakdown(cv.width / 2, cv.height / 2 + 24);
+  y = drawOathUnlockNotice(cv.width / 2, y + 16);
   ctx.fillStyle = '#cdd6e0'; ctx.font = '16px Consolas'; ctx.fillText('按 R / 點擊 重新開始一輪 run', cv.width / 2, y + 40);
   ctx.textAlign = 'left';
 }
@@ -8478,7 +8654,7 @@ function enterFinaleSetup() { finaleSeedBuf = ''; scene = 'FINALE'; releasePoint
 // 跳過序章直接進路線圖；走完整條＝真結局＋解 Siren，途中 run 失敗＝Bad End（皆回選單，無刪檔）。
 function startFinale(seedStr) {
   srandSeed((seedStr && seedStr.length) ? seedFromStr(seedStr) : Math.floor(Math.random() * 0xFFFFFFFF));
-  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = { events: 0, kia: 0 }; runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = '';
+  runFlags = {}; pendingEvents = []; eventSeen = []; runStats = freshRunStats(); runEscort = null; escortMsg = ''; missionMsg = ''; runAct = 1; actMsg = '';
   warehouse = []; backpack = []; drops = []; grantStartingGear();
   ammoStock = {}; for (const id of WEAPON_IDS) ammoStock[id] = WEAPONS[id].silent ? CONFIG.ammo.subsonicStart : CONFIG.ammo.stockStart;
   roster = baseRoster(); missionIndex = 0;
