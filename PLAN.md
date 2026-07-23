@@ -961,7 +961,11 @@ Phase 4 前的最後一項插隊調整。
 - 體質：堅韌(生命)/鎮定(體幹)/穩固(體幹恢復×)/耐力/不倦(耐力恢復×)/鋒銳(攻擊×)/疾行(移速×)/換手(swapT×)。
 - 戰技：暗殺(背刺/突襲 mult +)/潛蹤(腳步聲×)。
 - 特殊：榮光(榮譽獲得×，`grantCombatReward`＋`metaOnRunEnd` 都吃)／不屈(瀕死鎖 1 血＋無敵窗 `invulnT` 秒，走既有 `beforeDeath` 通道，每 run 一次 `runFlags.deathSaveUsed`)。
-HQ 商店改成兩區（升級格＋解鎖格）3 欄網格。**待下一批**：運氣(賭博重擲)、更多可解鎖出身（接 `KNIGHT_TEMPLATES`＝需先救過一遍才解鎖，且那些變體要定案成「事先設計好的樣板」而非隨機組合——另議）。數值全佔位、待玩測調。
+HQ（換皮成「升級」）改成兩區（升級格＋解鎖格）3 欄網格。**運氣**（賭博失敗 25%/級重擲一次，`gamble` 裡 `upgVal('luck')`）也做了。
+**可解鎖出身（前三個已做）**：`ORIGINS` 加 `spearknight/arbalist/mageknight`（`locked:true`）＝長槍/弩/術士(法杖)三種完整出身；
+入 `UNLOCKS`（`kind:'origin'`，**cost 先設 0 方便測試**）；`meta.unlocked.origin`；`originAvailable(id)`＝base 4 恆可選、locked 的要解鎖過；
+`drawOrigin` 濾成可選清單 + 數量多自動壓扁 + `originList`(鍵盤)；`chooseOrigin` 擋未解鎖。
+**待下一批**：把 cost 改真實值 + 「救過一次才出現」旗標（`meta.rescuedVariants`）；雙刃/鎚兩種新變體+出身。數值全佔位、待玩測調。
 
 - [ ] 路線圖節點與場景敘事改寫（焚村/林道/渡口/關隘；野營/鍛冶/路上遭遇）。
 - [ ] 主選單 / 總部(HQ) / 結局改寫為歸鄉・贖罪主題（移除原間諜「沉睡者」敘事、The Patriot 致敬等）。

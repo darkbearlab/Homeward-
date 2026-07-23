@@ -870,12 +870,12 @@ const FINALE_BAD_END = [
   '（不會有人記得你。）',
 ];
 const META_KEY = 'sleeper_meta_v1';
-let meta = { honor: 0, unlocked: { weapon: {}, equip: {}, archetype: {}, ability: {} }, upgrades: {}, stats: { runs: 0, wins: 0, missions: 0, winArch: {} }, revealSeen: false, finaleWon: false };
+let meta = { honor: 0, unlocked: { weapon: {}, equip: {}, archetype: {}, ability: {}, origin: {} }, upgrades: {}, stats: { runs: 0, wins: 0, missions: 0, winArch: {} }, revealSeen: false, finaleWon: false };
 function normalizeMeta() {
   if (!meta || typeof meta !== 'object') meta = {};
   if (meta.honor == null && meta.intel != null) { meta.honor = meta.intel; delete meta.intel; }   // 情報→榮譽 舊存檔遷移
   meta.honor = meta.honor || 0;
-  meta.unlocked = meta.unlocked || {}; for (const k of ['weapon', 'equip', 'archetype', 'ability']) meta.unlocked[k] = meta.unlocked[k] || {};
+  meta.unlocked = meta.unlocked || {}; for (const k of ['weapon', 'equip', 'archetype', 'ability', 'origin']) meta.unlocked[k] = meta.unlocked[k] || {};
   meta.upgrades = meta.upgrades || {};   // meta 升級的等級表 { id: level }
   meta.stats = meta.stats || {}; meta.stats.winArch = meta.stats.winArch || {};
   meta.revealSeen = !!meta.revealSeen; meta.finaleWon = !!meta.finaleWon;
@@ -888,6 +888,10 @@ const UNLOCKS = [   // 初始種子（之後慢慢加）。base 內容不列＝�
   { kind: 'weapon',  id: 'falchion', via: 'honor', cost: 60, name: '彎刀',   desc: '單手廣掃 cleave4，對付雜兵群' },
   { kind: 'ability', id: 'miracle',  via: 'milestone', cond: s => (s.wins || 0) >= 1, req: '通關 1 次', name: '戰地手術', desc: '大量瞬補、長 CD' },
   { kind: 'weapon',  id: 'knell',    via: 'finale', name: '喪鐘', desc: '雙手大劍，每一擊的鳴響全場聽得見（無法潛行）；解鎖後每場自動入倉庫' },
+  // 可解鎖出身（cost 先設 0 方便測試；日後接「救過一次才出現」的旗標 + 真實成本）
+  { kind: 'origin', id: 'spearknight', via: 'honor', cost: 0, name: '長槍騎士', desc: '解鎖為可選出身 · 長 reach 控距' },
+  { kind: 'origin', id: 'arbalist',   via: 'honor', cost: 0, name: '弩騎士',   desc: '解鎖為可選出身 · 破甲遠程' },
+  { kind: 'origin', id: 'mageknight', via: 'honor', cost: 0, name: '術士騎士', desc: '解鎖為可選出身 · 法杖魔法' },
 ];
 const unlockDef = (kind, id) => UNLOCKS.find(u => u.kind === kind && u.id === id);
 const isAvailable = (kind, id) => { const u = unlockDef(kind, id); return !u || !!(meta.unlocked[kind] && meta.unlocked[kind][id]); };   // 非解鎖品(base)永遠可用
@@ -2440,14 +2444,29 @@ const ORIGINS = {
              desc: '**開局就會火矢**（唯一一開始就有「習得」的出身）。高穿甲專治重裝，代價是甲最薄。',
              kit: { classId: 'knight', weaponId: 'sword', offId: 'buckler', armorId: 'gambeson',
                     weaponId2: 'crossbow', offId2: null, itemId: 'firebolt', abilityId: 'firebolt' } },
+  // 可解鎖出身（榮譽解鎖，locked＝解鎖前不出現在選單）。來自 B 面救援的騎士變體，做成完整出身。
+  spearknight: { name: '長槍', title: '長槍騎士', hue: 160, locked: true,
+             desc: '長槍。超長 reach 逼退、正面難近身——但攻擊弧窄，被貼身或群包就吃虧。',
+             kit: { classId: 'knight', weaponId: 'spear', offId: null, armorId: 'plate',
+                    weaponId2: 'dagger', offId2: 'buckler', itemId: 'tonic', abilityId: 'mend' } },
+  arbalist:  { name: '弩手', title: '弩騎士', hue: 45, locked: true,
+             desc: '十字弩。破甲重射、遠程壓制——但裝填慢、彈藥有限、近身最弱。',
+             kit: { classId: 'knight', weaponId: 'crossbow', offId: null, armorId: 'mail',
+                    weaponId2: 'sword', offId2: 'buckler', itemId: 'firepot', abilityId: 'mend' } },
+  mageknight:{ name: '術士', title: '法杖', hue: 250, locked: true,
+             desc: '法杖射魔法彈，彈藥無限、持續壓制——但甲最薄，被貼上就脆。',
+             kit: { classId: 'knight', weaponId: 'staff', offId: null, armorId: 'gambeson',
+                    weaponId2: 'knife', offId2: null, itemId: 'smokepot', abilityId: 'firebolt' } },
 };
 const ORIGIN_IDS = Object.keys(ORIGINS);
+const originAvailable = (id) => { const O = ORIGINS[id]; return !!O && (!O.locked || isAvailable('origin', id)); };   // base 4 恆可選；locked 的要榮譽解鎖過
 let originPick = null;   // 本局選的出身（顯示用；實際效果已寫進 roster[0]）
+let originList = ORIGIN_IDS.filter(originAvailable);   // 選單目前顯示的出身（drawOrigin 更新；鍵盤選擇讀它）
 function enterOrigin() { scene = 'ORIGIN'; releasePointer(); }
 // 選定出身 → 覆寫騎士的配裝 → 播序章 → 進路線圖
 function chooseOrigin(id) {
   const O = ORIGINS[id];
-  if (!O || scene !== 'ORIGIN') return false;
+  if (!O || scene !== 'ORIGIN' || !originAvailable(id)) return false;   // 未解鎖的出身不能選（鍵盤保底；選單本就不顯示）
   originPick = id;
   const k = roster[KNIGHT_ID];
   Object.assign(k, O.kit);
@@ -5626,7 +5645,7 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (scene === 'BLACKSMITH') { if (k >= '1' && k <= '9') blacksmithPick(parseInt(k, 10) - 1); else if (k === 'escape' || k === 'enter') blacksmithLeave(); return; }
-  if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(ORIGIN_IDS[parseInt(k, 10) - 1]); return; }
+  if (scene === 'ORIGIN') { if (k >= '1' && k <= '9') chooseOrigin(originList[parseInt(k, 10) - 1]); return; }
   if (scene === 'RUNEND' || scene === 'RUNWIN') { if (k === 'r') goMenu(); return; }
   if (scene === 'MENU') return;   // 主選單以滑鼠點選
   if (scene === 'HQ') { if (k === 'escape' || k === 'backspace') { goMenu(); e.preventDefault(); } return; }   // 總部：Esc/Backspace 回選單，其餘以滑鼠點選
@@ -7379,10 +7398,14 @@ function drawOrigin() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#e8eef5'; ctx.font = 'bold 30px Consolas'; ctx.fillText('你是什麼樣的騎士', cv.width / 2, 74);
   ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '14px Consolas';
-  ctx.fillText('選一套開局配裝——這決定的是打法，不是強弱。四套各有一個明確的弱點。', cv.width / 2, 100);
+  ctx.fillText('選一套開局配裝——這決定的是打法，不是強弱。各有一個明確的弱點。', cv.width / 2, 100);
 
-  const bw = 940, bh = 96, gap = 12, y0 = 138, bx = cv.width / 2 - bw / 2;
-  ORIGIN_IDS.forEach((id, i) => {
+  const avail = ORIGIN_IDS.filter(originAvailable);   // base 4 + 已解鎖；未解鎖的不顯示
+  originList = avail;
+  const bw = 940, gap = 12, y0 = 138, bx = cv.width / 2 - bw / 2;
+  const bh = Math.max(56, Math.min(96, Math.floor((654 - y0) / Math.max(1, avail.length)) - gap));   // 數量多就自動壓扁
+  const showSlots = bh >= 84;
+  avail.forEach((id, i) => {
     const O = ORIGINS[id], y = y0 + i * (bh + gap);
     const col = hsl(O.hue, 62, 66);
     ctx.fillStyle = 'rgba(24,30,40,0.97)'; ctx.fillRect(bx, y, bw, bh);
@@ -7397,16 +7420,18 @@ function drawOrigin() {
     const wName = (w) => (w && WEAPONS[w] ? WEAPONS[w].name : '—');
     const oName = (o) => (o && OFFHANDS[o] ? OFFHANDS[o].name : '空手');
     const aName = (a) => (a && ARTS[a] ? ARTS[a].name : '—');
-    ctx.font = '11px Consolas'; ctx.fillStyle = '#7f8b99';
-    ctx.fillText(
-      `槽1 ${wName(K.weaponId)}＋${oName(K.offId)}　·　槽2 ${wName(K.weaponId2)}＋${oName(K.offId2)}　·　` +
-      `槽3 卷軸 ${aName(K.itemId)}　·　槽4 習得 ${aName(K.abilityId)}　·　甲 ${(ARMORS[K.armorId] || ARMORS.none).name}`,
-      bx + 56, y + 78);
+    if (showSlots) {
+      ctx.font = '11px Consolas'; ctx.fillStyle = '#7f8b99';
+      ctx.fillText(
+        `槽1 ${wName(K.weaponId)}＋${oName(K.offId)}　·　槽2 ${wName(K.weaponId2)}＋${oName(K.offId2)}　·　` +
+        `槽3 卷軸 ${aName(K.itemId)}　·　槽4 習得 ${aName(K.abilityId)}　·　甲 ${(ARMORS[K.armorId] || ARMORS.none).name}`,
+        bx + 56, y + 78);
+    }
     pushRect(bx, y, bw, bh, () => chooseOrigin(id));
   });
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(205,214,224,0.45)'; ctx.font = '11px Consolas';
-  ctx.fillText('點選或按數字鍵 1–4　·　扈從仍是沿途隨機招募，這一頁只決定你自己', cv.width / 2, y0 + ORIGIN_IDS.length * (bh + gap) + 22);
+  ctx.fillText('點選或按數字鍵 1–' + avail.length + '　·　扈從仍是沿途隨機招募，這一頁只決定你自己', cv.width / 2, y0 + avail.length * (bh + gap) + 22);
   ctx.textAlign = 'left';
 }
 function drawTutor() {
@@ -8354,7 +8379,7 @@ function drawHQ() {
   const afterUp = 164 + Math.ceil(UPGRADES.length / cols) * (ch + gap) + 10;
   // ── 內容解鎖（放進獎勵池）──
   ctx.textAlign = 'center'; ctx.fillStyle = '#7fd0e0'; ctx.font = 'bold 15px Consolas'; ctx.fillText('◆ 內容解鎖（放進獎勵池 · 局內仍隨機取得）', cv.width / 2, afterUp + 2);
-  const kindL = { weapon: '武器', equip: '裝備', archetype: '幹員', ability: '技能', item: '道具' };
+  const kindL = { weapon: '武器', equip: '裝備', archetype: '幹員', ability: '技能', item: '道具', origin: '出身' };
   UNLOCKS.forEach((u, i) => hqUnlockCell(u, kindL, gx + (i % cols) * (cw + gap), afterUp + 14 + Math.floor(i / cols) * (ch + gap), cw, ch));
   let y = afterUp + 14 + Math.ceil(Math.max(1, UNLOCKS.length) / cols) * (ch + gap);
   if (!UNLOCKS.length) { ctx.fillStyle = '#6a727c'; ctx.font = '13px Consolas'; ctx.fillText('（目前沒有可解鎖項目，內容陸續增加）', cv.width / 2, afterUp + 44); }
