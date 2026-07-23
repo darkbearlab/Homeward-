@@ -7851,7 +7851,7 @@ function drawRest() {
   ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
   equipSlots = []; whCells = [];
   // 版面：左＝隊伍列 + 底部動作列；右＝騎士配裝面板（上半裝備 / 下半倉庫）＝PoE 風
-  const PANEL_W = 380, PANEL_X = cv.width - PANEL_W - 20, leftW = Math.min(PANEL_X - 64, 460), leftCx = 32 + leftW / 2;
+  const PANEL_W = 380, PANEL_X = cv.width - PANEL_W - 20, leftW = Math.min(PANEL_X - 64, 460), leftCx = PANEL_X / 2;   // 動作列/提示置中於整個左區（不是被縮限的隊伍列寬）
   // 標題 + 戰報（左上）
   ctx.textAlign = 'left'; ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 24px Consolas'; ctx.fillText('REST · 休息關', 32, 44);
   if (lastSummary) {
