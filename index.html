@@ -7975,7 +7975,7 @@ function drawDebrief() {
   const d = debrief || { reward: 0, joined: [], survived: [], dead: [] };
   ctx.fillStyle = 'rgba(8,12,16,0.96)'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#8fe3a0'; ctx.font = 'bold 40px Consolas'; ctx.fillText('戰 · 罷', cv.width / 2, 130);
+  ctx.fillStyle = '#8fe3a0'; ctx.font = 'bold 40px Consolas'; ctx.fillText('撤離成功', cv.width / 2, 130);
   ctx.fillStyle = '#ffd27a'; ctx.font = 'bold 22px Consolas'; ctx.fillText('戰功 · 榮譽 +' + d.reward, cv.width / 2, 176);
   // 三欄：加入（綠）/ 生還（白）/ 戰死（紅）
   const cols = [
