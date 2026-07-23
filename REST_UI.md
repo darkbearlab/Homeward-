@@ -87,7 +87,14 @@
 > 風險：這是本次最深的改動（動到 roster 配裝資料模型 + 存檔）。**建議排成 Phase 0 先做、先讓舊 2 格擴成 4 格能用**，再進 UI 重排。平衡（4 個自由位是否過強）待玩測。
 
 ## 9. 分階段實作
-0. **擴充自由位 2 → 4（Phase 0，見 §8a）**：roster 配裝資料模型 + `slots`/`SLOT_COUNT` + 出身 kit + HUD 4 格 + 戰鬥鍵 `1~4`。先讓「4 個自由位」在現有 UI 下能用、能存檔、能跨關。
+0. ✅ **擴充自由位（Phase 0，已做）**：引擎支援任意數（`CONFIG.freeSlots={base:2,max:4}`）、**開局仍 2、靠解鎖成長**。
+   - `knightFreeSlots()`＝`base + upgLevel('freeSlots')` 夾在 max；`memberFreeSlots(i)`（扈從恆 base）；`SLOT_COUNT=2+max`。
+   - 解鎖channel：meta 升級 **「行囊」**（+1/級、max 2、cost 80）。（日後也可綁誓約——`knightFreeSlots` 留擴充點。）
+   - 儲存：自由位 0/1＝舊 `itemId`/`abilityId`（**零改動**）；2+＝roster 新欄位 `freeExtra[]`（通用載具 {kind,id,count}）。
+   - `makePlayer` 依 `memberFreeSlots(i)` 造 2+N 格（`makeFreeSlot`）；`rosterFromPlayer` 帶回 `freeExtra` 跨關保留。
+   - 填/卸：`equipFreeExtraFromWarehouse` / `unequipFreeExtra`（Phase 1 的 PoE 面板會直接用）。
+   - 戰鬥鍵：**數字鍵 `1~N`＝施展第 N 個自由位**；退役 1/2-切裝與空白鍵；換裝＝滾輪/X。HUD 底部提示已更新。
+   - **注意**：目前「填自由位 2+」只有資料 API，**還沒接進 UI**——所以買了「行囊」會多出空的自由位，要等 Phase 1 的面板才填得進去（引擎已就緒，headless 測過）。
 1. **右側面板骨架**：`drawKnightPanel`（裝備上半 + 倉庫下半），先用點選（既有 equip 函式）驗證資料流與型別守門。移除扈從配裝卡、加只讀隊伍列。
 2. **拖曳輸入**：休息房接 mousedown/move/up + ghost + 落點型別判定 → 呼叫 equip/unequip；雙擊快速裝備；退役 `restSel`。
 3. **戰鬥操作收尾**：滾輪換裝（維持）、`X` 別名；退役 1/2-切裝與空白；HUD 鍵位提示定案。
