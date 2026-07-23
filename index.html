@@ -4336,6 +4336,9 @@ function tickAmmo(u, dt) {
    數字鍵 1~N 才是自由位施展的主路（PoE 對齊，見 keydown）。空白鍵已退役。
    保留兩條各自實作的路徑等於保留兩份 bug——舊版就是這樣搞出「兩個習得的術共用 CD」的。 */
 const SLOT_SCROLL = 2, SLOT_LEARNED = 3;   // 自由位 0/1 的槽位索引（unit slot 2/3）；槽位本身可放任一載具
+// 預留：空白鍵＝綁定誓約的「主動技能」觸發鍵。未來某些綁定（預設）誓約會給騎士一個可施展的技能，掛在這裡。
+// 目前沒有任何誓約提供主動技能＝no-op（回 false，不搶操作）。實作時：讀 knight 的綁定誓約 activeSkill → 施展 → 回 true。
+function useOathSkill(u) { return false; }
 function useAbility(u) { return castArt(u, SLOT_LEARNED); }
 function useItem(u) { return castArt(u, SLOT_SCROLL); }
 // 手榴彈：朝瞄準方向「丟出去」一顆會飛的手榴彈→落點才 360° 炸開散射一批彈丸（不算爆破半徑，威力＝被幾顆打中＝中心密/遠處稀，自然衰減）。
@@ -5844,6 +5847,7 @@ window.addEventListener('keydown', e => {
   // 數字鍵 1~N＝施展第 N 個自由位（道具/習得）＝PoE 對齊（使用者定案）；換武器組改用滾輪/X，數字鍵不再切裝
   if (k >= '1' && k <= '9') { const kn = knight(); if (kn && kn.state === 'CONTROLLED') { const fi = parseInt(k, 10) - 1; if (fi < memberFreeSlots(KNIGHT_ID)) { seizeIfEscorting(); useFreeSlot(kn, 2 + fi); e.preventDefault(); } } }
   if (k === 'h') { if (e.shiftKey) extractAll(); else toggleExtract(); }                  // H 騎士自走撤離 / Shift+H 命令扈從先行撤離
+  if (k === ' ') { if (controlledId != null && useOathSkill(players[controlledId])) e.preventDefault(); }   // 預留鍵：綁定誓約的主動技能（目前 no-op；未實作前不吃事件）
   if (k === 'r') { seizeIfEscorting(); if (controlledId != null) startReload(players[controlledId]); } // 換彈；護送中→奪回
   if (k === 'x') { seizeIfEscorting(); if (controlledId != null) swapWeapon(players[controlledId]); }   // 換槍(主↔副)；護送中→奪回
   if (k === 'c') { seizeIfEscorting(); if (controlledId != null) useItem(players[controlledId]); }     // 道具(原 Q)；護送中→奪回
