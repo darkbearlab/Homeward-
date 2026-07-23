@@ -125,6 +125,16 @@ const CONFIG = {
   // 地形 / 互動（門、按鈕、低矮牆）
   interactRadius: 40,             // 互動(開關門/按鈕)距離；門以「到門線段最近點」量距，整扇門寬都好按
   enemyHearRadius: 320,           // 玩家開火驚動半徑（半徑內 IDLE 敵人 → ENGAGED；不論命中）
+  // 聲音→敵人聽覺（皆＝半徑內 IDLE 敵人轉 ENGAGED）。**數值先佔位、待實測調**。
+  hearing: {
+    hit: 170,        // 命中的聲響半徑（活著挨打/兵刃相交＝被聽見；潛行一擊斃命對未察覺者＝無聲、不在此列）
+    death: 260,      // 交戰中陣亡的聲響（非交戰死＝潛行擊殺，不驚動＝潛行成立）
+    callHelp: 240,   // 交戰的敵人「求援」半徑（附近同陣營也轉交戰；每人只喊一次，避免全圖連鎖）
+    stepBase: 24,    // 步行聲基礎半徑
+    stepPerSpeed: 0.32, // 每點移速加的半徑（越快越響）
+    sprintMul: 1.9,  // 衝刺額外倍率（明顯更響）
+    stepInterval: 0.36, // 每幾秒一步（發一次聲）；衝刺更頻繁
+  },
   // 低矮牆＝掩體：玩家穿越減速、敵人視為實體繞行、不擋視線、子彈「遠距機率擋／貼牆可越射」
   lowWall: { slow: 0.3, touchR: 12, closeRange: 90, blockChance: 0.55 },
   // 牆體厚度（px，全域固定）：渲染描邊寬＝此值；子彈/視線阻擋以「離中心線 ≤ 半厚」判定（撞渲染牆面而非中心線）。
@@ -4336,10 +4346,11 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   let flanked = (fromAng != null) && Math.abs(angDiff(fromAng, u.facing)) > coneHalf;   // 錐外＝繞背
   if (blocked) flanked = false;                                                            // 擋下來的那一擊不算繞背
   const surprise = (u.faction !== 'player' && u.state === 'IDLE');                          // 閒置 AI 被突襲（任一 AI 陣營）
+  u.combatDeath = !surprise;   // 這一擊命中時他「本來就在交戰」＝若因此死＝交戰陣亡(有聲)；反之＝潛行擊殺(無聲)。見 killUnit
   const mult = flanked ? CONFIG.flank.flankMult : (surprise ? CONFIG.flank.surpriseMult : 1);  // 取較高、不相乘
   if (u.faction !== 'player') {   // 任一 AI 陣營被打（不論後續有沒有被甲彈開）
     u.state = 'ENGAGED';   // 被攻擊（即使被甲擋下）也進入交戰（latch）
-    if (fromAng != null) registerHitThreat(u, fromAng);   // 被擊中→把「來向」當局部脅威傳給：本人＋看得到本人的敵＋近隣（解側翼魚貫＝後續的人出來就朝來向）
+    if (fromAng != null && !surprise) registerHitThreat(u, fromAng);   // 被擊中→把「來向」當局部脅威傳給：本人＋看得到本人的敵＋近隣（解側翼魚貫）。**突襲未察覺者不傳＝潛行擊殺不驚動同袍**
   }
   /* ---- 裝甲：機率「整發擋下」非穿甲攻擊（繞背無視）。有效擋格率 = armor × (1 − pierce)。
      **擋下 ≠ 沒事**：刀砍在板甲上不會流血，但力道全部變成衝擊 → 體幹傷害改為 ×armorPoiseMul（>1）。
@@ -4397,6 +4408,8 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const pa = (fromAng != null) ? fromAng + Math.PI : u.facing;        // 子彈推進方向（背向射手）
   u.flinchX = Math.cos(pa) * CONFIG.juice.flinch; u.flinchY = Math.sin(pa) * CONFIG.juice.flinch;   // 後仰（繪製偏移）
   spawnBlood(u.pos, pa); pushDecal(u.pos.x, u.pos.y, 3 + Math.random() * 3, 'rgba(122,20,28,0.5)');  // 血霧 + 地上血漬
+  // 交戰聲：命中會被聽見（驚動附近 IDLE 敵）——但「潛行一擊斃命(對未察覺者)」＝無聲擊殺(hp<=0 那條由 killUnit 依 combatDeath 判定)。
+  if (opts && opts.attacker && u.hp > 0) alertEnemiesNear(u.pos, CONFIG.hearing.hit);   // 活著挨打/兵刃相交＝有聲
   if (u.hp <= 0) killUnit(u, (opts && opts.attacker) || null);
   return blocked;   // 近接判定用：true＝被盾格擋下（決定火花顏色/頓幀種類）
 }
@@ -4420,6 +4433,7 @@ function killUnit(u, killer) {
   Hooks.fire('death', { u, killer: killer || null });
   if (killer) Hooks.fire('kill', { killer, victim: u, elite: !!(u.type && u.type.elite), boss: !!(u.type && u.type.boss) });
   spawnDeath(u.pos);
+  if (u.faction !== 'player' && u.combatDeath) alertEnemiesNear(u.pos, CONFIG.hearing.death);   // 交戰中陣亡＝聲響驚動附近；潛行擊殺(未察覺者)＝無聲，潛行成立
   hitstop(CONFIG.juice.hitstopKill); addShakeAt(u.pos, CONFIG.juice.shakeKill);   // 擊殺：頓幀 + 較大震動
   pushDecal(u.pos.x, u.pos.y, 8 + Math.random() * 3, 'rgba(92,15,22,0.5)');       // 死亡血池
   corpses.push({ x: u.pos.x, y: u.pos.y, enemy: u.faction !== 'player' });   // 地上留陣亡叉叉（任一 AI 陣營＝敵屍）
@@ -5187,6 +5201,9 @@ function huntStep(e, dt) {   // 沒有已知目標：有焦點區→清查；否
 
 function enemyTick(e, dt) {
   if (e.introFrozen) return;    // 序章：文字卡結束前，搜刮的敵兵不行動、不偵測（腳本化開打）
+  // 交戰＝自主求援：一進入交戰就朝四周喊一聲（附近同陣營 IDLE 也轉交戰）。每人只喊一次＝不會全圖無限連鎖，
+  // 但一支巡邏隊會一起警覺、聚過來（＝「叫一個就來一群」）。喊聲半徑有限，隔開的另一群不會被牽動。
+  if (e.state === 'ENGAGED' && !e.calledHelp && !e.dead) { e.calledHelp = true; alertEnemiesNear(e.pos, CONFIG.hearing.callHelp); }
   if (e.staggerT > 0) return;   // 硬直（被戰鎚打中/招架失敗）：完全不行動
   if (e.dummy) return;          // 訓練假人（近戰試作場）：只挨打，不思考
   // 士氣潰逃：丟下戰鬥往入口方向跑（不還手）。**這是「孤騎對軍團」的解**——
@@ -5722,6 +5739,9 @@ function update(dt) {
           const l = Math.hypot(mx, my) || 1;
           const spd = spdOf(u) * (u.sprinting ? sprintMult(u) : 1) * lowWallSpeedMult(u.pos) * (u.moveMul || 1) * (u.buffMove || 1) * swingMoveMul(u);  // 低矮牆減速 + 裝備/道具 + 被動 + 揮擊/舉盾
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
+          // 步行聲：每 stepInterval 秒發一次，半徑隨速度、衝刺更響更頻繁 → 驚動附近 IDLE 敵（走路可潛近、衝刺會被聽見）。
+          u.stepT = (u.stepT || 0) - dt;
+          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1); alertEnemiesNear(u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
       }
