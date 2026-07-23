@@ -7275,6 +7275,30 @@ function drawAllyCard(p, x, y, w, h) {
   drawCardHitFrame(p, x, y, w, h, sh.f);
   ctx.textAlign = 'left';
 }
+// 自由位鍵位條（騎士卡底部）：每個自由位一格＝鍵號 1~N + 名稱 + 狀態（習得＝CD / 道具＝次數）。
+// 直接讀 u.slots 的自由位（slots[2..]），與數字鍵 1~N 一一對應（PoE 對齊）。
+function drawFreeSlotBar(p, bx, y, bw) {
+  const free = (p.slots || []).filter(s => s && s.kind === 'free');
+  const n = free.length; if (!n) return;
+  const gap = 4, cw = (bw - gap * (n - 1)) / n;
+  for (let fi = 0; fi < n; fi++) {
+    const sl = free[fi], cx = bx + fi * (cw + gap);
+    const A = (sl && sl.id) ? artOf(sl.id) : null, isItem = sl && sl.type === 'item';
+    const ready = A && (isItem ? (sl.count > 0) : (sl.cd <= 0));
+    ctx.fillStyle = ready ? 'rgba(36,50,42,0.92)' : 'rgba(24,28,36,0.85)'; ctx.fillRect(cx, y, cw, 16);
+    ctx.lineWidth = 1; ctx.strokeStyle = ready ? 'rgba(120,200,160,0.6)' : 'rgba(90,100,110,0.4)'; ctx.strokeRect(cx, y, cw, 16);
+    ctx.textAlign = 'left'; ctx.font = 'bold 9px Consolas'; ctx.fillStyle = A ? (ready ? '#9fe0b0' : '#8a939e') : '#4a525c';
+    ctx.fillText(String(fi + 1), cx + 3, y + 11);
+    ctx.font = '9px Consolas'; ctx.fillStyle = A ? (ready ? '#dbe8f5' : '#828a94') : '#4a525c';
+    ctx.fillText(A ? A.name : '—', cx + 12, y + 11);
+    if (A) {
+      ctx.textAlign = 'right'; ctx.font = '8px Consolas';
+      if (isItem) { ctx.fillStyle = sl.count > 0 ? '#ffd27d' : '#6a727c'; ctx.fillText('×' + (sl.count || 0), cx + cw - 3, y + 11); }
+      else { ctx.fillStyle = sl.cd > 0 ? '#7fa8ff' : '#5fd0c0'; ctx.fillText(sl.cd > 0 ? sl.cd.toFixed(1) : '✓', cx + cw - 3, y + 11); }
+    }
+    ctx.textAlign = 'left';
+  }
+}
 function drawCard(p, x, y, w, h, i) {
   const ctrl = (p.id === KNIGHT_ID);   // HOMEWARD：卡片高亮＝騎士本人（不再是「當前附身對象」）
   const inactive = (p.state === 'DEAD' || p.state === 'EXTRACTED');
@@ -7329,26 +7353,14 @@ function drawCard(p, x, y, w, h, i) {
     ctx.fillStyle = inactive ? '#6a727c' : (p.ammoInMag <= 5 ? '#ff7d7d' : '#cdd6e0');
     ctx.fillText(`${p.ammoInMag}/${p.magazine || W.magazine} (${p.ammoReserve})`, x + w - pad, y + 59);
   }
-  // 裝備（持續）/ 道具（一次性，按 Q；用過或無＝灰）右上小字
+  // 裝備（持續被動）右上小字（自由位改到下方鍵位條）
   if (!inactive) {
     ctx.textAlign = 'right'; ctx.font = '8px Consolas';
     ctx.fillStyle = p.equipId ? '#9fd0e0' : '#4a525c'; ctx.fillText('🛡' + (p.equipId ? EQUIPMENT[p.equipId].name : '—'), x + w - pad, y + 27);
-    ctx.fillStyle = (p.itemId && p.itemCount > 0) ? '#ffd27d' : '#4a525c'; ctx.fillText('C ' + (p.itemId && p.itemCount > 0 ? ITEMS[p.itemId].name + ' ×' + p.itemCount : (p.itemId ? '用完' : '—')), x + w - pad, y + 38);
     ctx.textAlign = 'left';
   }
-
-  // 技能 + 冷卻
-  ctx.textAlign = 'left'; ctx.font = '11px Consolas';
-  ctx.fillStyle = inactive ? '#6a727c' : '#cdd6e0';
-  ctx.fillText(`SK:${p.ability ? p.ability.name : '—'}`, bx, y + 76);
-  if (p.ability && !inactive) {
-    const sbw = 64, sbx = x + w - pad - sbw, sby = y + 69;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(sbx, sby, sbw, 8);
-    const cdFrac = 1 - clamp(p.abilityCd / p.ability.cooldown, 0, 1);
-    ctx.fillStyle = p.abilityCd > 0 ? '#5a7fb0' : '#5fd0c0'; ctx.fillRect(sbx, sby, sbw * cdFrac, 8);
-    ctx.textAlign = 'right'; ctx.font = '8px Consolas'; ctx.fillStyle = '#e8eef5';
-    ctx.fillText(p.abilityCd > 0 ? p.abilityCd.toFixed(1) + 's' : 'READY', x + w - pad - 2, sby + 7);
-  }
+  // 自由位鍵位條（1~N＝道具/習得；鍵號直接對數字鍵）
+  if (!inactive) drawFreeSlotBar(p, bx, y + 70, bw);
   drawCardHitFrame(p, x, y, w, h, sh.f);
   ctx.textAlign = 'left';
 }
