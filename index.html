@@ -909,6 +909,7 @@ const UPGRADES = [
   { id: 'swap',       name: '換手', desc: '武器切換加速（×成本）',   per: 0.22, max: 3, cost: 40 },
   { id: 'backstab',   name: '暗殺', desc: '背刺/突襲傷害 +0.4 倍 / 級', per: 0.4, max: 4, cost: 55 },
   { id: 'stealth',    name: '潛蹤', desc: '腳步聲 −15% / 級',       per: 0.15, max: 4, cost: 50 },
+  { id: 'luck',       name: '運氣', desc: '賭博失敗時 25% / 級 重擲一次', per: 0.25, max: 3, cost: 55 },
   { id: 'honor',      name: '榮光', desc: '榮譽獲得 +15% / 級',     per: 0.15, max: 4, cost: 60 },
   { id: 'deathSave',  name: '不屈', desc: '瀕死鎖 1 血 + 無敵 1.2s / 級（每 run 一次）', per: 1.2, max: 3, cost: 120 },
 ];
@@ -3106,7 +3107,11 @@ function applyEventOutcome(o, mi) {
     case 'recruit': { if (typeof restDoAwaken === 'function') { /* 直接加一名 */ } const rec = makeRecruit(new Set(roster.map(r => r.name))); if (typeof autoEquipFromWarehouse === 'function') autoEquipFromWarehouse(rec); roster.push(rec); return `${rec.name} 加入隊伍`; }
     case 'relic': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的拜師禮'; paid = `（付出 ${g}）`; } const nm = teachArt(mi); return nm ? `隱士傳授「${nm}」${paid}（入倉庫，休息關可配裝）` : '隱士已無可傳授的術'; }
     case 'trade': { let paid = ''; if (o.cost === 'gear') { const g = takeGear(); if (!g) return '沒有可付的代價'; paid = `付出 ${g}，`; } return paid + applyEventOutcome(o.gain, mi); }
-    case 'gamble': { const hit = srand() < (o.p || 0.5); const inner = applyEventOutcome(hit ? o.win : o.lose, mi); return inner == null ? null : (hit ? '成功！' : '失手！') + inner; }   // inner 為 null（combat/rest 換場）＝整條也回 null，讓 eventPick 乾淨離場（不會拼成「失手！null」）
+    case 'gamble': {
+      let hit = srand() < (o.p || 0.5);
+      if (!hit && upgVal('luck') > 0 && srand() < upgVal('luck')) hit = srand() < (o.p || 0.5);   // meta 升級「運氣」：失敗時有機率重擲一次（不改機率、給第二次機會）
+      const inner = applyEventOutcome(hit ? o.win : o.lose, mi); return inner == null ? null : (hit ? '成功！' : '失手！') + inner;   // inner 為 null（combat/rest 換場）＝整條也回 null，讓 eventPick 乾淨離場（不會拼成「失手！null」）
+    }
     case 'momentum': { addRunMomentumMod({ source: o.source || 'event', amount: o.amount || 0, lifetime: o.lifetime || 'oneBattle', witnesses: o.witnesses, weaponId: o.weaponId }); return o.amount >= 0 ? '士氣為之一振' : '士氣蒙上陰影'; }   // S1：事件掛一條跨戰鬥氣勢修正
     case 'witchPact': {   // 女巫的交易：獻祭一名手下（mi）→ 巫紋強化騎士主手 + untilGone 詛咒 + 有些人憤而離去
       if (mi == null || mi === KNIGHT_ID || !roster[mi]) return '沒有可獻祭的人';
@@ -8254,7 +8259,7 @@ function drawMenu() {
     { label: '⚔ 試作場', desc: 'Phase 1 手感開發（近戰 / 射擊；開機預設）', fn: () => enterArenaSelect() },
     { label: '戰役', desc: '序章 → 路線圖 run', fn: () => initRun() },
     { label: '自由戰鬥', desc: '自選小隊 + 地圖，打一場', fn: () => enterSandbox() },
-    { label: '總部', desc: '花榮譽解鎖內容 · 看戰況進度', fn: () => enterHQ() },
+    { label: '升級', desc: '花榮譽強化騎士 · 解鎖內容 · 看戰況進度', fn: () => enterHQ() },
     { label: '地圖編輯器', desc: '開啟 editor.html（可測試戰鬥）', fn: () => { try { location.href = 'editor.html'; } catch (e) {} } },
   ];
   // 【停用】舊「真決局」的「最終潛入」入口——等 A/B 面新結局改寫（見 goMenu 的說明）。
@@ -8285,7 +8290,7 @@ function drawMenu() {
   ctx.textAlign = 'left';
 }
 
-// ───────── 總部 HQ：花榮譽解鎖內容 + 看進度 ─────────
+// ───────── 升級（原 HQ）：花榮譽強化騎士 + 解鎖內容 + 看進度 ─────────
 let hqRects = [], hqMsg = '';
 function enterHQ() { checkMilestoneUnlocks(); saveMeta(); hqMsg = ''; scene = 'HQ'; releasePointer(); }
 function hqClick(mx, my) { for (const r of hqRects) if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) { r.fn(); return; } }
@@ -8335,7 +8340,7 @@ function drawHQ() {
   hqRects = [];
   ctx.fillStyle = '#0a0e15'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 32px Consolas'; ctx.fillText('總部 · HQ', cv.width / 2, 58);
+  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 32px Consolas'; ctx.fillText('升級', cv.width / 2, 58);
   ctx.fillStyle = '#ffd27a'; ctx.font = 'bold 17px Consolas'; ctx.fillText('榮譽 ' + (meta.honor | 0) + ' ◆', cv.width / 2, 86);
   ctx.fillStyle = 'rgba(160,180,200,0.7)'; ctx.font = '12px Consolas';
   ctx.fillText('出擊 ' + (meta.stats.runs || 0) + ' · 通關 ' + (meta.stats.wins || 0) + ' · 清關 ' + (meta.stats.missions || 0), cv.width / 2, 108);
