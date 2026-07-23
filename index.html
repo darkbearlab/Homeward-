@@ -870,12 +870,13 @@ const FINALE_BAD_END = [
   '（不會有人記得你。）',
 ];
 const META_KEY = 'sleeper_meta_v1';
-let meta = { honor: 0, unlocked: { weapon: {}, equip: {}, archetype: {}, ability: {} }, stats: { runs: 0, wins: 0, missions: 0, winArch: {} }, revealSeen: false, finaleWon: false };
+let meta = { honor: 0, unlocked: { weapon: {}, equip: {}, archetype: {}, ability: {} }, upgrades: {}, stats: { runs: 0, wins: 0, missions: 0, winArch: {} }, revealSeen: false, finaleWon: false };
 function normalizeMeta() {
   if (!meta || typeof meta !== 'object') meta = {};
   if (meta.honor == null && meta.intel != null) { meta.honor = meta.intel; delete meta.intel; }   // 情報→榮譽 舊存檔遷移
   meta.honor = meta.honor || 0;
   meta.unlocked = meta.unlocked || {}; for (const k of ['weapon', 'equip', 'archetype', 'ability']) meta.unlocked[k] = meta.unlocked[k] || {};
+  meta.upgrades = meta.upgrades || {};   // meta 升級的等級表 { id: level }
   meta.stats = meta.stats || {}; meta.stats.winArch = meta.stats.winArch || {};
   meta.revealSeen = !!meta.revealSeen; meta.finaleWon = !!meta.finaleWon;
 }
@@ -893,10 +894,38 @@ const isAvailable = (kind, id) => { const u = unlockDef(kind, id); return !u || 
 const availPool = (kind, ids) => { const p = ids.filter(id => isAvailable(kind, id)); return p.length ? p : ids; };   // 過濾未解鎖；空了保底回全集(不崩)
 function checkMilestoneUnlocks() { let any = false; for (const u of UNLOCKS) if (u.via === 'milestone' && u.cond && u.cond(meta.stats) && !meta.unlocked[u.kind][u.id]) { meta.unlocked[u.kind][u.id] = true; any = true; } return any; }
 function unlockWithHonor(kind, id) { const u = unlockDef(kind, id); if (!u || u.via !== 'honor' || meta.unlocked[kind][id] || meta.honor < u.cost) return false; meta.honor -= u.cost; meta.unlocked[kind][id] = true; saveMeta(); return true; }
+
+/* ── meta 升級（榮譽購買、分級、遞增成本）─────────────────────────────────
+   per＝每級加成；套用點在 makePlayer(騎士)/killUnit(保命)/metaOnRunEnd(榮譽)/damageUnit(背刺)/腳步。
+   成本＝base × (下一級)，越後越貴。level 存在 meta.upgrades[id]。 */
+const UPGRADES = [
+  { id: 'hp',         name: '堅韌', desc: '基礎生命 +15 / 級',      per: 15,   max: 5, cost: 40 },
+  { id: 'poise',      name: '鎮定', desc: '基礎體幹 +12 / 級',      per: 12,   max: 4, cost: 45 },
+  { id: 'poiseRegen', name: '穩固', desc: '體幹恢復 +25% / 級',     per: 0.25, max: 4, cost: 45 },
+  { id: 'stamina',    name: '耐力', desc: '基礎耐力 +12 / 級',      per: 12,   max: 4, cost: 40 },
+  { id: 'stamRegen',  name: '不倦', desc: '耐力恢復 +20% / 級',     per: 0.20, max: 4, cost: 40 },
+  { id: 'attack',     name: '鋒銳', desc: '攻擊力 +6% / 級',        per: 0.06, max: 5, cost: 55 },
+  { id: 'moveSpeed',  name: '疾行', desc: '移動速度 +4% / 級',      per: 0.04, max: 4, cost: 45 },
+  { id: 'swap',       name: '換手', desc: '武器切換加速（×成本）',   per: 0.22, max: 3, cost: 40 },
+  { id: 'backstab',   name: '暗殺', desc: '背刺/突襲傷害 +0.4 倍 / 級', per: 0.4, max: 4, cost: 55 },
+  { id: 'stealth',    name: '潛蹤', desc: '腳步聲 −15% / 級',       per: 0.15, max: 4, cost: 50 },
+  { id: 'honor',      name: '榮光', desc: '榮譽獲得 +15% / 級',     per: 0.15, max: 4, cost: 60 },
+  { id: 'deathSave',  name: '不屈', desc: '瀕死鎖 1 血 + 無敵 1.2s / 級（每 run 一次）', per: 1.2, max: 3, cost: 120 },
+];
+const upgDef = (id) => UPGRADES.find(u => u.id === id);
+const upgLevel = (id) => (meta.upgrades && meta.upgrades[id]) || 0;
+const upgVal = (id) => { const u = upgDef(id); return u ? u.per * upgLevel(id) : 0; };   // 目前總加成
+const upgCost = (id) => { const u = upgDef(id); return u ? u.cost * (upgLevel(id) + 1) : 0; };   // 下一級成本（遞增）
+const upgMaxed = (id) => { const u = upgDef(id); return !u || upgLevel(id) >= u.max; };
+function buyUpgrade(id) {
+  const u = upgDef(id); if (!u || upgMaxed(id)) return false;
+  const c = upgCost(id); if ((meta.honor | 0) < c) return false;
+  meta.honor -= c; meta.upgrades[id] = upgLevel(id) + 1; saveMeta(); return true;
+}
 // 戰後獎勵（使用者定案：升等移除後把「清關榮譽」從 run-end 挪到打贏當下＝即時、看得見的一幕）。
 // **這是之後接 run 內經濟/道具的單一鉤子**——現在先發小額榮譽墊檔，改內容只改這裡。
 function grantCombatReward() {
-  const r = CONFIG.meta.honorPerMission;
+  const r = Math.round(CONFIG.meta.honorPerMission * (1 + upgVal('honor')));   // meta 升級「榮光」：榮譽獲得加成
   meta.honor += r; saveMeta();
   missionMsg = `戰功 · 榮譽 +${r}`;
   Hooks.fire('combatReward', { honor: r });
@@ -913,7 +942,7 @@ function metaOnRunEnd(won) {   // run 結束結算：榮譽 + stats + 里程碑�
   const gross = winPart + eventPart;
   const rawPenalty = M.honorPerKIA * (rs.kia || 0);
   const penalty = Math.min(rawPenalty, Math.floor((missionAwarded + gross) * M.kiaPenaltyCapFrac));   // 封頂仍以「整局榮譽」為基準＝扣分幅度與舊版一致（總量不變）
-  const gain = Math.max(0, gross - penalty);
+  const gain = Math.round(Math.max(0, gross - penalty) * (1 + upgVal('honor')));   // meta 升級「榮光」：run-end 榮譽也吃加成
   meta.honor += gain;
   lastHonorBreakdown = { mi, missionAwarded, winPart, eventPart, events: rs.events || 0, kia: rs.kia || 0, penalty, gain, won };
   if (won) { meta.stats.wins = (meta.stats.wins || 0) + 1; for (const r of (roster || [])) if (r && r.classId) meta.stats.winArch[r.classId] = (meta.stats.winArch[r.classId] || 0) + 1; }
@@ -2221,7 +2250,8 @@ function makePlayer(i, cfg, pos) {
   // **身體來自共用單位數值表**（扈從＝敵人）。騎士固定 knight 級；扈從依 roster 的 classId，
   // 未指定退回 footman。耐力是唯一不從這裡來的東西——只有騎士管理（見 UNIT_CLASSES 註解）。
   const CLS = classOf(i === KNIGHT_ID ? 'knight' : (cfg.classId || 'footman'));
-  const maxHp = CLS.hp + (cfg.bonusMaxHp || 0) + (fx.maxHpAdd || 0);
+  const kUp = (id) => (i === KNIGHT_ID ? upgVal(id) : 0);   // meta 升級只套騎士（扈從兵種鎖死）
+  const maxHp = CLS.hp + (cfg.bonusMaxHp || 0) + (fx.maxHpAdd || 0) + kUp('hp');
   // 跨關回復：以攜帶的當前血量為底，回復「缺口 × interMissionHealFrac」（frac=1 → 滿血，與舊行為一致）
   const carried = clamp(cfg.hp != null ? cfg.hp : maxHp, 0, maxHp);
   const startHp = clamp(Math.round(carried + (maxHp - carried) * CONFIG.interMissionHealFrac), 1, maxHp);
@@ -2254,7 +2284,8 @@ function makePlayer(i, cfg, pos) {
     classId: CLS === UNIT_CLASSES.knight ? 'knight' : (cfg.classId || 'footman'),
     cls: CLS, className: CLS.name,
     pos: { x: pos.x, y: pos.y }, facing: 0, radius: CLS.radius,
-    moveSpeed: CLS.moveSpeed,   // 與敵人同欄位名（移動碼一律讀 u.moveSpeed）
+    moveSpeed: CLS.moveSpeed * (1 + kUp('moveSpeed')),   // 與敵人同欄位名（移動碼一律讀 u.moveSpeed）
+    dmgMul: 1 + kUp('attack'), poiseRegenMul: 1 + kUp('poiseRegen'), swapMul: 1 / (1 + kUp('swap')), stealthMul: 1 - Math.min(kUp('stealth'), 0.7), backstabBonus: kUp('backstab'), invulnT: 0,   // meta 升級衍生欄位（騎士）
     hp: startHp, maxHp,
     state: i === 0 ? 'CONTROLLED' : 'IDLE',
     disciplineOverride: cfg.disciplineOverride || null,
@@ -2273,7 +2304,7 @@ function makePlayer(i, cfg, pos) {
     turnSpeed: mainSlot.weapon.turnSpeed * turnMul, moveMul: (fx.moveMul || 1) * AR.moveMul * (offW ? offW.moveMul : 1),
     // 身上的甲：與重裝敵人同一套機率擋格機制（代價＝移速/耐力回復）。
     // 取「兵種自帶」與「穿戴」的較大者——披甲士之所以叫披甲士就是因為他有甲，脫不掉。
-    armorId: cfg.armorId || 'none', armor: Math.max(AR.armor, CLS.armor || 0), stamRegenMul: AR.stamRegenMul,
+    armorId: cfg.armorId || 'none', armor: Math.max(AR.armor, CLS.armor || 0), stamRegenMul: AR.stamRegenMul * (1 + kUp('stamRegen')),
     coneHalfDeg: null,                     // 逐單位視錐覆寫（null＝用全域）
     buffT: 0, buffMove: 1, buffFire: 1,    // 道具（腎上腺素）短時 buff
     hasFile: !!cfg.carriesFile,            // 是否身上帶著遺物（獨立攜帶格，跨關隨撤出者；CONFIG.relicEnabled 關閉時恆 false）
@@ -2283,12 +2314,12 @@ function makePlayer(i, cfg, pos) {
     aimT: 0, aimDur: 0,   // 遠程瞄準進度／所需時間（扈從也吃；騎士手動射擊不經此）
     cast: null,   // 施法前搖狀態 { slot, artId, t, dur }；卷軸即時＝不經過這裡
     parryT: 0, parryDur: 0, parryHit: false,   // 武器招架（無盾時的防禦）：動作計時 / 總長 / 這次有沒有接到攻擊
-    poiseMax: CLS.poise, poise: CLS.poise, poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗（來自共用兵種表）
+    poiseMax: CLS.poise + kUp('poise'), poise: CLS.poise + kUp('poise'), poiseHitT: -99,     // 體幹：扣光＝大硬直＋處決窗（來自共用兵種表）
     // 耐力：**只有玩家操作的騎士**管理（這是統一數值表唯一的例外，見 UNIT_CLASSES）。
     // 扈從吃 0＝所有 stamMax 閘門短路，行為與敵人完全一致。
     // 之前扈從有 100 耐力卻沒有任何管理邏輯（AI 不會退出來回氣），打到見底就變沙包——
     // 舊版 100 體幹把這件事遮住了，統一數值表一削到 45 才暴露出來。
-    stamMax: i === KNIGHT_ID ? CONFIG.melee.stamMax : 0, stam: i === KNIGHT_ID ? CONFIG.melee.stamMax : 0, stamT: -99,
+    stamMax: i === KNIGHT_ID ? CONFIG.melee.stamMax + kUp('stamina') : 0, stam: i === KNIGHT_ID ? CONFIG.melee.stamMax + kUp('stamina') : 0, stamT: -99,
     poiseBreakFxT: 0, guardBreakFxT: 0, flinchFxT: 0, noStamFxT: 0,
     fireCooldown: 0, engageTimer: 0, alertTimer: 0, muzzle: 0, sprinting: false,
     idleAnchor: 0, sweepPhase: 0, sweepDir: 1, extractNode: null,   // idleAnchor＝進入閒置時的正前方
@@ -3715,7 +3746,7 @@ function selectSlot(u, i) {
   u.slotIdx = i;
   equipActiveSet(u);
   u.swing = null; u.blocking = false; u.blockT = null; u.parryT = 0; u.aimT = 0;
-  u.swapT = CONFIG.weaponSwap.base + (u.weapon.weight || 0) * CONFIG.weaponSwap.perWeight;
+  u.swapT = (CONFIG.weaponSwap.base + (u.weapon.weight || 0) * CONFIG.weaponSwap.perWeight) * (u.swapMul || 1);   // meta 升級「換手」加速
   Sfx.play('reload', u.pos);
   return true;
 }
@@ -3827,7 +3858,7 @@ function tickResources(u, dt) {
   const M = CONFIG.melee;
   if (u.poiseMax) {
     if (simTime - (u.poiseHitT || -99) >= M.poiseRegenDelay && u.staggerT <= 0)
-      u.poise = Math.min(u.poiseMax, (u.poise || 0) + M.poiseRegen * dt);
+      u.poise = Math.min(u.poiseMax, (u.poise || 0) + M.poiseRegen * (u.poiseRegenMul || 1) * dt);   // meta 升級「穩固」
     if (u._poiseLowFired && u.poise / u.poiseMax >= CONFIG.hooks.poiseLowFrac) u._poiseLowFired = false;
   }
   if (u.stamMax) {
@@ -3986,7 +4017,7 @@ function meleeHitTest(u, s) {
     s.hits.add(t); s.n++;
     const fromAng = angTo(t.pos, u.pos);                  // 目標→攻擊者＝來向（damageUnit 用來判繞背/格擋）
     const back = Math.abs(angDiff(fromAng, t.facing)) > Math.PI / 2;   // 從目標背面砍＝短劍背刺加成
-    let dmg = W.damage * (back ? (W.backstabMul || 1) : 1);
+    let dmg = W.damage * (back ? (W.backstabMul || 1) : 1) * (u.dmgMul || 1);   // meta 升級：攻擊力加成
     if (u.faction !== 'player' && t.faction === 'player') dmg *= CONFIG.enemy.meleeDmgMul;   // 英雄 vs 群體：AI 近接對我方減傷
     if (isFriendlyHit(u.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;                      // 誤傷倍率
     const hp0 = t.hp, stag0 = t.staggerT || 0, swing0 = !!t.swing;
@@ -4085,7 +4116,7 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
     bullets.push({
       x: u.pos.x + Math.cos(angle) * (u.radius + 2), y: u.pos.y + Math.sin(angle) * (u.radius + 2),
       vx: Math.cos(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul, vy: Math.sin(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul,   // 碰撞是掃描式（不穿透），所以放慢彈速不會漏判
-      dmg: W.damage * dmgF, faction: u.faction, range: W.range, traveled: 0,
+      dmg: W.damage * dmgF * (u.dmgMul || 1), faction: u.faction, range: W.range, traveled: 0,   // meta 升級：攻擊力加成
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
       pierce: W.pierce || 0,      // 穿甲：對裝甲敵人的擋格率衰減
       tracer: isTracer,           // 曳光彈：火光色亮拖尾（否則極細淡線/隱形）
@@ -4295,6 +4326,7 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   // **見血＝全隊曝光**放在最前面：被攻擊（即使被甲彈開或盾格擋）都算「已經被發現」，
   // 不能等流血才算——否則板甲騎士被彈開的那一擊會在 return 前跳過曝光（第三方互毆仍不算）。
   if (!squadRevealed && (u.faction === 'player' || (opts && opts.attacker && opts.attacker.faction === 'player'))) revealSquad();
+  if ((u.invulnT || 0) > 0) { spawnBlock(u.pos); return false; }   // meta 升級「不屈」的無敵窗：完全免傷（撐過致命連段）
   // ---- 盾格：正面 blockArcDeg 內才成立；舉盾後 parryWindow 內＝招架（完全格擋 + 攻擊者硬直）----
   // ---- 武器招架（無盾）：判定窗內接到攻擊＝完全格擋 + 重創對方，與盾招架同等回報 ----
   if (fromAng != null && wpWindowOpen(u) && Math.abs(angDiff(fromAng, u.facing)) <= blockArcOf(u) * Math.PI / 360) {
@@ -4347,7 +4379,8 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (blocked) flanked = false;                                                            // 擋下來的那一擊不算繞背
   const surprise = (u.faction !== 'player' && u.state === 'IDLE');                          // 閒置 AI 被突襲（任一 AI 陣營）
   u.combatDeath = !surprise;   // 這一擊命中時他「本來就在交戰」＝若因此死＝交戰陣亡(有聲)；反之＝潛行擊殺(無聲)。見 killUnit
-  const mult = flanked ? CONFIG.flank.flankMult : (surprise ? CONFIG.flank.surpriseMult : 1);  // 取較高、不相乘
+  const atkBonus = (opts && opts.attacker && opts.attacker.backstabBonus) || 0;   // meta 升級「暗殺」：背刺/突襲額外倍率
+  const mult = flanked ? CONFIG.flank.flankMult + atkBonus : (surprise ? CONFIG.flank.surpriseMult + atkBonus : 1);  // 取較高、不相乘
   if (u.faction !== 'player') {   // 任一 AI 陣營被打（不論後續有沒有被甲彈開）
     u.state = 'ENGAGED';   // 被攻擊（即使被甲擋下）也進入交戰（latch）
     if (fromAng != null && !surprise) registerHitThreat(u, fromAng);   // 被擊中→把「來向」當局部脅威傳給：本人＋看得到本人的敵＋近隣（解側翼魚貫）。**突襲未察覺者不傳＝潛行擊殺不驚動同袍**
@@ -4424,6 +4457,10 @@ function fleeUnit(e) {
 function killUnit(u, killer) {
   // beforeDeath＝可攔截的死亡（roguelite 復活通道）：handler 設 prevented=true → 以 reviveHp 保命
   const bd = Hooks.fire('beforeDeath', { u, killer: killer || null, prevented: false, reviveHp: 1 });
+  // meta 升級「不屈」：騎士瀕死＝每 run 一次鎖 1 血 + 短暫無敵（invulnT 秒）撐過致命連段
+  if (!bd.prevented && u.id === KNIGHT_ID && u.faction === 'player' && upgLevel('deathSave') > 0 && !runFlags.deathSaveUsed) {
+    bd.prevented = true; bd.reviveHp = 1; runFlags.deathSaveUsed = true; u.invulnT = upgVal('deathSave');
+  }
   if (bd.prevented) {
     u.hp = Math.max(1, bd.reviveHp || 1);
     u.staggerT = 0; u.swing = null; u.blocking = false; u.blockT = null;
@@ -5690,7 +5727,7 @@ function update(dt) {
   shakeAmt = Math.max(0, shakeAmt - CONFIG.juice.shakeDecay * dt); kickY *= Math.exp(-CONFIG.juice.shakeDecay * dt);   // 震動/相機踢衰減
   if (cutscene && cutscene.lock) return;   // 演出鎖控制：只跑鏡頭/演出，不跑常規 sim
 
-  const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.cardHitT > 0) u.cardHitT -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
+  const juiceDecay = (u) => { if (u.recoil > 0) u.recoil = Math.max(0, u.recoil - CONFIG.juice.recoilDecay * dt); if (u.hitFlash > 0) u.hitFlash -= dt; if (u.cardHitT > 0) u.cardHitT -= dt; if ((u.invulnT || 0) > 0) u.invulnT -= dt; if (u.flinchX) { u.flinchX *= Math.exp(-22 * dt); u.flinchY *= Math.exp(-22 * dt); } };
   const meleeFxDecay = (u) => { for (const k of ['parryFxT', 'poiseBreakFxT', 'guardBreakFxT', 'flinchFxT', 'noStamFxT', 'atkRestT']) if (u[k] > 0) u[k] -= dt; };
   for (const p of players) { if (p.fireCooldown > 0) p.fireCooldown -= dt; if (p.muzzle > 0) p.muzzle -= dt; juiceDecay(p); if (p.abilityCd > 0) p.abilityCd -= dt; tickArtSlots(p, dt); tickCast(p, dt); tickAmmo(p, dt); tickMelee(p, dt); tickReactiveBlock(p, dt); tickResources(p, dt); tickMorale(p, dt); meleeFxDecay(p); }
   for (const e of enemies) { if (e.dead) continue; if (e.fireCooldown > 0) e.fireCooldown -= dt; if (e.muzzle > 0) e.muzzle -= dt; if (e.revealT > 0) e.revealT -= dt; if (e.flash > 0) e.flash = Math.max(0, e.flash - CONFIG.flash.decay * dt); juiceDecay(e); tickAmmo(e, dt); tickMelee(e, dt); tickReactiveBlock(e, dt); tickResources(e, dt); tickMorale(e, dt); meleeFxDecay(e); }
@@ -5741,7 +5778,7 @@ function update(dt) {
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
           // 步行聲：每 stepInterval 秒發一次，半徑隨速度、衝刺更響更頻繁 → 驚動附近 IDLE 敵（走路可潛近、衝刺會被聽見）。
           u.stepT = (u.stepT || 0) - dt;
-          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1); alertEnemiesNear(u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }
+          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1); alertEnemiesNear(u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta 升級「潛蹤」：腳步更輕
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
       }
@@ -8252,6 +8289,48 @@ function drawMenu() {
 let hqRects = [], hqMsg = '';
 function enterHQ() { checkMilestoneUnlocks(); saveMeta(); hqMsg = ''; scene = 'HQ'; releasePointer(); }
 function hqClick(mx, my) { for (const r of hqRects) if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) { r.fn(); return; } }
+// 一格 meta 升級（名稱 + Lv X/max + 效果 + 下一級成本鈕）
+function hqUpgCell(up, x, y, w, h) {
+  const lvl = upgLevel(up.id), maxed = upgMaxed(up.id), cost = upgCost(up.id), can = !maxed && (meta.honor | 0) >= cost;
+  ctx.fillStyle = maxed ? 'rgba(26,40,30,0.9)' : 'rgba(18,24,34,0.92)'; ctx.fillRect(x, y, w, h);
+  ctx.lineWidth = 1.3; ctx.strokeStyle = maxed ? 'rgba(95,208,107,0.7)' : 'rgba(60,72,90,0.8)'; ctx.strokeRect(x, y, w, h);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = maxed ? '#bfe6cf' : '#e6edf3'; ctx.font = 'bold 13px Consolas';
+  ctx.fillText(up.name + '  Lv' + lvl + '/' + up.max, x + 12, y + 20);
+  ctx.fillStyle = 'rgba(170,185,200,0.6)'; ctx.font = '10px Consolas'; ctx.fillText(up.desc, x + 12, y + 38);
+  ctx.textAlign = 'center';
+  if (maxed) { ctx.fillStyle = '#5fd06b'; ctx.font = 'bold 12px Consolas'; ctx.fillText('滿級', x + w - 44, y + h / 2 + 4); }
+  else {
+    const bw = 80, bx = x + w - bw - 8, by = y + h / 2 - 13, bh = 26;
+    ctx.fillStyle = can ? 'rgba(54,66,84,0.95)' : 'rgba(36,42,50,0.6)'; ctx.fillRect(bx, by, bw, bh);
+    ctx.lineWidth = 1.2; ctx.strokeStyle = can ? 'rgba(160,180,200,0.85)' : 'rgba(90,100,110,0.5)'; ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = can ? '#dbe8f5' : '#6a727c'; ctx.font = 'bold 12px Consolas'; ctx.fillText(cost + ' ◆', bx + bw / 2, by + 17);
+    if (can) hqRects.push({ x: bx, y: by, w: bw, h: bh, fn: () => { if (buyUpgrade(up.id)) hqMsg = up.name + ' → Lv' + upgLevel(up.id); else hqMsg = '榮譽不足。'; } });
+  }
+  ctx.textAlign = 'left';
+}
+// 一格內容解鎖（放進獎勵池）
+function hqUnlockCell(u, kindL, x, y, w, h) {
+  const owned = !!(meta.unlocked[u.kind] && meta.unlocked[u.kind][u.id]);
+  ctx.fillStyle = owned ? 'rgba(26,40,30,0.9)' : 'rgba(18,24,34,0.92)'; ctx.fillRect(x, y, w, h);
+  ctx.lineWidth = 1.3; ctx.strokeStyle = owned ? 'rgba(95,208,107,0.7)' : 'rgba(60,72,90,0.8)'; ctx.strokeRect(x, y, w, h);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = owned ? '#bfe6cf' : '#e6edf3'; ctx.font = 'bold 13px Consolas';
+  ctx.fillText('[' + (kindL[u.kind] || u.kind) + '] ' + u.name, x + 12, y + 20);
+  ctx.fillStyle = 'rgba(170,185,200,0.6)'; ctx.font = '10px Consolas'; ctx.fillText((u.desc || '').slice(0, 28), x + 12, y + 38);
+  ctx.textAlign = 'center';
+  if (owned) { ctx.fillStyle = '#5fd06b'; ctx.font = 'bold 12px Consolas'; ctx.fillText('✓ 已解鎖', x + w - 46, y + h / 2 + 4); }
+  else if (u.via === 'milestone') { ctx.fillStyle = '#ffd27a'; ctx.font = '10px Consolas'; ctx.fillText('里程碑', x + w - 38, y + h / 2 + 4); }
+  else if (u.via === 'finale') { ctx.fillStyle = '#ff8a8a'; ctx.font = '10px Consolas'; ctx.fillText('（停用）', x + w - 40, y + h / 2 + 4); }
+  else {
+    const can = (meta.honor | 0) >= u.cost, bw = 80, bx = x + w - bw - 8, by = y + h / 2 - 13, bh = 26;
+    ctx.fillStyle = can ? 'rgba(54,66,84,0.95)' : 'rgba(36,42,50,0.6)'; ctx.fillRect(bx, by, bw, bh);
+    ctx.lineWidth = 1.2; ctx.strokeStyle = can ? 'rgba(160,180,200,0.85)' : 'rgba(90,100,110,0.5)'; ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = can ? '#dbe8f5' : '#6a727c'; ctx.font = 'bold 12px Consolas'; ctx.fillText(u.cost + ' ◆', bx + bw / 2, by + 17);
+    if (can) hqRects.push({ x: bx, y: by, w: bw, h: bh, fn: () => { if (unlockWithHonor(u.kind, u.id)) hqMsg = u.name + ' 已解鎖！'; else hqMsg = '榮譽不足。'; } });
+  }
+  ctx.textAlign = 'left';
+}
 function drawHQ() {
   hqRects = [];
   ctx.fillStyle = '#0a0e15'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -8263,40 +8342,18 @@ function drawHQ() {
   ctx.fillStyle = 'rgba(140,160,180,0.6)'; ctx.font = '11px Consolas';
   ctx.fillText('解鎖＝把內容放進獎勵池（局內仍隨機取得）。里程碑解 幹員/技能、榮譽解 武器/裝備。', cv.width / 2, 130);
 
-  const w = 600, x = cv.width / 2 - w / 2; let y = 154;
-  if (!UNLOCKS.length) {
-    ctx.fillStyle = '#6a727c'; ctx.font = '14px Consolas'; ctx.fillText('（目前沒有可解鎖項目，內容陸續增加）', cv.width / 2, y + 40);
-  }
+  const cols = 3, cw = 360, ch = 52, gap = 12, gx = (cv.width - (cols * cw + (cols - 1) * gap)) / 2;
+  // ── 騎士升級（榮譽購買、分級）──
+  ctx.textAlign = 'center'; ctx.fillStyle = '#7fd0e0'; ctx.font = 'bold 15px Consolas'; ctx.fillText('◆ 騎士升級（榮譽購買 · 越後越貴 · 每 run 生效）', cv.width / 2, 150);
+  UPGRADES.forEach((up, i) => hqUpgCell(up, gx + (i % cols) * (cw + gap), 164 + Math.floor(i / cols) * (ch + gap), cw, ch));
+  const afterUp = 164 + Math.ceil(UPGRADES.length / cols) * (ch + gap) + 10;
+  // ── 內容解鎖（放進獎勵池）──
+  ctx.textAlign = 'center'; ctx.fillStyle = '#7fd0e0'; ctx.font = 'bold 15px Consolas'; ctx.fillText('◆ 內容解鎖（放進獎勵池 · 局內仍隨機取得）', cv.width / 2, afterUp + 2);
   const kindL = { weapon: '武器', equip: '裝備', archetype: '幹員', ability: '技能', item: '道具' };
-  for (const u of UNLOCKS) {
-    const owned = !!(meta.unlocked[u.kind] && meta.unlocked[u.kind][u.id]);
-    const h = 52;
-    ctx.fillStyle = owned ? 'rgba(26,40,30,0.9)' : 'rgba(18,24,34,0.92)'; ctx.fillRect(x, y, w, h);
-    ctx.lineWidth = 1.4; ctx.strokeStyle = owned ? 'rgba(95,208,107,0.7)' : 'rgba(60,72,90,0.8)'; ctx.strokeRect(x, y, w, h);
-    ctx.textAlign = 'left';
-    ctx.fillStyle = owned ? '#bfe6cf' : '#e6edf3'; ctx.font = 'bold 15px Consolas';
-    ctx.fillText('[' + (kindL[u.kind] || u.kind) + '] ' + u.name, x + 14, y + 22);
-    ctx.fillStyle = 'rgba(170,185,200,0.65)'; ctx.font = '11px Consolas'; ctx.fillText(u.desc || '', x + 14, y + 40);
-    ctx.textAlign = 'right';
-    if (owned) {
-      ctx.fillStyle = '#5fd06b'; ctx.font = 'bold 13px Consolas'; ctx.fillText('✓ 已解鎖', x + w - 16, y + 30);
-    } else if (u.via === 'milestone') {
-      ctx.fillStyle = '#ffd27a'; ctx.font = '12px Consolas'; ctx.fillText('里程碑：' + (u.req || '達成條件後自動解鎖'), x + w - 16, y + 30);
-    } else if (u.via === 'finale') {
-      ctx.fillStyle = '#ff8a8a'; ctx.font = '12px Consolas'; ctx.fillText('通過最終真相挑戰解鎖', x + w - 16, y + 30);
-    } else {
-      const can = (meta.honor | 0) >= u.cost;
-      const bw2 = 116, bx2 = x + w - bw2 - 12, by2 = y + 13, bh2 = 26;
-      ctx.fillStyle = can ? 'rgba(54,66,84,0.95)' : 'rgba(36,42,50,0.6)'; ctx.fillRect(bx2, by2, bw2, bh2);
-      ctx.lineWidth = 1.3; ctx.strokeStyle = can ? 'rgba(160,180,200,0.85)' : 'rgba(90,100,110,0.5)'; ctx.strokeRect(bx2, by2, bw2, bh2);
-      ctx.textAlign = 'center'; ctx.fillStyle = can ? '#dbe8f5' : '#6a727c'; ctx.font = 'bold 12px Consolas';
-      ctx.fillText('解鎖 ' + u.cost + ' ◆', bx2 + bw2 / 2, by2 + 17);
-      if (can) hqRects.push({ x: bx2, y: by2, w: bw2, h: bh2, fn: () => { if (unlockWithHonor(u.kind, u.id)) hqMsg = u.name + ' 已解鎖！進入獎勵池。'; else hqMsg = '榮譽不足。'; } });
-    }
-    ctx.textAlign = 'left';
-    y += h + 10;
-  }
-  if (hqMsg) { ctx.textAlign = 'center'; ctx.fillStyle = '#7fffa8'; ctx.font = 'bold 14px Consolas'; ctx.fillText(hqMsg, cv.width / 2, y + 6); }
+  UNLOCKS.forEach((u, i) => hqUnlockCell(u, kindL, gx + (i % cols) * (cw + gap), afterUp + 14 + Math.floor(i / cols) * (ch + gap), cw, ch));
+  let y = afterUp + 14 + Math.ceil(Math.max(1, UNLOCKS.length) / cols) * (ch + gap);
+  if (!UNLOCKS.length) { ctx.fillStyle = '#6a727c'; ctx.font = '13px Consolas'; ctx.fillText('（目前沒有可解鎖項目，內容陸續增加）', cv.width / 2, afterUp + 44); }
+  if (hqMsg) { ctx.textAlign = 'center'; ctx.fillStyle = '#7fffa8'; ctx.font = 'bold 14px Consolas'; ctx.fillText(hqMsg, cv.width / 2, y + 8); }
   // 返回
   const bx = cv.width / 2 - 70, by = cv.height - 56, bbw = 140, bbh = 38;
   const hov = mouse.mx >= bx && mouse.mx <= bx + bbw && mouse.my >= by && mouse.my <= by + bbh;

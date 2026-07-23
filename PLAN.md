@@ -955,6 +955,14 @@ Phase 4 前的最後一項插隊調整。
 - ✅ **③ 結局**（先簡版：一段文字演出）：`homecomingAxes`＝義名 `runFlags.mercy` × 兵力（生還同伴數 + `ralliedKnight`×`knightMight`）；`pickEnding` 依 2×2 象限選 `ENDINGS`（率眾光復/鐵血奪回/教堂會師/焦土）；第二幕莊園 boss 完成→`resolveHomecoming`＝結算(wins+1) + `playEnding` 播該象限 5 行文字 → RUNWIN。門檻 `CONFIG.ending`（先佔位、待調）。
 - ⏳ **④ A面內容 + 打磨**：A 事件池、國界 boss 變體（巡邏隊/戰場/兇獸）、莊園/國界專屬地圖、敘事文本。
 
+### meta 升級（榮譽購買、分級 · 第一批已做）
+`meta.upgrades = { id: level }`。`UPGRADES` 表（per=每級加成／max／cost），成本遞增（`cost×(下一級)`），`buyUpgrade` 扣榮譽、升級、封頂。
+**只套騎士**（`makePlayer` 的 `kUp(id)`＝`i===KNIGHT_ID?upgVal:0`，扈從兵種鎖死不吃）。第一批 12 項：
+- 體質：堅韌(生命)/鎮定(體幹)/穩固(體幹恢復×)/耐力/不倦(耐力恢復×)/鋒銳(攻擊×)/疾行(移速×)/換手(swapT×)。
+- 戰技：暗殺(背刺/突襲 mult +)/潛蹤(腳步聲×)。
+- 特殊：榮光(榮譽獲得×，`grantCombatReward`＋`metaOnRunEnd` 都吃)／不屈(瀕死鎖 1 血＋無敵窗 `invulnT` 秒，走既有 `beforeDeath` 通道，每 run 一次 `runFlags.deathSaveUsed`)。
+HQ 商店改成兩區（升級格＋解鎖格）3 欄網格。**待下一批**：運氣(賭博重擲)、更多可解鎖出身（接 `KNIGHT_TEMPLATES`＝需先救過一遍才解鎖，且那些變體要定案成「事先設計好的樣板」而非隨機組合——另議）。數值全佔位、待玩測調。
+
 - [ ] 路線圖節點與場景敘事改寫（焚村/林道/渡口/關隘；野營/鍛冶/路上遭遇）。
 - [ ] 主選單 / 總部(HQ) / 結局改寫為歸鄉・贖罪主題（移除原間諜「沉睡者」敘事、The Patriot 致敬等）。
 - [ ] 以編輯器手刻中世紀地圖；source/sink 經濟平衡。
