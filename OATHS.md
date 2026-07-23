@@ -1,7 +1,8 @@
 # 誓約系統（Oaths）— 設計文件
 
 > 敗騎的**誓約**：刻在身與心上的約束。**綁定誓約**是一位騎士的本質（不可卸）；**自選誓約**是靠行動證明、解鎖後可帶的 build 層。
-> 這份是獨立維護的目錄——條目會愈長，PLAN.md 只放摘要並指向這裡。**狀態：設計中，尚未實作。**
+> 這份是獨立維護的目錄——條目會愈長，PLAN.md 只放摘要並指向這裡。
+> **狀態：第一階段（誓約引擎 + 7 位騎士綁定誓約）已實作。** 配誓約 UI / 槽數升級 / 解鎖條件 / 自選誓約池仍待做。
 
 ---
 
@@ -107,7 +108,11 @@ OATHS = { id: {
 
 ## 6. 分階段實作（真正動工時）
 
-1. **誓約引擎**：`OATHS` 表 + `applyOathLoadout`（重用 Hooks + mods）+ 每位騎士的**綁定誓約**（先把 base 4 + 可解鎖 3 的綁定做出來，立刻讓騎士更有身分）。
+1. ✅ **誓約引擎（已做）**：`OATHS` 表 + `boundOathFor` + `applyOathLoadout`（在 `makePlayer` 造好騎士後對 `i===KNIGHT_ID` 呼叫、每場重套）+ base 4 + 可解鎖 3 共 7 位騎士的**綁定誓約**。效果全走 `mods(k)` 改 per-unit 旋鈕（**絕不改 `u.weapon`＝WEAPONS 共用參照**）：
+   - 新增旋鈕與套用點：`parryWinMul`→`parryWindowOf`、`reachMul`/`knockMul`→`meleeHitTest`、`pierceBonus`→近接與 `fireUnit` 子彈穿甲、`artCdMul`→術 CD、`castMul`→施法前搖、`magicPierce`→子彈 `pierceThru`＋`updateBullets` 貫穿（`b.hitSet` 防重複命中）。
+   - 綁定誓約 id：`bulwark`(守備) / `unbowed`(陷陣) / `gale`(遊獵) / `incant`(習術) / `reachvow`(長槍) / `heavybolt`(弩) / `leyline`(術士)。
+   - 出身選單卡片右上顯示「◈ 誓約 · 名稱」徽章（卡片夠高再多顯示本質敘述）。
+   - 尚未做：自選誓約的 hooks 註冊（Phase 2 隨 loadout 一起，用穩定 id off-first 避免每場重複掛）。
 2. **配誓約畫面（B）**：出身後一步，把已解鎖自選誓約裝進自由槽（綁定自動補、顯示鎖定）；run 中鎖定。`meta.oathLoadout` 持久。
 3. **槽數升級**：`UPGRADES` 加 `oathSlots`（自由槽 base 2 → +1/級 → 上限 5）。
 4. **解鎖條件框架**：run 統計補齊（§5）+ `metaOnRunEnd` 查解鎖 + 提示。

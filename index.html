@@ -665,6 +665,40 @@ function applyRelicHooks() {    // 重掛（撿到/失去聖物後呼叫）
   }
 }
 
+/* 誓約（OATHS）— 可裝備的被動 build 層（詳見 OATHS.md）。第一階段只做「引擎 + 綁定誓約」：
+   每位騎士由出身綁定 1 個常駐誓約（不可卸）＝本質區分不同騎士。效果全走 `mods(k)`＝開局改騎士數值/旋鈕
+   （u.weapon 是 WEAPONS 共用參照，絕不可改，一律用 per-unit 旋鈕：parryWinMul/reachMul/knockMul/
+   pierceBonus/artCdMul/castMul/magicPierce）。自選誓約池 + 解鎖 + 配裝 UI 是後續階段。 */
+const OATHS = {
+  // ── 綁定誓約（每位騎士各 1；boundTo＝出身 id）──
+  bulwark:  { name: '壁壘之誓', kind: 'bound', boundTo: 'warden',     desc: '以盾為牆：招架窗放寬、承受更韌。',
+              mods(k) { k.parryWinMul = (k.parryWinMul || 1) * 1.5; k.dmgResist = (k.dmgResist || 0) + 0.08; } },
+  unbowed:  { name: '不退之誓', kind: 'bound', boundTo: 'reaver',     desc: '不退：體幹更厚、回穩更快、扛傷。',
+              mods(k) { k.poiseMax = Math.round(k.poiseMax * 1.3); k.poise = k.poiseMax; k.poiseRegenMul = (k.poiseRegenMul || 1) * 1.6; k.dmgResist = (k.dmgResist || 0) + 0.06; } },
+  gale:     { name: '疾風之誓', kind: 'bound', boundTo: 'ranger',     desc: '疾風：射擊發散大減、步伐更輕快（風箏）。',
+              mods(k) { k.spreadMul = (k.spreadMul || 1) * 0.4; k.moveSpeed *= 1.12; } },
+  incant:   { name: '咒能之誓', kind: 'bound', boundTo: 'adept',      desc: '咒能：術冷卻 −40%、施法前搖 −35%。',
+              mods(k) { k.artCdMul = (k.artCdMul || 1) * 0.6; k.castMul = (k.castMul || 1) * 0.65; } },
+  // ── 可解鎖 3 出身的綁定誓約 ──
+  reachvow: { name: '長驅之誓', kind: 'bound', boundTo: 'spearknight', desc: '長驅：reach 更長、刺擊逼退更硬、穿甲 +。',
+              mods(k) { k.reachMul = (k.reachMul || 1) * 1.15; k.knockMul = (k.knockMul || 1) * 1.6; k.pierceBonus = (k.pierceBonus || 0) + 0.2; } },
+  heavybolt:{ name: '重弩之誓', kind: 'bound', boundTo: 'arbalist',   desc: '重弩：裝填加速 40%、破甲 +。',
+              mods(k) { k.reloadMul = (k.reloadMul || 1) * 0.6; k.pierceBonus = (k.pierceBonus || 0) + 0.15; } },
+  leyline:  { name: '法脈之誓', kind: 'bound', boundTo: 'mageknight', desc: '法脈：魔法彈貫穿一直線（穿透 2 名）、傷害 +。',
+              mods(k) { k.magicPierce = (k.magicPierce || 0) + 2; k.dmgMul = (k.dmgMul || 1) * 1.1; } },
+};
+const boundOathFor = (originId) => {
+  for (const id of Object.keys(OATHS)) { const o = OATHS[id]; if (o.kind === 'bound' && o.boundTo === originId) return id; }
+  return null;
+};
+// 套用騎士的誓約（第一階段＝只有綁定；自選 loadout 之後接）。在 makePlayer 造好騎士後呼叫＝每場重套（欄位每場重建）。
+function applyOathLoadout(k) {
+  if (!k) return;
+  k.oaths = [];
+  const b = boundOathFor(k.originId);
+  if (b && OATHS[b]) { if (OATHS[b].mods) OATHS[b].mods(k); k.oaths.push(b); }
+}
+
 // 技能：目前全部佔位＝恢復生命，有 CD（僅手動可用）。多種＝倉庫換技能有取捨（量/CD 不同）。
 /* =====================================================================
    ARTS — **術／技藝：自由槽位(3/4)的唯一內容表**（Phase 2-B，使用者提案）
@@ -2282,7 +2316,7 @@ function makePlayer(i, cfg, pos) {
   const mainSlot = slots[0].main;
   const offNow = slots[0].off;
   const offW = (offNow && isShield(offNow)) ? OFFHANDS[offNow] : null;
-  return {
+  const _u = {
     slots, slotIdx: 0,
     offId: offNow,   // 當前副手（渲染/格擋判定讀 activeSet，這欄只是方便除錯）
     id: i, name: cfg.name, faction: 'player', hue: cfg.hue, strength: cfg.strength || 1,
@@ -2331,6 +2365,8 @@ function makePlayer(i, cfg, pos) {
     burstLeft: CONFIG.idleTap.size, burstCd: 0, wanderTarget: 0, wanderTimer: 0,
     lastSeenPos: null, lastSeenT: -Infinity, _seenNow: false,   // 敵人共享情報：此我方最後被任一敵人看到的位置/時間
   };
+  if (i === KNIGHT_ID) { _u.originId = cfg.originId || null; applyOathLoadout(_u); }   // 誓約：綁定誓約由出身決定、每場重套（mods 改旋鈕）
+  return _u;
 }
 function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.PI, typeId = 'footman', faction = 'enemy') {
   typeId = resolveEnemyType(typeId);                 // 舊 key 自動轉成中世紀正規 key（單位身上一律存正規 key）
@@ -3720,7 +3756,7 @@ const canBlock = (u) => !!shieldOf(u) && !!(u.weapon && u.weapon.melee);
 // 盾的參數（沒盾則回 CONFIG.melee 的預設，供非玩家單位沿用）
 const blockArcOf = (u) => { const sh = shieldOf(u); return (sh ? sh.blockArcDeg : CONFIG.melee.blockArcDeg); };
 const blockResistOf = (u) => { const sh = shieldOf(u); return (sh ? sh.blockResist : CONFIG.melee.blockResist); };
-const parryWindowOf = (u) => { const sh = shieldOf(u); return CONFIG.melee.parryWindow * (sh ? sh.parryWinMul : 1); };
+const parryWindowOf = (u) => { const sh = shieldOf(u); return CONFIG.melee.parryWindow * (sh ? sh.parryWinMul : 1) * (u.parryWinMul || 1); };   // 誓約「壁壘」：放寬招架窗
 const blockStamMulOf = (u) => { const sh = shieldOf(u); return sh ? sh.stamMul : 1; };
 /* ── 盾兵的反射式格擋（使用者定案：不做預判、不做 AI）─────────────────────
    挨打 → 體幹沒破 → 舉盾 reactBlockDur 秒 → 放下，並進 reactBlockCd 冷卻。
@@ -3804,7 +3840,7 @@ function castArt(u, i) {
   if (learned) {
     if (artCdOf(sl) > 0) return false;
     if (u.stamMax && (u.stam || 0) < (A.stamCost || 0)) { u.noStamFxT = 0.25; Hooks.fire('stamEmpty', { u }); return false; }
-    u.cast = { slot: i, artId: resolveArt(sl.id), t: 0, dur: A.castTime || 0.4 };   // 前搖開始，會被打斷
+    u.cast = { slot: i, artId: resolveArt(sl.id), t: 0, dur: (A.castTime || 0.4) * (u.castMul || 1) };   // 前搖開始，會被打斷（誓約「咒能」：castMul 縮短）
     u.blocking = false; u.blockT = null;
     Hooks.fire('castStart', { u, artId: u.cast.artId, art: A, carrier: 'learned' });
     return true;
@@ -3830,7 +3866,7 @@ function tickCast(u, dt) {
   if (!sl || !A) return;
   if (u.stamMax) { u.stam = Math.max(0, (u.stam || 0) - (A.stamCost || 0)); u.stamT = simTime; }
   applyArt(u, A);
-  sl.cd = A.cooldown || 0;
+  sl.cd = (A.cooldown || 0) * (u.artCdMul || 1);   // 誓約「咒能」：術冷卻縮短
   Hooks.fire('cast', { u, artId, art: A, carrier: 'learned' });
 }
 // 效果本體：敵我共用一套管線，載具只決定「你憑什麼用它」
@@ -4025,7 +4061,7 @@ function meleeHitTest(u, s) {
   const bladeHalf = CONFIG.melee.bladeHalfDeg * Math.PI / 180;
   const lo = Math.min(s.prevOff, s.off) - bladeHalf;   // 本幀刀刃掃過的角度帶（相對 facing）
   const hi = Math.max(s.prevOff, s.off) + bladeHalf;
-  const reach = (W.reach || W.range) * Math.max(s.prevReachF, s.reachF);
+  const reach = (W.reach || W.range) * Math.max(s.prevReachF, s.reachF) * (u.reachMul || 1);   // 誓約「長驅」：reach 加長
   const cleave = W.cleave || 1;
   const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => canHarm(u, t));   // 友軍誤傷：揮到誰就是誰（斧的 cleave 會砍到自己的扈從）
   for (const t of targets) {
@@ -4045,7 +4081,7 @@ function meleeHitTest(u, s) {
     if (u.faction !== 'player' && t.faction === 'player') dmg *= CONFIG.enemy.meleeDmgMul;   // 英雄 vs 群體：AI 近接對我方減傷
     if (isFriendlyHit(u.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;                      // 誤傷倍率
     const hp0 = t.hp, stag0 = t.staggerT || 0, swing0 = !!t.swing;
-    const blocked = damageUnit(t, dmg, W.pierce, fromAng, { melee: true, attacker: u, knock: W.knock || 0, stagger: W.stagger || 0, poiseDmg: W.poiseDmg || 0 });
+    const blocked = damageUnit(t, dmg, clamp((W.pierce || 0) + (u.pierceBonus || 0), 0, 1), fromAng, { melee: true, attacker: u, knock: (W.knock || 0) * (u.knockMul || 1), stagger: W.stagger || 0, poiseDmg: W.poiseDmg || 0 });   // 誓約「長驅」：pierceBonus 破甲 + knockMul 逼退
     Hooks.fire('attackHit', { u, t, dealt: Math.max(0, hp0 - t.hp), melee: true, blocked, backstab: back, armorDeflect: (hp0 === t.hp && !blocked) });
     if (arenaMode) {   // 試作場即時數據：本次揮擊打中幾隻、實際扣多少血（含裝甲/格擋後的真值）
       const dealt = Math.max(0, hp0 - t.hp);
@@ -4142,7 +4178,8 @@ function fireUnit(u, angle, spreadDeg, fireRateMult, bloomAdd) {
       vx: Math.cos(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul, vy: Math.sin(a) * W.projSpeed * CONFIG.juice.bulletSpeedMul,   // 碰撞是掃描式（不穿透），所以放慢彈速不會漏判
       dmg: W.damage * dmgF * (u.dmgMul || 1), faction: u.faction, range: W.range, traveled: 0,   // meta 升級：攻擊力加成
       ox: u.pos.x, oy: u.pos.y,   // 發射原點（低矮牆「貼牆可越射」判定用）
-      pierce: W.pierce || 0,      // 穿甲：對裝甲敵人的擋格率衰減
+      pierce: clamp((W.pierce || 0) + (u.pierceBonus || 0), 0, 1),   // 穿甲：對裝甲敵人的擋格率衰減（誓約「重弩/長驅」：pierceBonus +）
+      pierceThru: u.magicPierce || 0,   // 貫穿：可穿過幾名敵人繼續飛（誓約「法脈」＝魔法彈直線貫穿）
       tracer: isTracer,           // 曳光彈：火光色亮拖尾（否則極細淡線/隱形）
       magic: !!W.magic,           // 魔法彈（法杖）：另畫成發光的紫青光矢
       shooterId: isPlayer ? u.id : -1, owner: u,   // 擊殺歸屬；owner＝射手本人（友軍誤傷判定用來排除自己）
@@ -4687,6 +4724,7 @@ function updateBullets(dt) {
     if (!gone) {
       const targets = [...activePlayers(), ...enemies.filter(e => !e.dead)].filter(t => canHarm(b.owner, t, b.faction));   // 友軍誤傷：子彈吃到誰就是誰（射手本人除外；手榴彈散射連投擲者都會炸到）
       for (const t of targets) if (segCircle(old, b, t.pos, t.radius)) {
+        if (b.hitSet && b.hitSet.has(t)) continue;   // 貫穿彈：同一目標每發只吃一下
         if (b.flash) { t.flash = Math.min(CONFIG.flash.max, (t.flash || 0) + b.flash); gone = true; break; }   // 閃光彈丸：累積暈眩、不造成傷害（中越多顆越暈）
         let dmg = b.dmg;
         if (isFriendlyHit(b.faction, t)) dmg *= CONFIG.friendlyFire.dmgMul;              // 誤傷倍率
@@ -4695,6 +4733,7 @@ function updateBullets(dt) {
         const bBlocked = damageUnit(t, dmg, b.pierce || 0, angTo(t.pos, { x: b.ox, y: b.oy }), { attacker: b.owner || null });   // attacker＝擊殺歸屬/Hooks（無 melee 旗標＝不觸發近戰限定效果）
         if (b.owner) Hooks.fire('attackHit', { u: b.owner, t, dealt: Math.max(0, hpB0 - t.hp), melee: false, blocked: bBlocked, backstab: false, armorDeflect: (hpB0 === t.hp && !bBlocked) });
         if (arenaMode && b.owner === knight()) arenaStats.lastShotDist = Math.round(b.traveled);   // 射擊試作場：顯示這發打了多遠
+        if ((b.pierceThru || 0) > 0) { b.pierceThru--; (b.hitSet || (b.hitSet = new Set())).add(t); continue; }   // 誓約「法脈」：貫穿一名、記下已命中、繼續飛
         gone = true; break;
       }
     }
@@ -7398,7 +7437,7 @@ function drawOrigin() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#e8eef5'; ctx.font = 'bold 30px Consolas'; ctx.fillText('你是什麼樣的騎士', cv.width / 2, 74);
   ctx.fillStyle = 'rgba(205,214,224,0.7)'; ctx.font = '14px Consolas';
-  ctx.fillText('選一套開局配裝——這決定的是打法，不是強弱。各有一個明確的弱點。', cv.width / 2, 100);
+  ctx.fillText('選一套開局配裝——這決定的是打法，不是強弱。各帶一道專屬誓約＝這位騎士的本質。', cv.width / 2, 100);
 
   const avail = ORIGIN_IDS.filter(originAvailable);   // base 4 + 已解鎖；未解鎖的不顯示
   originList = avail;
@@ -7415,6 +7454,15 @@ function drawOrigin() {
     ctx.font = 'bold 20px Consolas'; ctx.fillStyle = '#e8eef5'; ctx.fillText(O.name, bx + 56, y + 32);
     ctx.font = '13px Consolas'; ctx.fillStyle = col; ctx.fillText(O.title, bx + 56 + 56, y + 32);
     ctx.font = '12px Consolas'; ctx.fillStyle = '#9fb3c8'; ctx.fillText(O.desc.replace(/\*\*/g, ''), bx + 56, y + 54);
+    // 綁定誓約徽章（右上）＝這位騎士的本質；卡片夠高時多顯示一行本質敘述
+    const boath = boundOathFor(id);
+    if (boath && OATHS[boath]) {
+      const OB = OATHS[boath];
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 13px Consolas'; ctx.fillStyle = col; ctx.fillText('◈ 誓約 · ' + OB.name, bx + bw - 16, y + 30);
+      if (showSlots) { ctx.font = '11px Consolas'; ctx.fillStyle = '#8b98a6'; ctx.fillText(OB.desc.replace(/\*\*/g, ''), bx + bw - 16, y + 50); }
+      ctx.textAlign = 'left';
+    }
     // 實際配裝：一眼看得到四個槽位 + 甲
     const K = O.kit;
     const wName = (w) => (w && WEAPONS[w] ? WEAPONS[w].name : '—');
