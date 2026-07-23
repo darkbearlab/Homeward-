@@ -7442,48 +7442,70 @@ function drawLoadoutCard(mi, x, y, w, h) {
   };
   handsBlock(y + 42, 1);   // 槽 1：主手 + 副手
   handsBlock(y + 90, 2);   // 槽 2：主手 + 副手
-  // 槽 3／4＝術的兩種載具（卷軸有次數、習得有 CD）
-  const scroll = r.itemId ? artOf(r.itemId) : null, learned = r.abilityId ? artOf(r.abilityId) : null;
-  row(y + 138, 20, 'rgba(255,210,125,0.16)',
-    `槽3 卷軸 ${scroll ? scroll.name + ' ×' + (r.itemCount || 0) : '—'}`,
-    editable && sel && sel.kind === 'item',
-    () => equipGearFromWarehouse(restSel.idx, mi, 'item', 'itemId'), () => unequipGear(mi, 'item', 'itemId'), !!r.itemId);
-  row(y + 160, 20, 'rgba(192,160,255,0.14)',
-    `槽4 習得 ${learned ? learned.name + '（CD ' + learned.cooldown + 's）' : '—'}`,
-    editable && sel && sel.kind === 'ability',
-    () => equipAbilityFromWarehouse(restSel.idx, mi), () => unequipAbility(mi), !!r.abilityId);
-  // 甲：獨立槽位（不佔手，但吃移速與耐力回復）
-  const AR = ARMORS[r.armorId] || ARMORS.none;
-  row(y + 182, 20, 'rgba(224,194,74,0.16)',
-    `甲 ${AR.name}　擋${(AR.armor * 100) | 0}% 速${(AR.moveMul * 100) | 0}% 耐回${(AR.stamRegenMul * 100) | 0}%`,
-    editable && sel && sel.kind === 'armor',
-    () => equipGearFromWarehouse(restSel.idx, mi, 'armor', 'armorId'), () => unequipGear(mi, 'armor', 'armorId'), !!r.armorId && r.armorId !== 'none');
-  row(y + 204, 20, 'rgba(159,208,224,0.16)', `裝備 ${r.equipId ? EQUIPMENT[r.equipId].name : '—'}`, editable && sel && sel.kind === 'equip',
-    () => equipGearFromWarehouse(restSel.idx, mi, 'equip', 'equipId'), () => unequipGear(mi, 'equip', 'equipId'), !!r.equipId);
-  // TARGET 階段：整卡＝指派目標
-  if (restPhase === 'TARGET') {
-    ctx.fillStyle = 'rgba(255,210,125,0.10)'; ctx.fillRect(x, y, w, h);
-    ctx.lineWidth = 2; ctx.strokeStyle = '#ffd27d'; ctx.strokeRect(x, y, w, h);
-    ctx.textAlign = 'center'; ctx.font = 'bold 12px Consolas'; ctx.fillStyle = '#ffd27d';
-    ctx.fillText('▶ 點此指派', x + w / 2, y + h - 8);
-    pushRect(x, y, w, h, () => applyTarget(mi));
+  // 自由位（0＝卷軸、1＝習得、2+＝freeExtra 通用載具）——數量隨「行囊」解鎖成長；跑動游標＝卡片高度自適應
+  let yt = y + 138;
+  const freeCount = memberFreeSlots(mi);
+  for (let fi = 0; fi < freeCount; fi++) {
+    if (fi === 0) {
+      const a = r.itemId ? artOf(r.itemId) : null;
+      row(yt, 20, 'rgba(255,210,125,0.16)', `自由位1 卷軸 ${a ? a.name + ' ×' + (r.itemCount || 0) : '—'}`,
+        editable && sel && sel.kind === 'item',
+        () => equipGearFromWarehouse(restSel.idx, mi, 'item', 'itemId'), () => unequipGear(mi, 'item', 'itemId'), !!r.itemId);
+    } else if (fi === 1) {
+      const a = r.abilityId ? artOf(r.abilityId) : null;
+      row(yt, 20, 'rgba(192,160,255,0.14)', `自由位2 習得 ${a ? a.name + '（CD ' + a.cooldown + 's）' : '—'}`,
+        editable && sel && sel.kind === 'ability',
+        () => equipAbilityFromWarehouse(restSel.idx, mi), () => unequipAbility(mi), !!r.abilityId);
+    } else {
+      const ex = (r.freeExtra || [])[fi - 2] || null, a = (ex && ex.id) ? artOf(ex.id) : null;
+      const lbl = a ? (a.name + (ex.kind === 'item' ? ' ×' + (ex.count || 0) : '（CD ' + a.cooldown + 's）')) : '—';
+      row(yt, 20, 'rgba(150,200,170,0.14)', `自由位${fi + 1} ${lbl}`,
+        editable && sel && (sel.kind === 'item' || sel.kind === 'ability'),
+        () => equipFreeExtraFromWarehouse(restSel.idx, mi, fi - 2), () => unequipFreeExtra(mi, fi - 2), !!(ex && ex.id));
+    }
+    yt += 22;
   }
+  // 甲 + 裝備（獨立槽位）
+  const AR = ARMORS[r.armorId] || ARMORS.none;
+  row(yt, 20, 'rgba(224,194,74,0.16)', `甲 ${AR.name}　擋${(AR.armor * 100) | 0}% 速${(AR.moveMul * 100) | 0}% 耐回${(AR.stamRegenMul * 100) | 0}%`,
+    editable && sel && sel.kind === 'armor',
+    () => equipGearFromWarehouse(restSel.idx, mi, 'armor', 'armorId'), () => unequipGear(mi, 'armor', 'armorId'), !!r.armorId && r.armorId !== 'none'); yt += 22;
+  row(yt, 20, 'rgba(159,208,224,0.16)', `裝備 ${r.equipId ? EQUIPMENT[r.equipId].name : '—'}`, editable && sel && sel.kind === 'equip',
+    () => equipGearFromWarehouse(restSel.idx, mi, 'equip', 'equipId'), () => unequipGear(mi, 'equip', 'equipId'), !!r.equipId);
   ctx.textAlign = 'left';
 }
 
-/* ---- 休息關：倉庫格 ---- */
-function drawRestWarehouse(wy) {
+/* ---- 休息關：隊伍列（只讀；TARGET 階段＝指派升級對象）---- */
+// 只有騎士可配裝（configOK），所以扈從不再畫配裝卡＝這裡只做「誰在隊上」一覽 + 指定目標。
+function drawRosterStrip(x, y, w) {
+  ctx.textAlign = 'left'; ctx.font = 'bold 13px Consolas'; ctx.fillStyle = '#cdd6e0'; ctx.fillText('隊伍', x, y - 6);
+  const targeting = (restPhase === 'TARGET');
+  if (targeting) { ctx.textAlign = 'right'; ctx.font = 'bold 12px Consolas'; ctx.fillStyle = '#ffd27d'; ctx.fillText('▶ 點選指派對象', x + w, y - 6); ctx.textAlign = 'left'; }
+  const rh = 40, gap = 6;
+  for (let i = 0; i < roster.length; i++) {
+    const r = roster[i], ry = y + i * (rh + gap), isK = i === KNIGHT_ID;
+    ctx.fillStyle = isK ? 'rgba(40,52,66,0.95)' : 'rgba(22,28,38,0.92)'; ctx.fillRect(x, ry, w, rh);
+    ctx.lineWidth = isK ? 2 : 1.2; ctx.strokeStyle = isK ? hsl(r.hue, 60, 62) : 'rgba(120,140,160,0.4)'; ctx.strokeRect(x, ry, w, rh);
+    ctx.textAlign = 'left'; ctx.font = 'bold 13px Consolas'; ctx.fillStyle = hsl(r.hue, 60, 74); ctx.fillText(r.name, x + 12, ry + 17);
+    ctx.font = '10px Consolas'; ctx.fillStyle = isK ? '#8fd0ff' : '#8b97a5'; ctx.fillText(isK ? '◈ 騎士（可配裝）' : '扈從 · 兵種固定', x + 12, ry + 32);
+    ctx.textAlign = 'right'; ctx.font = '11px Consolas'; ctx.fillStyle = '#9fb3c8'; ctx.fillText(`${rosterClass(r).name}　HP ${rmaxhp(r)}`, x + w - 12, ry + 17);
+    const W = WEAPONS[r.weaponId]; ctx.font = '10px Consolas'; ctx.fillStyle = '#7f8b99'; ctx.fillText(W ? W.name : '—', x + w - 12, ry + 32);
+    ctx.textAlign = 'left';
+    if (targeting) { ctx.fillStyle = 'rgba(255,210,125,0.10)'; ctx.fillRect(x, ry, w, rh); ctx.lineWidth = 2; ctx.strokeStyle = '#ffd27d'; ctx.strokeRect(x, ry, w, rh); pushRect(x, ry, w, rh, () => applyTarget(i)); }
+  }
+}
+
+/* ---- 休息關：倉庫格（面板版：置於騎士面板下半）---- */
+function drawRestWarehouse(px, py, pw) {
   const manage = (restPhase === 'CHOICE' || restPhase === 'DONE');
   const cap = warehouseCap(), used = warehouseUsed(), over = overCap();
   ctx.textAlign = 'left'; ctx.font = 'bold 13px Consolas'; ctx.fillStyle = over ? '#ff8a8a' : '#cdd6e0';
-  ctx.fillText(`共用倉庫  ${used}/${cap}${over ? '  ⚠ 超過上限，請丟棄' : ''}`, 140, wy - 8);
-  ctx.font = '10px Consolas'; ctx.fillStyle = '#7a8696';
-  ctx.fillText(CONFIG.loadout.abilitiesCountTowardCap ? '（武器與技能皆佔格）' : '（僅武器佔格）', 140 + 220, wy - 8);
-  const cw = 56, ch = 56, gap = 8, perRow = 16, slots = Math.max(cap, warehouse.length);
-  const startX = (cv.width - (perRow * cw + (perRow - 1) * gap)) / 2;
+  ctx.fillText(`倉庫  ${used}/${cap}${over ? '  ⚠ 超上限' : ''}`, px, py - 6);
+  if (manage) uiButton(px + pw - 92, py - 21, 92, 17, restSelItem() ? '丟棄 ✕' : '（先選物）', () => { if (restSel && restSel.type === 'wh') discardWarehouse(restSel.idx); }, { enabled: !!restSelItem(), font: '10px Consolas', bg: 'rgba(90,40,40,0.9)', border: '#c66' });
+  const cw = 62, ch = 54, gap = 7, perRow = Math.max(1, Math.floor((pw + gap) / (cw + gap))), slots = Math.max(cap, warehouse.length);
   for (let s = 0; s < slots; s++) {
     const col = s % perRow, row = Math.floor(s / perRow);
-    const x = startX + col * (cw + gap), y = wy + row * (ch + gap);
+    const x = px + col * (cw + gap), y = py + row * (ch + gap);
     const it = warehouse[s];
     const selected = restSel && restSel.type === 'wh' && restSel.idx === s;
     const beyond = s >= cap;   // 超過上限的格（紅框警示）
@@ -7505,35 +7527,34 @@ function drawRestWarehouse(wy) {
       if (manage) pushRect(x, y, cw, ch, () => { restSel = selected ? null : { type: 'wh', idx: s }; });
     }
   }
-  // 丟棄選取
-  if (manage) uiButton(cv.width - 150, wy - 22, 120, 20, restSelItem() ? '丟棄選取 ✕' : '（先選倉庫物）', () => { if (restSel && restSel.type === 'wh') discardWarehouse(restSel.idx); }, { enabled: !!restSelItem(), font: '11px Consolas', bg: 'rgba(90,40,40,0.9)', border: '#c66' });
   ctx.textAlign = 'left';
 }
 
-/* ---- 休息關：底部動作列（二選一 / 繼續）+ 模態（搜刮選項 / 指定目標）---- */
-function drawRestActionBar() {
+/* ---- 休息關：底部動作列（二選一 / 繼續）+ 模態（搜刮選項 / 指定目標）。cx＝置中點（面板在右，動作列擺左區）---- */
+function drawRestActionBar(cx) {
+  if (cx == null) cx = cv.width / 2;
   const ay = 596, over = overCap();
   if (restPhase === 'CHOICE') {
     ctx.textAlign = 'center'; ctx.font = '12px Consolas'; ctx.fillStyle = '#8b97a5';
-    ctx.fillText('二選一 —「隨機整補（純拿資源、零風險）」對上「收留 +1 名同行者（兵種隨機）」。可隨時整理倉庫/配裝/分配彈藥。風險與抉擇在事件格。', cv.width / 2, ay - 16);
-    uiButton(cv.width / 2 - 320, ay, 300, 64, '', null, { bg: 'rgba(30,52,70,0.9)', border: '#7fe3ff' });
-    uiButton(cv.width / 2 + 20, ay, 300, 64, '', null, { bg: over ? 'rgba(34,40,48,0.7)' : 'rgba(30,52,42,0.9)', border: over ? '#566' : '#7fffa8' });
+    ctx.fillText('二選一：整補資源（零風險）／收留 +1 同行者。可隨時整理倉庫、配裝。', cx, ay - 16);
+    uiButton(cx - 310, ay, 300, 64, '', null, { bg: 'rgba(30,52,70,0.9)', border: '#7fe3ff' });
+    uiButton(cx + 10, ay, 300, 64, '', null, { bg: over ? 'rgba(34,40,48,0.7)' : 'rgba(30,52,42,0.9)', border: over ? '#566' : '#7fffa8' });
     // 搜刮
-    ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[1] 搜刮整補', cv.width / 2 - 170, ay + 24);
-    ctx.fillStyle = '#aeb9c5'; ctx.font = '11px Consolas'; ctx.fillText('隨機補給：武器/彈藥/裝備/道具', cv.width / 2 - 170, ay + 42);
-    ctx.fillText('純拿資源、零風險（可能多樣）', cv.width / 2 - 170, ay + 57);
-    pushRect(cv.width / 2 - 320, ay, 300, 64, restDoScavenge);
+    ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[1] 搜刮整補', cx - 160, ay + 24);
+    ctx.fillStyle = '#aeb9c5'; ctx.font = '11px Consolas'; ctx.fillText('隨機補給：武器/彈藥/裝備/道具', cx - 160, ay + 42);
+    ctx.fillText('純拿資源、零風險（可能多樣）', cx - 160, ay + 57);
+    pushRect(cx - 310, ay, 300, 64, restDoScavenge);
     // 喚醒
-    ctx.fillStyle = over ? '#6a727c' : '#7fffa8'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[2] 收留同行者', cv.width / 2 + 170, ay + 24);
+    ctx.fillStyle = over ? '#6a727c' : '#7fffa8'; ctx.font = 'bold 15px Consolas'; ctx.fillText('[2] 收留同行者', cx + 160, ay + 24);
     ctx.fillStyle = over ? '#6a727c' : '#aeb9c5'; ctx.font = '11px Consolas';
-    ctx.fillText('保證 +1 隊員（個性隨機）', cv.width / 2 + 170, ay + 42);
-    ctx.fillText(over ? '需先整理倉庫至 ≤ 上限' : '容量 +' + CONFIG.loadout.slotsPerMember, cv.width / 2 + 170, ay + 57);
-    if (!over) pushRect(cv.width / 2 + 20, ay, 300, 64, restDoAwaken);
+    ctx.fillText('保證 +1 隊員（個性隨機）', cx + 160, ay + 42);
+    ctx.fillText(over ? '需先整理倉庫至 ≤ 上限' : '容量 +' + CONFIG.loadout.slotsPerMember, cx + 160, ay + 57);
+    if (!over) pushRect(cx + 10, ay, 300, 64, restDoAwaken);
   } else if (restPhase === 'DONE') {
     ctx.textAlign = 'center'; ctx.font = 'bold 15px Consolas'; ctx.fillStyle = '#5fd06b';
-    ctx.fillText('✓ ' + restMsg, cv.width / 2, ay + 16);
-    if (over) { ctx.font = '12px Consolas'; ctx.fillStyle = '#ff8a8a'; ctx.fillText(`倉庫超過上限（${warehouseUsed()}/${warehouseCap()}），請丟棄後才能繼續`, cv.width / 2, ay + 40); }
-    uiButton(cv.width / 2 - 110, ay + 50, 220, 36, '深入下一關 ▶', restDoContinue, { enabled: !over, font: 'bold 15px Consolas', bg: over ? 'rgba(34,40,48,0.7)' : 'rgba(40,60,46,0.95)', border: over ? '#566' : '#7fffa8', fg: over ? '#6a727c' : '#dfffe8' });
+    ctx.fillText('✓ ' + restMsg, cx, ay + 16);
+    if (over) { ctx.font = '12px Consolas'; ctx.fillStyle = '#ff8a8a'; ctx.fillText(`倉庫超過上限（${warehouseUsed()}/${warehouseCap()}），請丟棄後才能繼續`, cx, ay + 40); }
+    uiButton(cx - 110, ay + 50, 220, 36, '深入下一關 ▶', restDoContinue, { enabled: !over, font: 'bold 15px Consolas', bg: over ? 'rgba(34,40,48,0.7)' : 'rgba(40,60,46,0.95)', border: over ? '#566' : '#7fffa8', fg: over ? '#6a727c' : '#dfffe8' });
   }
   ctx.textAlign = 'left';
 }
@@ -7854,33 +7875,31 @@ function drawRest() {
   restRects = [];
   if (restSel && restSel.type === 'wh' && restSel.idx >= warehouse.length) restSel = null;
   ctx.fillStyle = '#0b0f15'; ctx.fillRect(0, 0, cv.width, cv.height);
-  // 標題 + 戰報
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 26px Consolas'; ctx.fillText('REST · 休息關', cv.width / 2, 40);
+  // 版面：左＝隊伍列 + 底部動作列；右＝騎士配裝面板（上半裝備 / 下半倉庫）＝PoE 風
+  const PANEL_W = 424, PANEL_X = cv.width - PANEL_W - 16, leftW = PANEL_X - 64, leftCx = 32 + leftW / 2;
+  // 標題 + 戰報（左上）
+  ctx.textAlign = 'left'; ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 24px Consolas'; ctx.fillText('REST · 休息關', 32, 44);
   if (lastSummary) {
-    ctx.font = '13px Consolas'; ctx.fillStyle = '#9fb3c8';
+    ctx.font = '12px Consolas'; ctx.fillStyle = '#9fb3c8';
     let s = `第 ${lastSummary.mission} 關肅清 · 撤出 ${lastSummary.extracted.join(', ') || '—'}`;
     if (lastSummary.dead.length) s += ` · 陣亡 ${lastSummary.dead.join(', ')}`;
-    ctx.fillText(s, cv.width / 2, 62);
+    ctx.fillText(s, 32, 66);
   }
-  ctx.textAlign = 'left';
-
-  // 配裝卡（含個性/武器/技能/裝備/道具/彈藥）
-  // 卡片高度＝七列（槽1 主+副、槽2 主+副、槽3 卷軸、槽4 習得、甲、裝備）＋彈藥列
-  const n = roster.length, perRow = 5, cw = 234, ch = 232, gap = 12;
-  for (let i = 0; i < n; i++) {
-    const inRow = Math.min(n - Math.floor(i / perRow) * perRow, perRow);
-    const totalW = inRow * cw + (inRow - 1) * gap;
-    const col = i % perRow, row = Math.floor(i / perRow);
-    const x = (cv.width - totalW) / 2 + col * (cw + gap), y = 84 + row * (ch + 12);
-    drawLoadoutCard(i, x, y, cw, ch);
-  }
-  drawRestWarehouse(456);
-  drawRestActionBar();
+  // 右側面板標頭
+  ctx.textAlign = 'left'; ctx.font = 'bold 14px Consolas'; ctx.fillStyle = '#e8c877'; ctx.fillText('◈ 騎士配裝', PANEL_X, 44);
+  ctx.font = '10px Consolas'; ctx.fillStyle = '#8b97a5'; ctx.fillText('選倉庫物 → 點裝備列裝上 · ▸倉＝卸下', PANEL_X, 62);
+  // 左：隊伍列（只讀 / TARGET 指派）
+  drawRosterStrip(32, 104, Math.min(leftW, 460));
+  // 右上：騎士配裝卡（高度隨自由位數自適應）；右下：倉庫
+  const kh = 138 + memberFreeSlots(KNIGHT_ID) * 22 + 44 + 12;
+  drawLoadoutCard(KNIGHT_ID, PANEL_X, 76, PANEL_W, kh);
+  drawRestWarehouse(PANEL_X, 76 + kh + 26, PANEL_W);
+  // 左下：動作列（置中於左區，避開右側面板）
+  drawRestActionBar(leftCx);
   if (restPhase === 'OFFERS') drawRestOffers();
   if (restPhase === 'TARGET') {
-    ctx.textAlign = 'center'; ctx.fillStyle = '#ffd27d'; ctx.font = 'bold 16px Consolas';
-    ctx.fillText('▶ 點選要套用此升級的成員（上方卡片）', cv.width / 2, 78); ctx.textAlign = 'left';
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffd27d'; ctx.font = 'bold 15px Consolas';
+    ctx.fillText('▶ 於左側隊伍列點選要套用此升級的成員', leftCx, 92); ctx.textAlign = 'left';
   }
   if (restTutorial) drawRestTutorial();
 }
