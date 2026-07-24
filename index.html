@@ -6601,16 +6601,15 @@ function drawParticles() {
 // 聲音漣漪（世界空間）：把既有 soundPings 畫成「原地擴散、邊擴邊淡」的淡環＝每次發聲都看得到、且環的大小＝聲音傳多遠。
 // 和 soundEdge（畫面外框指向）併行；CONFIG.soundRipple.enabled 可關做 A/B 比較。近接/腳步/開火/陣亡各自帶自己的 ping 顏色。
 function drawSoundRipples() {
-  const C = CONFIG.soundRipple; if (!C || !C.enabled || !soundPings.length || !cam) return;
-  ctx.lineWidth = C.width;
+  const C = CONFIG.soundRipple; if (!C || !C.enabled || !soundPings.length) return;
+  ctx.lineWidth = C.width;   // 本函式在世界座標繪製（draw() 已套 applyCam）＝直接用 s.x/s.y、半徑用世界單位、不再 w2s/×cam.scale
   for (const s of soundPings) {
     const frac = clamp(1 - s.life / s.max, 0, 1);           // 0→1 隨壽命向外擴散
-    const rad = s.r * (0.15 + 0.85 * frac) * cam.scale;     // 由小擴到滿半徑（＝聽覺傳播距離）
+    const rad = s.r * (0.15 + 0.85 * frac);                 // 世界單位：由小擴到滿半徑（＝聽覺傳播距離）
     const a = C.alpha * (1 - frac);                          // 邊擴邊淡
     if (a <= 0.004) continue;
-    const p = w2s(s);
     ctx.strokeStyle = `rgba(${s.col},${a.toFixed(3)})`;
-    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1, rad), 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(s.x, s.y, Math.max(1, rad), 0, Math.PI * 2); ctx.stroke();
   }
 }
 /* ---- 近接可讀性：揮斬扇形 / 盾格弧 / 硬直標記（世界座標，draw() 已套 applyCam）----
