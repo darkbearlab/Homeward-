@@ -304,16 +304,20 @@ CONFIG.morale = {
   routSpeedMul: 1.25,      // 潰逃移動倍率
   fleeAwayDist: 560,       // 潰逃敵人跑這麼遠＝脫離戰場
   // 崩潰反應（panicType，出生擲、依兵種加權）：flee＝潰逃(現況)、berserk＝捨身死戰(背水 buff＋更長連段＋不逃)、freeze＝呆立不動
+  // retreat＝後撤：品質較高的兵種才有的「有章法撤退」——不背向玩家亂跑，而是沿路網退向撤離點
   panic: {
-    default:   { flee: 55, berserk: 30, freeze: 15 },
-    levy:      { flee: 60, berserk: 10, freeze: 30 },   // 雜兵：多逃或愣
-    wolf:      { flee: 45, berserk: 55, freeze: 0  },   // 動物：戰或逃、不會愣
-    archer:    { flee: 60, berserk: 15, freeze: 25 },   // 遠程：多逃/愣
-    arbalest:  { flee: 60, berserk: 15, freeze: 25 },
-    manatarms: { flee: 20, berserk: 70, freeze: 10 },   // 菁英：多半死戰
-    serjeant:  { flee: 20, berserk: 70, freeze: 10 },
+    default:   { flee: 40, berserk: 30, freeze: 15, retreat: 15 },   // 徒步兵等：少數會有序後撤
+    levy:      { flee: 60, berserk: 10, freeze: 30, retreat: 0  },   // 雜兵：不會有章法
+    wolf:      { flee: 45, berserk: 55, freeze: 0,  retreat: 0  },   // 動物：不會後撤
+    archer:    { flee: 55, berserk: 15, freeze: 25, retreat: 5  },   // 遠程：多逃/愣
+    arbalest:  { flee: 55, berserk: 15, freeze: 25, retreat: 5  },
+    spearman:  { flee: 30, berserk: 25, freeze: 10, retreat: 35 },   // 受訓兵種：有序後撤機率高
+    shieldman: { flee: 30, berserk: 25, freeze: 10, retreat: 35 },
+    manatarms: { flee: 15, berserk: 55, freeze: 5,  retreat: 25 },   // 菁英：多半死戰、部分有序後撤
+    serjeant:  { flee: 15, berserk: 55, freeze: 5,  retreat: 25 },
   },
   berserkMoveMul: 1.15, berserkDmgMul: 1.15, berserkKeepBase: 0.8,   // 捨身：背水移速/傷害加成 + 更高的攻擊權保留(連段)機率
+  retreatSpeedMul: 1.0,    // 後撤＝有序(不像潰逃加速)；沿 waypoint 退向撤離點，退到即離場
   // ── 跨關（質量是活的，這些現在多半 moot；保留欄位）──
   restRestore: 1.0, interMissionRestore: 0.5,
 };
@@ -5025,12 +5029,13 @@ const isShaken = (u) => u.moraleState === 'shaken' || u.moraleState === 'routed'
 const isRouted = (u) => u.moraleState === 'routed';
 // 崩潰反應：出生擲一個 panicType（依兵種加權），崩潰(shaken/routed)時才顯現行為。berserk＝捨身、freeze＝呆立。
 function pickPanic(typeId) {
-  const P = CONFIG.morale.panic, w = P[typeId] || P.default, keys = ['flee', 'berserk', 'freeze'];
+  const P = CONFIG.morale.panic, w = P[typeId] || P.default, keys = ['flee', 'berserk', 'freeze', 'retreat'];
   let tot = 0; for (const k of keys) tot += w[k] || 0;
   let r = srand() * tot; for (const k of keys) { r -= w[k] || 0; if (r <= 0) return k; } return 'flee';
 }
 const isBerserk = (u) => u.panicType === 'berserk' && isShaken(u);   // 崩潰後的捨身死戰
 const isFrozen  = (u) => u.panicType === 'freeze'  && isShaken(u);   // 崩潰後的呆立不動
+const isRetreat = (u) => u.panicType === 'retreat' && isRouted(u);   // 潰逃時的有序後撤（退向撤離點）
 // 依「陣營士氣 vs 自己的門檻」決定狀態；換性格與潰逃都在這裡收斂
 /* 單位是否已進入戰鬥＝崩潰判定的前提（使用者定案）。**未必要見血**，看到對方進入交戰即算。
    否則在「不是剛開場就交戰」的地圖上，敵人什麼都還沒看到就因別處的士氣下滑而潰散。
@@ -5059,10 +5064,16 @@ function refreshMoraleState(u) {
 function tickMorale(u, dt) {
   if (!hasMorale(u)) return;
   refreshMoraleState(u);
-  if (isRouted(u) && u.faction !== 'player' && !u.dead && (u.panicType || 'flee') === 'flee') {   // 只有潰逃(flee)型跑夠遠＝脫離戰場；捨身/呆立不離場
-    let nearest = Infinity;
-    for (const o of activePlayers()) nearest = Math.min(nearest, dist(o.pos, u.pos));
-    if (nearest > CONFIG.morale.fleeAwayDist) fleeUnit(u);
+  if (isRouted(u) && u.faction !== 'player' && !u.dead) {   // 捨身/呆立不離場
+    const pt = u.panicType || 'flee';
+    if (pt === 'flee') {   // 潰逃：跑離玩家夠遠＝脫離戰場
+      let nearest = Infinity;
+      for (const o of activePlayers()) nearest = Math.min(nearest, dist(o.pos, u.pos));
+      if (nearest > CONFIG.morale.fleeAwayDist) fleeUnit(u);
+    } else if (pt === 'retreat') {   // 後撤：退到撤離點＝有序離場
+      const g = EXTRACT || ENTRY;
+      if (g && dist(u.pos, g) < CONFIG.nodeReach * 2) fleeUnit(u);
+    }
   }
   if (u.moraleFxT > 0) u.moraleFxT -= dt;
 }
@@ -5454,14 +5465,16 @@ function enemyTick(e, dt) {
   if (e.staggerT > 0) return;   // 硬直（被戰鎚打中/招架失敗）：完全不行動
   if (e.dummy) return;          // 訓練假人（近戰試作場）：只挨打，不思考
   if (isFrozen(e)) { e.swing = null; e.aimT = 0; releaseAttackToken(e); return; }   // 呆立：崩潰後當場愣住＝不動不打（白送擊殺，但擋路占數）；士氣回穩會解除
-  // 士氣潰逃（flee 型）：丟下戰鬥往入口方向跑（不還手）。**這是「孤騎對軍團」的解**——你殺不完十個人，
-  // 但砍倒兩個雜兵、再殺掉他們的菁英，剩下的就散了。berserk 型即使 routed 也不逃＝往下走正常交戰（捨身衝殺）。
-  if (isRouted(e) && (e.panicType || 'flee') === 'flee') {
+  // 崩潰撤退：潰逃(flee)＝慌亂背向玩家直線跑；後撤(retreat)＝有章法、沿路網退向撤離點。**這是「孤騎對軍團」的解**——
+  // 你殺不完十個人，但砍倒兩個雜兵、再殺掉他們的菁英，剩下的就散了。berserk 型即使 routed 也不撤＝往下走正常交戰（捨身衝殺）。
+  if (isRouted(e) && (e.panicType || 'flee') !== 'berserk') {
     releaseAttackToken(e);
-    const away = ENTRY || { x: e.pos.x, y: e.pos.y };
-    const f0 = nearestFriendly(e.pos);
-    const goal = f0 ? { x: e.pos.x + (e.pos.x - f0.pos.x), y: e.pos.y + (e.pos.y - f0.pos.y) } : away;   // 背向最近的敵人逃
-    moveToward(e, goal, e.moveSpeed / CONFIG.tempo * CONFIG.morale.routSpeedMul * dt);
+    const retreat = e.panicType === 'retreat';
+    let goal;
+    if (retreat) { goal = EXTRACT || ENTRY || { x: e.pos.x, y: e.pos.y }; }   // 後撤：奔向撤離點
+    else { const f0 = nearestFriendly(e.pos); goal = f0 ? { x: e.pos.x + (e.pos.x - f0.pos.x), y: e.pos.y + (e.pos.y - f0.pos.y) } : (ENTRY || { x: e.pos.x, y: e.pos.y }); }   // 潰逃：背向最近的敵人
+    const step = e.moveSpeed / CONFIG.tempo * (retreat ? CONFIG.morale.retreatSpeedMul : CONFIG.morale.routSpeedMul) * dt;
+    if (retreat) navMoveTo(e, goal, step); else moveToward(e, goal, step);   // 後撤走 waypoint 尋路(繞牆、有章法)、潰逃直線背離(慌亂)
     e.facing = rotToward(e.facing, angTo(e.pos, goal), e.weapon.turnSpeed * Math.PI / 180 * dt);
     openDoorsNear(e, false);
     return;
@@ -7055,14 +7068,15 @@ function drawCommandWheel() {
 function drawMoraleFlag(u, s) {
   if (!hasMorale(u) || u.moraleState === 'steady') return;
   if (u.dead || u.state === 'DEAD' || u.state === 'EXTRACTED') return;
-  const routed = isRouted(u), berserk = isBerserk(u), frozen = isFrozen(u);
-  // 依崩潰反應決定旗色/文字：捨身＝亮紅、呆立＝灰、潰逃＝紅、動搖(flee)＝琥珀
+  const routed = isRouted(u), berserk = isBerserk(u), frozen = isFrozen(u), retreat = isRetreat(u);
+  // 依崩潰反應決定旗色/文字：捨身＝亮紅、呆立＝灰、後撤＝冷藍(有序)、潰逃＝紅、動搖(flee)＝琥珀
   let label = null, rgb, flashCol;
-  if (berserk)     { label = '捨身'; rgb = '255,70,50';   flashCol = '#ff6b4a'; }
-  else if (frozen) { label = '呆立'; rgb = '150,162,174'; flashCol = '#aeb6c0'; }
-  else if (routed) { label = '潰逃'; rgb = '255,80,80';   flashCol = '#ff8080'; }
-  else             {                 rgb = '255,190,80';  flashCol = '#ffd27a'; }   // 動搖(flee)：只有旗、無常駐字（同現況）
-  const big = routed || berserk;
+  if (berserk)      { label = '捨身'; rgb = '255,70,50';   flashCol = '#ff6b4a'; }
+  else if (frozen)  { label = '呆立'; rgb = '150,162,174'; flashCol = '#aeb6c0'; }
+  else if (retreat) { label = '後撤'; rgb = '120,175,255'; flashCol = '#7ab0ff'; }   // 有序後撤＝冷藍、抖得少
+  else if (routed)  { label = '潰逃'; rgb = '255,80,80';   flashCol = '#ff8080'; }
+  else              {                 rgb = '255,190,80';  flashCol = '#ffd27a'; }   // 動搖(flee)：只有旗、無常駐字（同現況）
+  const big = berserk || (routed && !retreat);
   const y = s.y - u.radius * cam.scale - 16;
   const wob = Math.sin(simTime * (big ? 16 : 9)) * (frozen ? 0 : big ? 3 : 1.6);   // 呆立＝不抖（愣住）
   ctx.textAlign = 'center';
