@@ -573,7 +573,11 @@ CONFIG.melee = {
   poiseDefault: 50,        // 敵人未指定 ENEMY_TYPES.poise 時的體幹上限
   maxAttackers: 2,         // 同時可進攻的近接敵數
   tokenHold: 1.1,          // 取得攻擊權後保有的秒數（沒打到也會過期讓給別人）
-  tokenRest: 0.9,          // 揮完一刀後必須退開休息這麼久才能再拿攻擊權＝進攻有節奏，不是貼身連打
+  tokenRest: 0.9,          // 揮完一刀後（未續攻時）必須退開休息這麼久才能再拿攻擊權＝進攻有節奏，不是貼身連打
+  // 續攻：揮完後有機率保留攻擊權、不休息＝偶爾連段（不可預測＝更難纏）。機率隨已連刀數線性衰減、歸零＝必收手。
+  //   續攻機率 = tokenKeepBase − 已連刀數 × tokenKeepDecay。0.45/0.12＝多數打一下就退、偶爾 2~3 連、運氣差 4、爛到爆 5、絕不 6+。
+  tokenKeepBase: 0.45,     // 第一刀後續攻的基礎機率
+  tokenKeepDecay: 0.12,    // 每多連一刀機率遞減量（歸零＝該刀必停）
   ringDist: 115,           // 沒有攻擊權時，與目標保持的距離
   ringStrafe: 0.55,        // 繞行時的橫移速度倍率
   hitstopHit: 0.035,       // 近接命中的頓幀（比槍擊有份量）
@@ -4086,7 +4090,7 @@ function tryAcquireToken(e, tgt) {
   m.set(e, simTime + CONFIG.melee.tokenHold);
   return true;
 }
-function releaseAttackToken(e) { for (const [, m] of attackTokens) m.delete(e); }
+function releaseAttackToken(e) { e.tokenChain = 0; for (const [, m] of attackTokens) m.delete(e); }   // 交還攻擊權＝續攻連段計數歸零（脫戰/潰逃/死亡也一併重置）
 const totalAttackTokens = () => { let n = 0; for (const [, m] of attackTokens) n += m.size; return n; };
 /* AI 的近戰誤傷閘門：揮擊扇形內、且比目標更近的位置上有自己人 → 不揮。
    與遠程收火同一個原則（AI 不該蠢到自相殘殺）。**玩家的手動攻擊不受此限**＝自己的刀自己負責。 */
@@ -4159,8 +4163,12 @@ function tickMelee(u, dt) {
   if (s.t > aStart && prev < aEnd) meleeHitTest(u, s);   // 判定窗（跨幀也算，低 FPS 不漏判）
   if (s.t >= aEnd + s.recover) {
     u.swing = null;
-    // 敵人揮完一刀＝交還攻擊權並退開休息，換別隻上（不然拿到權的那隻會貼著你連打）
-    if (u.faction !== 'player') { u.atkRestT = CONFIG.melee.tokenRest; releaseAttackToken(u); }
+    // 敵人揮完一刀：有機率保留攻擊權續攻（機率隨連刀數衰減），否則交還攻擊權並退開休息換別隻上
+    if (u.faction !== 'player') {
+      const keepP = CONFIG.melee.tokenKeepBase - (u.tokenChain || 0) * CONFIG.melee.tokenKeepDecay;
+      if (Math.random() < keepP) u.tokenChain = (u.tokenChain || 0) + 1;         // 續攻：留權、不休息 → 直接接下一刀
+      else { u.atkRestT = CONFIG.melee.tokenRest; releaseAttackToken(u); }        // 收手：releaseAttackToken 內會歸零 tokenChain
+    }
   }
   return true;
 }
