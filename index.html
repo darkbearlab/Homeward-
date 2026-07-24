@@ -5182,25 +5182,34 @@ function idleTick(u, dt, lockFacing) {
 
   // 交戰目標：感知到 + 在射程內。Defend(預設)＝只打已交戰敵(不破壞潛行)；Engage＝視野內任何敵都打(會主動開戰)。騎士手動攻擊不受此限
   // 指令層：跟隨/守住＝只理會「繩長內」的敵人（不會被遠處的目標拉走）；集中攻擊＝鎖定指定目標。
+  // 交戰姿態（Q 切換全體）：'avoid'＝只跟隨、不接敵、不開火；'engage'＝主動接近並攻擊繩長內的敵人。
+  // moveTarget＝要接近的敵人（不必在射程內＝主動靠上去，不再呆站挨第一下）；fireTarget＝在射程內才開火。
   const anc = anchorOf(u), cmdMode = (u.cmd && u.cmd.mode) || 'follow';
-  let target = null, td = Infinity;
-  if (cmdMode === 'focus' && u.cmd.target && !u.cmd.target.dead && canSee(u, u.cmd.target.pos)) {
-    target = u.cmd.target; td = dist(u.pos, target.pos);          // 專注：無視射程/姿態限制，全力打它
-  } else {
-    for (const e of enemies) {
-      if (e.dead || st.targeting === 'NONE') continue;
-      // 靜默中（還沒被發現）＝只反擊已在交戰的敵人，不主動破壞潛行；曝光後＝視野內任何敵都打
-      if (!squadRevealed && e.state !== 'ENGAGED') continue;
-      if (!canSee(u, e.pos)) continue;
-      if (anc && dist(e.pos, anc.pos) > anc.leash * CONFIG.command.engageRangeMul) continue;   // 繩長外的敵人不理
-      const d = dist(u.pos, e.pos);
-      if (d <= W.range && d < td) { td = d; target = e; }
+  let moveTarget = null, fireTarget = null;
+  if (retainerStance === 'engage' && st.targeting !== 'NONE') {
+    if (cmdMode === 'focus' && u.cmd.target && !u.cmd.target.dead && canSee(u, u.cmd.target.pos)) {
+      moveTarget = u.cmd.target;                                  // 專注：全力打指定目標
+    } else {
+      // 繩長內、看得到的敵人：**優先已交戰(ENGAGED)者**（戰鬥已起就別呆站），其次比最近。
+      let bestScore = -Infinity;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        if (!squadRevealed && e.state !== 'ENGAGED') continue;   // 靜默中只反擊已交戰敵（不主動破壞潛行）
+        if (!canSee(u, e.pos)) continue;
+        if (anc && dist(e.pos, anc.pos) > anc.leash * CONFIG.command.engageRangeMul) continue;   // 繩長外的敵人不理
+        const s = (e.state === 'ENGAGED' ? 1e6 : 0) - dist(u.pos, e.pos);
+        if (s > bestScore) { bestScore = s; moveTarget = e; }
+      }
     }
+    if (moveTarget && dist(u.pos, moveTarget.pos) <= W.range) fireTarget = moveTarget;   // 進到射程才開火
   }
-  allyMoveTick(u, dt, target);   // 依指令移動（錨點/繩長）＋性格選點。原版扈從完全不會移動。
+  allyMoveTick(u, dt, moveTarget);   // engage：朝敵接近（BFS 導航）；avoid/無敵＝跟隨騎士
+  const target = fireTarget;         // 以下開火碼沿用 target
   let mayFire = false;
-  if (st.fireMode === 'AGGRESSIVE' || st.fireMode === 'SUPPRESSIVE') mayFire = !!target;
-  else if (st.fireMode === 'DEFENSIVE') mayFire = !!target && (u.alertTimer > 0 || (nearest && nd < CONFIG.ghostCloseRange));
+  if (fireTarget) {
+    if (st.fireMode === 'AGGRESSIVE' || st.fireMode === 'SUPPRESSIVE') mayFire = true;
+    else if (st.fireMode === 'DEFENSIVE') mayFire = (u.alertTimer > 0 || (nearest && nd < CONFIG.ghostCloseRange));
+  }
 
   u.engageTimer = mayFire ? u.engageTimer + dt : 0;
   const reactDelay = CONFIG.idleReactionDelay;
@@ -5879,6 +5888,7 @@ window.addEventListener('keydown', e => {
   // 數字鍵 1~N＝施展第 N 個自由位（道具/習得）＝PoE 對齊（使用者定案）；換武器組改用滾輪/X，數字鍵不再切裝
   if (k >= '1' && k <= '9') { const kn = knight(); if (kn && kn.state === 'CONTROLLED') { const fi = parseInt(k, 10) - 1; if (fi < memberFreeSlots(KNIGHT_ID)) { seizeIfEscorting(); useFreeSlot(kn, 2 + fi); e.preventDefault(); } } }
   if (k === 'h') { if (e.shiftKey) extractAll(); else toggleExtract(); }                  // H 騎士自走撤離 / Shift+H 命令扈從先行撤離
+  if (k === 'q') { retainerStance = (retainerStance === 'engage') ? 'avoid' : 'engage'; retainerStanceFlashT = 1.4; Sfx.play('stance'); }   // Q 全體隨從：交戰 ↔ 避戰
   if (k === ' ') { if (controlledId != null && useOathSkill(players[controlledId])) e.preventDefault(); }   // 預留鍵：綁定誓約的主動技能（目前 no-op；未實作前不吃事件）
   if (k === 'r') { seizeIfEscorting(); if (controlledId != null) startReload(players[controlledId]); } // 換彈；護送中→奪回
   if (k === 'x') { seizeIfEscorting(); if (controlledId != null) swapWeapon(players[controlledId]); }   // 換槍(主↔副)；護送中→奪回
@@ -5918,6 +5928,8 @@ window.addEventListener('keyup', e => {
    「守住此處」與「集中攻擊」需要一個位置/目標：以騎士的準星指向決定
    （指到敵人＝那隻；指到空地＝那個點）。 */
 let cmdWheel = null, cmdWheelAim0 = 0, cmdFlashT = 0, cmdFlashMode = null;
+let retainerStance = 'engage';   // 全體隨從戰鬥姿態（Q 切換）：'engage'交戰＝主動接近攻擊 / 'avoid'避戰＝只跟隨不打
+let retainerStanceFlashT = 0;    // 切換時的短暫高亮
 function wheelAimTarget() {
   const k = knight(); if (!k) return { pos: null, unit: null };
   const maxLen = 900;
@@ -7114,6 +7126,14 @@ function drawHUD() {
   // 關卡數（左上）；名冊改以底部單位卡片呈現
   ctx.textAlign = 'left'; ctx.font = 'bold 14px Consolas'; ctx.fillStyle = '#9fb3c8';
   ctx.fillText(`MISSION ${missionIndex + 1}`, 16, 24);
+  // 隨從姿態（Q 切換）——有活著的扈從才顯示
+  if (players.some(p => p && p.id !== KNIGHT_ID && p.state !== 'DEAD' && p.state !== 'EXTRACTED')) {
+    if (retainerStanceFlashT > 0) retainerStanceFlashT -= 1 / 60;
+    const eng = retainerStance === 'engage', fl = retainerStanceFlashT > 0;
+    ctx.font = (fl ? 'bold ' : '') + '12px Consolas';
+    ctx.fillStyle = eng ? (fl ? '#a8ffc0' : '#7fd0a0') : (fl ? '#ffe0a0' : '#e0b060');
+    ctx.fillText('隨從 [Q] ' + (eng ? '交戰' : '避戰'), 16, 42);
+  }
 
   // 計時器（上中）——追兵軟取消時整條隱藏（沒有追兵就沒有倒數的意義）
   ctx.textAlign = 'center';
