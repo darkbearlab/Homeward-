@@ -551,6 +551,7 @@ CONFIG.melee = {
   poiseRegenDelay: 1.6,    // 多久沒被打才開始回體幹（太短＝連段打不破，體幹破永遠不會發生）
   poiseRegen: 18,          // 體幹回復速度 /s
   poiseBreakStagger: 0.9,  // 體幹破的硬直秒數
+  staggerDmg: 15,          // 失衡打斷：單擊(post-armor)≥此值 → 打斷「預告中」動作(近接前搖/遠程瞄準/施法前搖)，所有單位同一把尺。實測：農兵/劍兵/槍兵砸不斷、披甲士/軍士(鎚斧)會斷。體幹破是另一層(重硬直)
   poiseBreakDmgMul: 1.6,   // 硬直中受到的傷害倍率（處決窗）
   poiseBreakKnockMul: 2.5, // 體幹破當下的擊退倍率
   blockPoiseMul: 0.5,      // 舉盾擋下時，體幹只吃這個比例（擋得住傷害，擋不住全部衝擊）
@@ -4063,7 +4064,7 @@ function breakPoise(t, fromAng, by) {
   const M = CONFIG.melee;
   t.poise = t.poiseMax;
   t.staggerT = Math.max(t.staggerT || 0, M.poiseBreakStagger);
-  t.swing = null; t.blocking = false; t.blockT = null;   // 破了就是破了：揮到一半也中斷、盾也垮
+  t.swing = null; t.cast = null; t.blocking = false; t.blockT = null;   // 破了就是破了：揮到一半也中斷、施法也斷、盾也垮
   t.poiseBreakFxT = M.arcFadeT * 2;
   if (fromAng != null) applyKnock(t, fromAng + Math.PI, (t.lastKnock || 160) * M.poiseBreakKnockMul);
   Hooks.fire('poiseBroken', { u: t, by: by || null });
@@ -4584,20 +4585,10 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   if (armorBlocked) { spawnBlock(u.pos); poiseDmg *= M.armorPoiseMul; Hooks.fire('armorDeflect', { u, from: (opts && opts.attacker) || null }); }
   // ---- 體幹：扣光＝大硬直＋處決窗。hyperArmor（斧/鎚判定窗中）只吃一半 ----
   if (poiseDmg > 0 && u.poiseMax) {
-    const wasSwinging = !!u.swing, inWindup = wasSwinging && u.swing.t < u.swing.windup;
     const hyper = hasHyperArmor(u);
-    const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng, opts && opts.attacker);
-    // 打斷：前搖中被命中＝這一刀直接被打斷（重武器 hyperArmor 免疫）＝搶到先手的人贏整次交鋒
-    if (!broke && inWindup && !hyper) { u.swing = null; u.flinchFxT = 0.18; Hooks.fire('interrupt', { u, by: (opts && opts.attacker) || null }); }
-    // **盾兵（使用者定案）：不預判、純反射**——挨了一下而體幹沒破，就舉盾一小段時間再放下。
-    // 不需要 AI：想擋住他就別在他舉盾的窗內硬砍，繞側或等他放下。
+    const broke = applyPoise(u, poiseDmg * (hyper ? M.hyperPoiseMul : 1), fromAng, opts && opts.attacker);   // 體幹（累積制）＝重層；打斷改由下面「失衡值」統一處理
+    // **盾兵（使用者定案）：不預判、純反射**——挨了一下而體幹沒破，就舉盾一小段時間再放下。想擋住他就別在他舉盾的窗內硬砍。
     if (!broke) raiseReactiveBlock(u);
-    // **施法前搖同理**：習得的術被打斷＝這一發沒了，但不進 CD、不扣耐力（成本在 tickCast 收尾才付）。
-    // 卷軸沒有前搖，所以打不斷——這就是卷軸作為「救命按鈕」的價值。
-    if (u.cast) {
-      const cid = u.cast.artId; u.cast = null; u.flinchFxT = 0.18;
-      Hooks.fire('interrupt', { u, by: (opts && opts.attacker) || null, artId: cid, cast: true });
-    }
   }
   if (opts && (opts.knock || opts.stagger) && fromAng != null) {
     applyKnock(u, fromAng + Math.PI, opts.knock || 0);                                   // 往「背離攻擊者」的方向推
@@ -4620,6 +4611,16 @@ function damageUnit(u, dmg, pierce = 0, fromAng = null, opts = null) {
   const dealt = Math.min(raw, Math.max(0, u.hp));
   u.hp -= raw;
   Hooks.fire('hurt', { u, from: (opts && opts.attacker) || null, dealt, raw, melee: !!(opts && opts.melee), blocked });
+  // 失衡打斷：單擊 post-armor 傷害 ≥ staggerDmg → 打斷「預告中」的動作（近接前搖 / 遠程瞄準 / 施法前搖）。所有單位同一把尺。
+  // 只取消當下這個蓄力動作、不給硬直（硬直是體幹破那層）。被甲整發彈開的那下走前面 early return＝0 傷不斷。
+  if (raw >= M.staggerDmg) {
+    const by = (opts && opts.attacker) || null;
+    let it = false;
+    if (u.swing && u.swing.t < u.swing.windup) { u.swing = null; it = true; }   // 近接前搖
+    if ((u.aimT || 0) > 0) { u.aimT = 0; it = true; }                            // 遠程瞄準預告
+    if (it) { u.flinchFxT = 0.18; Hooks.fire('interrupt', { u, by }); }
+    if (u.cast) { const cid = u.cast.artId; u.cast = null; u.flinchFxT = 0.18; Hooks.fire('interrupt', { u, by, artId: cid, cast: true }); }
+  }
   // hpLow：跌破門檻觸發一次（回到門檻上由 tickResources 重新武裝）
   if (u.maxHp && !u._hpLowFired && u.hp > 0 && u.hp / u.maxHp < CONFIG.hooks.hpLowFrac) { u._hpLowFired = true; Hooks.fire('hpLow', { u, frac: u.hp / u.maxHp }); }
   if (u.faction === 'player') u.alertTimer = CONFIG.ghostAlertTime;   // 受傷＝在戰鬥
