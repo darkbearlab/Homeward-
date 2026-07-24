@@ -175,7 +175,8 @@ const CONFIG = {
   // 視覺化聲音：控制角色「視線外」方向有聲音時，畫面邊框朝該方向發光（無音效的替代提示；arcade 亦沿用）。
   soundEdge: { alpha: 0.6, frame: 0.07 },   // alpha＝發光最大不透明度；frame＝常駐外框淡度
   // 世界空間「聲音漣漪」：每次發聲在原地擴散的淡環（和 soundEdge 併行，用同一份 soundPings）。enabled 可關做 A/B 比較。
-  soundRipple: { enabled: true, alpha: 0.34, width: 3, strideDist: 60 },   // alpha＝峰值淡度；width＝環線寬；strideDist＝走多遠發一次視覺腳步（越大越稀疏）
+  // alpha＝峰值淡度；width＝環線寬；strideDist＝走多遠發一次視覺腳步；hearRange＝聽覺範圍(內清楚含牆後、外淡出＝穿透迷霧但非全知)；softMul＝「只是移動」的軟腳步淡度倍率
+  soundRipple: { enabled: true, alpha: 0.34, width: 3, strideDist: 60, hearRange: 600, softMul: 0.55 },
 
   // --- 額外佔位 ---
   unitRadius: 12,
@@ -5673,23 +5674,24 @@ function pushDecal(x, y, r, col) { decals.push({ x, y, r, col }); if (decals.len
 const SOUND_PINGS = {
   step:    { r: 26,  life: 0.45, col: '170,205,225' },   // 腳步：淡冷色；r 由實際步行聲半徑覆寫（草叢/衝刺＝更大的漣漪）
   // 遠程：弓弩本就相對輕聲（使用者定案調小）；消音更小。
-  shot:    { r: 70,  life: 0.45, col: '255,180,90' },
-  shotgun: { r: 100, life: 0.55, col: '255,150,70' },
+  shot:    { r: 70,  life: 0.45, col: '255,180,90', hear: CONFIG.enemyHearRadius },   // hear＝真實驚動半徑（漣漪擴散到這＝聲音傳多遠；r 仍給邊框提示用）
+  shotgun: { r: 100, life: 0.55, col: '255,150,70', hear: CONFIG.enemyHearRadius },
   silshot: { r: 45,  life: 0.32, col: '180,200,220' },
-  death:   { r: 110, life: 0.7,  col: '255,90,90' },     // 陣亡/爆炸/開門＝維持不動
+  death:   { r: 110, life: 0.7,  col: '255,90,90', hear: CONFIG.hearing.death },     // 陣亡/爆炸/開門＝維持不動
   door:    { r: 80,  life: 0.5,  col: '160,210,255' },
   grenade: { r: 175, life: 0.75, col: '255,170,60' },
   // 交戰聲（納入視覺化）：揮擊半徑與武器重量掛勾（swingPingR 動態覆寫 r）；打擊/格擋/招架/背刺各有色。
   swing:   { r: 44,  life: 0.28, col: '200,200,210' },   // r 由 swingPingR(武器重量) 覆寫
-  hit:     { r: 55,  life: 0.30, col: '255,210,140' },
+  hit:     { r: 55,  life: 0.30, col: '255,210,140', hear: CONFIG.hearing.hit },
   block:   { r: 66,  life: 0.34, col: '190,210,255' },   // 兵刃相交/擋格的「鏘」
   parry:   { r: 62,  life: 0.32, col: '190,210,255' },
-  crit:    { r: 84,  life: 0.4,  col: '255,110,120' },   // 背刺/重擊＝較響
+  crit:    { r: 84,  life: 0.4,  col: '255,110,120', hear: CONFIG.hearing.hit },   // 背刺/重擊＝較響
 };
 const swingPingR = (W) => clamp(26 + ((W && W.weight) || 1) * 16, 28, 78);   // 揮擊聲半徑＝隨武器重量（短刀 ≈29、長劍 ≈50、戰鎚 ≈64、喪鐘 ≈71）
-function pingSound(id, pos, rOverride) {
+function pingSound(id, pos, rOverride, soft) {
   const s = SOUND_PINGS[id]; if (!s || !pos) return;
-  soundPings.push({ x: pos.x, y: pos.y, life: s.life, max: s.life, r: rOverride || s.r, col: s.col });
+  const r = rOverride || s.r;
+  soundPings.push({ x: pos.x, y: pos.y, life: s.life, max: s.life, r, hearR: s.hear || r, col: s.col, soft: !!soft });   // r＝邊框提示視覺半徑；hearR＝漣漪擴散的真實傳播半徑
   if (soundPings.length > 40) soundPings.shift();
 }
 // 視覺腳步：距離累積制（走過 strideDist 才發一次漣漪）＝比時間制稀疏、也不隨當下位置漂移。只發漣漪、不驚動 AI。
@@ -5699,8 +5701,8 @@ function visStep(u, moved) {
   u._stride = (u._stride || 0) + moved;
   if (u._stride < C.strideDist) return;
   u._stride = 0;
-  if (u.faction !== 'player' && !isRevealed(u)) return;
-  pingSound('step', u.pos, u._stepR || CONFIG.hearing.stepBase);
+  const soft = !(u.faction === 'player' && u.id === KNIGHT_ID);   // 只有騎士腳步會驚動敵人＝實線；扈從/敵人＝「只是移動」虛線淡環（含迷霧中，故聽得到牆後行動）
+  pingSound('step', u.pos, u._stepR || CONFIG.hearing.stepBase, soft);
 }
 function updateParticles(dt) { for (let i = particles.length - 1; i >= 0; i--) { const q = particles[i]; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) particles.splice(i, 1); } }
 
@@ -6165,7 +6167,7 @@ function draw() {
   // ---- 世界（鏡頭變換）----
   ctx.save(); applyCam();
   drawGrid(); drawBushes(); drawSmoke(); drawAreas(); drawLowWalls(); drawDestructibles(); drawWalls(); drawDoors(); drawButtons(); drawWaypoints(); drawZonesWorld();
-  drawDecals(); drawCorpses(); drawDrops(); drawPrisoners(); drawIntroActors(); drawParticles(); drawSoundRipples(); drawBullets(); drawGrenades();
+  drawDecals(); drawCorpses(); drawDrops(); drawPrisoners(); drawIntroActors(); drawParticles(); drawBullets(); drawGrenades();
   drawMeleeFx([...enemies.filter(e => !e.dead && isRevealed(e)), ...players]);   // 近接弧畫在單位之下（不遮血條/身體）；敵人比照 drawEnemies 只畫已感知者
   drawEnemies(); drawPlayers(); drawFlashFx();
   drawStaggerMarks([...enemies.filter(e => !e.dead && isRevealed(e)), ...players]);
@@ -6176,7 +6178,7 @@ function draw() {
   if (!debugView) drawFog();
 
   // ---- 霧上：淡牆骨架（空間參考）+ 機密檔案掉落標記（永遠可見）----
-  ctx.save(); applyCam(); drawSkeleton(); drawFileDrop(); drawCacheDrops(); ctx.restore();
+  ctx.save(); applyCam(); drawSoundRipples(); drawSkeleton(); drawFileDrop(); drawCacheDrops(); ctx.restore();   // 漣漪畫在迷霧之上＝穿透迷霧、聽得到牆後的行動
 
   // ---- 螢幕層：血條/標記/HUD/卡片 ----（演出鎖控制時隱藏＝乾淨電影感；gate 解鎖時照常）
   if (!(cutscene && cutscene.lock)) { drawScreenOverlays(); drawHUD(); drawCards(); drawHotkeyBar(); drawSoundEdges(); }
@@ -6488,6 +6490,7 @@ function drawSoundEdges() {
     const cx = W / 2, cy = H / 2;
     ctx.globalCompositeOperation = 'lighter';
     for (const s of soundPings) {
+      if (s.soft) continue;         // 「只是移動」的軟腳步不進邊框提示＝邊框留給會驚動的聲音、腳步交給世界漣漪
       if (canSee(u, s)) continue;   // 控制角色看得到該方向＝不提示
       const sp = w2s(s); let dx = sp.x - cx, dy = sp.y - cy; const len = Math.hypot(dx, dy); if (len < 1) continue; dx /= len; dy /= len;
       const tx = dx > 0 ? (W - cx) / dx : dx < 0 ? -cx / dx : Infinity;   // 射線打到邊框
@@ -6614,15 +6617,20 @@ function drawParticles() {
 // 和 soundEdge（畫面外框指向）併行；CONFIG.soundRipple.enabled 可關做 A/B 比較。近接/腳步/開火/陣亡各自帶自己的 ping 顏色。
 function drawSoundRipples() {
   const C = CONFIG.soundRipple; if (!C || !C.enabled || !soundPings.length) return;
-  ctx.lineWidth = C.width;   // 本函式在世界座標繪製（draw() 已套 applyCam）＝直接用 s.x/s.y、半徑用世界單位、不再 w2s/×cam.scale
+  // 世界座標繪製（draw() 在迷霧之上再套一次 applyCam 後呼叫＝穿透迷霧、聽得到牆後）。半徑用世界單位、不 w2s/×cam.scale。
+  ctx.lineWidth = C.width;
+  const kn = knight();
   for (const s of soundPings) {
     const frac = clamp(1 - s.life / s.max, 0, 1);           // 0→1 隨壽命向外擴散
-    const rad = s.r * (0.15 + 0.85 * frac);                 // 世界單位：由小擴到滿半徑（＝聽覺傳播距離）
-    const a = C.alpha * (1 - frac);                          // 邊擴邊淡
+    const rad = (s.hearR || s.r) * (0.15 + 0.85 * frac);    // 擴散到「真實傳播半徑」＝聲音能吵醒多遠的敵人
+    let a = C.alpha * (1 - frac) * (s.soft ? C.softMul : 1); // 邊擴邊淡；「只是移動」的軟腳步更淡
+    if (kn && C.hearRange) { const dd = dist(kn.pos, s); a *= clamp(1 - (dd - C.hearRange) / (C.hearRange * 0.6), 0, 1); }   // 聽覺範圍：近＝清楚（含牆後）、遠＝淡出（非全知）
     if (a <= 0.004) continue;
+    ctx.setLineDash(s.soft ? [6, 6] : []);                  // 軟腳步＝虛線（只是移動）；會驚動的聲音＝實線
     ctx.strokeStyle = `rgba(${s.col},${a.toFixed(3)})`;
     ctx.beginPath(); ctx.arc(s.x, s.y, Math.max(1, rad), 0, Math.PI * 2); ctx.stroke();
   }
+  ctx.setLineDash([]);
 }
 /* ---- 近接可讀性：揮斬扇形 / 盾格弧 / 硬直標記（世界座標，draw() 已套 applyCam）----
    前搖＝暗色細弧「預告」揮擊範圍；判定窗＝亮色實心扇形（就是實際判定的形狀）；後搖＝淡出。 */
