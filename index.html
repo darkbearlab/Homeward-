@@ -276,6 +276,7 @@ CONFIG.command = {
 CONFIG.morale = {
   max: 100,                // 拉鋸條/line 的滿刻度
   qHpFloor: 0.4,           // 品質吃 HP：殘血仍保留這麼多比例的存在感（傷害＝士氣壓力）
+  massEngagedOnly: true,   // 清醒門檻：士氣質量只算已 ENGAGED（醒來投入戰鬥）的敵人；熟睡/未察覺的不先算＝大營不會一開戰瞬間壓垮你，壓力隨警報喚醒一波波漲
   // 騎士錨點：大人物在場的心理安穩感，開戰(ENGAGED/曝光)後線性衰退
   anchorAmt: 5,            // ≈1 徒步兵
   anchorDecay: 6,          // 秒（線性衰退到 0）
@@ -4897,8 +4898,9 @@ function quality(u) {
 function structMass(fid) {
   if (globalThis.__massOverride && globalThis.__massOverride[fid] != null) return globalThis.__massOverride[fid];   // 測試用覆寫（生產環境恆 undefined＝跳過）
   let m = 0;
-  for (const u of (players || [])) if (u && u.faction === fid && !u.dummy && u.state !== 'DEAD' && u.state !== 'EXTRACTED') m += quality(u);
-  for (const e of (enemies || [])) if (e && e.faction === fid && !e.dead && !e.dummy) m += quality(e);
+  for (const u of (players || [])) if (u && u.faction === fid && !u.dummy && u.state !== 'DEAD' && u.state !== 'EXTRACTED') m += quality(u);   // 我方恆計（單位都在陣中）
+  // 清醒門檻：只算已 ENGAGED 的敵人＝營裡熟睡/未察覺的兵不先算，壓力隨警報級聯一波波漲（massEngagedOnly 可關）
+  for (const e of (enemies || [])) if (e && e.faction === fid && !e.dead && !e.dummy && (!CONFIG.morale.massEngagedOnly || e.state === 'ENGAGED')) m += quality(e);
   return m;
 }
 // 騎士錨點（只我方、騎士在場）：開戰(曝光)後線性衰退＝大人物在場的安穩感開戰即散
