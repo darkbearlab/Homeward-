@@ -261,60 +261,39 @@ CONFIG.command = {
    觸發全部沿用既有的 Hooks（hurt / poiseBroken / death / kill），引擎幾乎不用動。
    **敵人也有士氣＝「孤騎對軍團」第一次在數學上成立**：你殺不完十個人，但可以嚇散他們。
    ===================================================================== */
+/* ── 品質質量模型（使用者定案，見 MORALE.md）─────────────────────────────
+   一方的士氣 = 場上各單位「品質」（吃 HP）的加總 + 會衰退的震盪。
+   拉鋸線 = 質量占比 line(f) = 100 × 我方有效質量 /(我方+敵方)。單位崩潰 當 line < 50×兵種門檻%。
+   孤騎問題結構性解掉：騎士是「一份有限的高品質(2×徒步兵)」＋開戰後快速衰退的「氣勢錨點」，
+   不再是幽靈般的 100；一群人的品質加總通常大於一個騎士＝穩得住，砍出實質減員才雪崩。 */
 CONFIG.morale = {
-  max: 100,
-  /* ── 陣營士氣的流動（雙向：一方掉的同時另一方漲）──
-     **全部以「佔全軍的比重」計算，不用絕對值。**
-     實測教訓：用絕對值時，7 人隊死一個就扣 14%、6 個農兵同時崩再扣 48%
-     → 整支軍隊 2.3 秒崩光，仗還沒開始就結束了。而且 20 人的軍隊死 1 個
-     本來就不該跟 7 人隊死 1 個一樣痛。改成比重之後，規模自動有意義。 */
-  deathFrac: 0.85,         // 「全軍陣亡」會扣掉的士氣比例（單一單位＝ × 它佔全軍的份量比重）
-  breakFrac: 0.30,         // 「全軍崩潰」會扣掉的比例（**連鎖的來源**，但比死亡輕）
-  damageFrac: 0.35,        // 「全軍血量被打光」會扣掉的比例
-  killGainFrac: 0.30,      // 擊殺敵人 → 我方士氣（以被殺者佔敵軍的比重計）
-  breakGainFrac: 0.12,     // 打崩敵人 → 我方士氣
-  damageGainFrac: 0.10,    // 造成傷害 → 我方士氣
-  eliteWeight: 3.0,        // 菁英的「份量」：死/崩的衝擊與擊殺的回饋都乘這個（＝「先斬將」有意義）
-  // ── 恢復 ──
-  regenDelay: 3.0,         // 陣營最後一次掉士氣後，多久才開始回（＝打鬥中不會自己回神）
-  baseRegen: 1.2,          // /s 基礎回復
-  knightAura: 260,         // 騎士的「聚攏」半徑
-  regenPerRallied: 1.6,    // **每個聚在騎士光環內的我方單位，每秒額外回這麼多**
-                           //   ＝門檻改成純兵種之後，光環改以「聚攏度」影響陣營士氣（仍是玩家的槓桿）
-  /* ── 崩潰判準：**戰局位置 × 剩餘實力**（乘法，不是加權平均）───────────
-     拉鋸線 line = 50 + ((A我+T我) − (A敵+T敵)) / 2   ∈ 0..100（50＝均勢；氣勢只進這裡）
-     **有效戰意 = line × (A我 / max)^absExp**
-     單位崩潰   當 有效戰意 < 50 × 該兵種門檻%
-
-     為什麼是乘法：一開始用加權平均 (1−w)×A + w×line，但兩個目標會互相拉扯——
-     w 要夠大氣勢才咬得動（w<0.85 時伏擊 +60 完全沒人崩），可是 w 一大，
-     「雙方互相消耗到都殘破」那格又失效（兩邊都 20 → 戰意仍有 42.5，沒人崩）。
-     乘法同時滿足四種局面，而且只有一句話的意義：**你在戰局上的位置 × 你還剩多少**。
-        100 vs 100 無氣勢 → 50×1.00 = 50   沒人崩
-        被伏擊(敵氣勢+60) → 20×1.00 = 20   脆的開場就崩、磐石不受影響 ✓
-        雙方消耗到 20/20  → 50×0.20 = 10   都快撐不住了，弱的先崩 ✓
-        你打順了 80 vs 20 → 80×0.80 = 64   穩如老狗 ✓ */
-  absExp: 1.0,             // 剩餘實力的指數：0＝純拉鋸（不看自己剩多少）、越大＝絕對值越重要
-  // 數量差進拉鋸線（使用者回報：孤騎砍一兩刀就把整群嚇潰）。設計註解本來就寫 line 要吃「戰力(A+T)」，
-  // 但舊碼只用士氣/氣勢＝孤身免疫的騎士把我方士氣鎖在 100、敵方一死人就掉，於是被寡擊眾也秒潰。
-  // 這一項把「開場的人數比」加回 line：被大幅包圍＝門檻線上抬（撐得住）、人數均等＝此項為 0（不動既有平衡）。
-  forceWeight: 0.5,        // 人數差對 line 的最大影響（±此×50）；0＝關閉、回到純士氣拉鋸
-  // ── 氣勢（momentum）：暫時的、會衰退的額度，**只推相對線、不動絕對士氣** ──
-  // 「開戰的氣勢」本來就該會消退，而不是永久債務：被伏擊 → 你的人發抖 →
-  // 撐過去、砍倒幾個 → 氣勢消退、線推回來 → 他們重新站到你旁邊。
-  momentumFirstBlood: 18,  // 首殺
-  momentumElite: 30,       // 斬將（殺菁英）
-  momentumParry: 6,        // 招架成功
-  momentumDurDefault: 12,  // 未指定時的持續秒數（線性衰退到 0）
-  momentumMax: 80,         // 單一陣營的氣勢上限（避免疊到爆表）
-  // ── 崩潰 ──
-  breakJitterPct: 6,       // 每個單位出生時的門檻浮動（±此值 pct，均勻）：同兵種也不會同一瞬間一起崩＝崩得有先後
-  breakHysteresis: 8,      // 有效戰意回到「該單位門檻 + 此值」才脫離崩潰（避免在門檻上抖動）
-  routSpeedMul: 1.25,      // 潰逃時的移動倍率
-  fleeAwayDist: 560,       // 潰逃的敵人跑這麼遠＝脫離戰場（不算擊殺、不掉落）
-  // ── 跨關 ──
-  restRestore: 1.0,        // 休息關恢復比例
-  interMissionRestore: 0.5,
+  max: 100,                // 拉鋸條/line 的滿刻度
+  qHpFloor: 0.4,           // 品質吃 HP：殘血仍保留這麼多比例的存在感（傷害＝士氣壓力）
+  // 騎士錨點：大人物在場的心理安穩感，開戰(ENGAGED/曝光)後線性衰退
+  anchorAmt: 5,            // ≈1 徒步兵
+  anchorDecay: 6,          // 秒（線性衰退到 0）
+  knightAura: 260,         // 騎士光環半徑（聚攏度＝恢復）
+  ralliedBonus: 1.2,       // 聚在光環內的每名扈從＝給我方額外站定的質量（沿用「聚攏度」恢復）
+  // 震盪（momentum）：正＝鼓舞、負＝挫折，都線性衰退。**數值刻意小**＝只是結構質量上的微擾、不主導
+  //（質量 5~40 的尺度，震盪太大就會像舊版一樣砍一兩刀秒潰）。以下由 headless 模擬調到「約砍半數才潰」。
+  momentumFirstBlood: 3,   // 首殺
+  momentumElite: 6,        // 斬將（殺菁英）
+  momentumParry: 1,        // 招架
+  killMomentum: 0,         // 擊殺 → 擊殺方正震盪（0＝敵方掉質量已是回饋，不再另外膨脹我方＝避免秒潰）
+  deathShock: 3,           // 陣亡 → 該陣營負震盪（雪崩來源）
+  breakShock: 2,           // 崩潰 → 該陣營負震盪（雪崩）
+  momentumDurDefault: 6,   // 未指定時的持續秒數
+  shockDur: 5,             // 陣亡/崩潰震盪的持續秒數
+  momentumMax: 12,         // 單一陣營的震盪上限（相對結構質量＝小擾動）
+  routedMassMul: 0.3,      // 已潰逃單位對質量的貢獻打折（他們不再戰）
+  routAllLine: 8,          // 質量占比 line 低於此＝全軍潰逃（onFactionBroken）
+  // ── 崩潰 + 潰逃（沿用）──
+  breakJitterPct: 6,       // 每單位出生的門檻浮動（±pct）＝崩得有先後
+  breakHysteresis: 8,      // line 回到「門檻 + 此值」才脫離崩潰
+  routSpeedMul: 1.25,      // 潰逃移動倍率
+  fleeAwayDist: 560,       // 潰逃敵人跑這麼遠＝脫離戰場
+  // ── 跨關（質量是活的，這些現在多半 moot；保留欄位）──
+  restRestore: 1.0, interMissionRestore: 0.5,
 };
 /* 崩潰門檻＝**純兵種**（使用者定案：不吃 HP/被圍等局部修正），寫成**「佔自己那半的 %」**：
      100% ＝ 只要開始落後就崩　50% ＝ 撐到剩四分之一才崩
@@ -329,6 +308,9 @@ const BREAK_PCT = {
 // 早期版本另有一張 ARCH_BREAK_PCT（按待機原型 磐石/先鋒/遊獵）——原型系統移除後一併收掉，
 // 「有人硬有人脆」的分層改掛在兵種這條更直覺的軸上（見 breakPctOf）。
 const breakLevelOf = (pct) => CONFIG.morale.max * 0.5 * (pct / 100);   // % → 實際門檻（0..50）
+// 單位品質（質量模型）：按兵種一張表（徒步兵＝5 基準；騎士＝10＝2×徒步兵）。敵人用 typeId、扈從/騎士用 classId。
+const QBASE = { civilian: 2, levy: 3, wolf: 3, archer: 4, footman: 5, arbalest: 5, spearman: 6, shieldman: 6, manatarms: 10, serjeant: 12, knight: 10 };
+const qBaseOf = (u) => { const key = u.faction === 'player' ? u.classId : u.typeId; return QBASE[key] != null ? QBASE[key] : 5; };
 const MORALE_STATE = { steady: '堅定', shaken: '動搖', routed: '潰逃' };
 const CMD_LIST = ['follow', 'hold', 'focus', 'extract'];
 const CMD_META = {
@@ -3646,7 +3628,7 @@ function enterRest(tutorial = false) {
     else if (it.kind === 'equip') warehouse.push({ kind: 'equip', id: it.id });   // 撿到的裝備進倉庫
   }
   backpack = [];
-  factionMorale.player = CONFIG.morale.max * CONFIG.morale.restRestore;   // 休息/野營＝我方陣營士氣回復
+  // 質量模型：士氣是活的（每場開局由存活單位品質重算），休息不需手動回士氣＝這行退役。
   ensureFileCarrier();   // 遺物：序章後首次進休息＝騎士背上；之後維持單一攜帶者（可在配裝卡重新指派）
 }
 
@@ -4883,44 +4865,55 @@ function updateBullets(dt) {
      崩潰本身又扣陣營士氣 → **正回饋＝雪崩**（農兵先垮 → 徒步兵跟著垮 → 連披甲士都崩）
      陣營士氣歸零 → 該陣營**全軍潰逃**；若是敵方＝本關已勝（保留掃蕩時間）
    騎士本人免疫崩潰（玩家的決心是玩家的事）；訓練假人免疫。 */
-let factionMorale = {};        // fid → 0..100
-let fieldBrokenFor = null;     // 已被擊潰的陣營 id（＝我方獲勝，進入掃蕩時間）
-const moraleOf = (fid) => (factionMorale[fid] != null ? factionMorale[fid] : CONFIG.morale.max);
+let fieldBrokenFor = null;      // 已被擊潰的陣營 id（＝我方獲勝，進入掃蕩時間）
+let moraleFirstBlood = false;   // 本場是否已有首殺
+let playerEngagedT = -Infinity; // 我方曝光/交戰的時刻（騎士錨點衰退的計時起點）
+// 單位品質（吃 HP；已潰逃者打折＝不再戰）
+function quality(u) {
+  const M = CONFIG.morale, hp = u.maxHp ? clamp((u.hp || 0) / u.maxHp, 0, 1) : 1;
+  let q = qBaseOf(u) * (M.qHpFloor + (1 - M.qHpFloor) * hp);
+  if (u.moraleState === 'routed') q *= M.routedMassMul;
+  return q;
+}
+// 陣營結構質量＝存活單位品質加總
+function structMass(fid) {
+  if (globalThis.__massOverride && globalThis.__massOverride[fid] != null) return globalThis.__massOverride[fid];   // 測試用覆寫（生產環境恆 undefined＝跳過）
+  let m = 0;
+  for (const u of (players || [])) if (u && u.faction === fid && !u.dummy && u.state !== 'DEAD' && u.state !== 'EXTRACTED') m += quality(u);
+  for (const e of (enemies || [])) if (e && e.faction === fid && !e.dead && !e.dummy) m += quality(e);
+  return m;
+}
+// 騎士錨點（只我方、騎士在場）：開戰(曝光)後線性衰退＝大人物在場的安穩感開戰即散
+function knightAnchor() {
+  const k = knight(); if (!k || k.state === 'DEAD' || k.state === 'EXTRACTED') return 0;
+  const M = CONFIG.morale, t = squadRevealed ? Math.max(0, simTime - playerEngagedT) : 0;
+  return M.anchorAmt * Math.max(0, 1 - t / Math.max(0.001, M.anchorDecay));
+}
+// 聚攏度恢復：光環內的扈從＝額外站定質量
+function ralliedMass() {
+  const k = knight(); if (!k) return 0;
+  const M = CONFIG.morale; let n = 0;
+  for (const u of (players || [])) if (u && u.id !== KNIGHT_ID && u.faction === 'player' && u.state !== 'DEAD' && u.state !== 'EXTRACTED' && dist(u.pos, k.pos) <= M.knightAura) n++;
+  return n * M.ralliedBonus;
+}
+// 有效質量＝結構 + 震盪 (+我方 錨點/聚攏)。這是這版的「士氣」量（moraleOf 回傳它）。
+function effMass(fid) {
+  let m = structMass(fid) + momentumOf(fid);
+  if (fid === 'player') m += knightAnchor() + ralliedMass();
+  return Math.max(0, m);
+}
+const moraleOf = (fid) => effMass(fid);
 function resetFactionMorale() {
-  factionMorale = {}; fieldBrokenFor = null; factionMomentum = {}; moraleFirstBlood = false;
-  for (const fid of Object.keys(FACTIONS)) factionMorale[fid] = CONFIG.morale.max;
-  factionMoraleT = {};
+  fieldBrokenFor = null; factionMomentum = {}; moraleFirstBlood = false;
+  playerEngagedT = (typeof simTime === 'number' ? simTime : 0);
 }
-let moraleFirstBlood = false;   // 本場是否已經有人拿到首殺
-let factionMoraleT = {};       // fid → 最後一次掉士氣的時間（用來卡「打鬥中不回神」）
-/* 陣營戰力快照（開場記一次）：所有士氣扣分都除以它 → 「佔全軍的比重」。
-   規模因此自動有意義：20 人的軍隊死一個，遠不如 5 人的小隊死一個那麼動搖。 */
-let factionForce = {};         // fid → { weight, hp }
-function snapshotFactionForce() {
-  factionForce = {};
-  for (const u of [...(players || []), ...(enemies || [])]) {
-    if (!u || u.dummy) continue;
-    const f = u.faction; if (!f) continue;
-    if (!factionForce[f]) factionForce[f] = { weight: 0, hp: 0 };
-    factionForce[f].weight += unitWeight(u);
-    factionForce[f].hp += u.maxHp || 0;
-  }
-}
-const forceOf = (fid) => factionForce[fid] || { weight: 1, hp: 1 };
-function addFactionMorale(fid, amt) {
-  if (!fid || !amt) return;
-  const M = CONFIG.morale;
-  const before = moraleOf(fid);
-  factionMorale[fid] = clamp(before + amt, 0, M.max);
-  if (amt < 0) factionMoraleT[fid] = simTime;
-  if (before > 0 && factionMorale[fid] <= 0) onFactionBroken(fid);
-}
-// 陣營被擊潰：全軍潰逃。若被擊潰的是敵對陣營 → 本關已勝（但場景不結束＝掃蕩時間）
+function snapshotFactionForce() { /* 質量模型不用靜態快照＝空 stub（保留既有呼叫點） */ }
+// 陣營被擊潰：全軍潰逃。敵對陣營被擊潰 → 本關已勝（場景不結束＝掃蕩時間）
 function onFactionBroken(fid) {
+  if (fieldBrokenFor === fid) return;
   Hooks.fire('factionBroken', { faction: fid });
   if (fid !== 'player' && !fieldBrokenFor) fieldBrokenFor = fid;
 }
-const unitWeight = (u) => (u.type && u.type.elite) ? CONFIG.morale.eliteWeight : 1;
 // 單位的崩潰門檻＝純兵種（不吃 HP/被圍等局部修正）。回傳「佔自己那半的 %」。
 // 敵我同一張表 BREAK_PCT：敵人用 typeId、扈從用 classId（同兵種＝同門檻）。
 // **每個單位出生時另擲一次固定浮動**（±CONFIG.morale.breakJitterPct）：同兵種也不會在同一瞬間一起崩，
@@ -4952,7 +4945,7 @@ function momentumOf(fid) {
     const k = 1 - (simTime - m.t0) / Math.max(0.001, m.dur);   // 線性衰退到 0（不做反撲）
     if (k > 0) sum += m.amt * k;
   }
-  return Math.min(CONFIG.morale.momentumMax, sum);
+  return clamp(sum, -CONFIG.morale.momentumMax, CONFIG.morale.momentumMax);   // 正震盪+負震盪都有上限
 }
 function pruneMomentum() {
   for (const fid of Object.keys(factionMomentum)) {
@@ -4960,8 +4953,8 @@ function pruneMomentum() {
     if (list.length) factionMomentum[fid] = list; else delete factionMomentum[fid];
   }
 }
-// 有效士氣（絕對 + 氣勢）＝只用來算相對線
-const effMoraleOf = (fid) => moraleOf(fid) + momentumOf(fid);
+// 有效士氣＝有效質量（結構+震盪+錨點）。moraleOf 已含之，這裡只是別名（給 topFoeFaction/HUD 用）
+const effMoraleOf = (fid) => moraleOf(fid);
 // 場上實際有活單位的陣營（**缺席的陣營不該影響戰局**——FACTIONS 是登錄表，
 // 裡面可能有這張圖根本沒出現的勢力，算進去會讓拉鋸線莫名其妙地歪掉）
 function presentFactions() {
@@ -4981,23 +4974,16 @@ function topFoeFaction(fid) {
   }
   return best;
 }
-// 拉鋸線：0..100，50＝均勢。氣勢只進這裡。
+// 拉鋸線＝質量占比：100 × 我方有效質量 /(我方+最強敵對)。0..100，50＝質量均勢。
 function moraleLine(fid) {
   const foe = topFoeFaction(fid);
   if (!foe) return CONFIG.morale.max;
-  const M = CONFIG.morale;
-  // 人數差項：(我戰力−敵戰力)/max ∈ −1..1，× forceWeight × 50。被包圍＝負→門檻線壓低者是「人少的那方」，
-  // 反過來人多的那方 line 上抬＝撐得住。人數均等時為 0（不動既有純士氣平衡）。用開場快照戰力（forceOf）。
-  const wf = forceOf(fid).weight, we = forceOf(foe).weight;
-  const forceTerm = M.forceWeight * clamp((wf - we) / Math.max(1, wf, we), -1, 1) * 50;
-  return clamp(50 + (effMoraleOf(fid) - effMoraleOf(foe)) / 2 + forceTerm, 0, CONFIG.morale.max);
+  const a = effMass(fid), b = effMass(foe);
+  return (a + b) <= 0 ? 50 : clamp(100 * a / (a + b), 0, CONFIG.morale.max);
 }
-// **有效戰意 = 戰局位置 × 剩餘實力**。單位拿它跟自己的門檻比。
-function resolveOf(fid) {
-  const M = CONFIG.morale;
-  return moraleLine(fid) * Math.pow(clamp(moraleOf(fid) / M.max, 0, 1), M.absExp);
-}
-const hasMorale = (u) => !u.dummy && !(u.faction === 'player' && u.id === KNIGHT_ID);
+// 這版「有效戰意」＝拉鋸線本身（HP 已進質量，不再乘剩餘實力）。單位拿它跟自己的門檻比。
+const resolveOf = (fid) => moraleLine(fid);
+const hasMorale = (u) => !u.dummy && !u.moraleImmune && !(u.faction === 'player' && u.id === KNIGHT_ID);   // moraleImmune＝測量靶/腳本單位免疫士氣
 const isShaken = (u) => u.moraleState === 'shaken' || u.moraleState === 'routed';
 const isRouted = (u) => u.moraleState === 'routed';
 // 依「陣營士氣 vs 自己的門檻」決定狀態；換性格與潰逃都在這裡收斂
@@ -5012,19 +4998,15 @@ function refreshMoraleState(u) {
   if (!moraleEligible(u)) return;   // 還沒交戰＝不判崩潰（維持 steady）
   const M = CONFIG.morale, prev = u.moraleState;
   const res = resolveOf(u.faction), th = breakAtOf(u);
-  if (moraleOf(u.faction) <= 0) u.moraleState = 'routed';                  // **絕對**士氣歸零＝全軍潰逃（氣勢嚇不出擊潰）
-  else if (res < th) u.moraleState = 'shaken';                             // 有效戰意（含氣勢）低於門檻＝崩潰
+  if (res < M.routAllLine) u.moraleState = 'routed';                       // 質量占比極低＝全軍潰逃（比崩潰更慘）
+  else if (res < th) u.moraleState = 'shaken';                             // 質量占比低於門檻＝崩潰
   else if (u.moraleState !== 'steady' && res >= th + M.breakHysteresis) u.moraleState = 'steady';
   if (u.moraleState !== prev) {
     u.moraleFxT = 1.0;
     u.personality = isShaken(u) ? CONFIG.ai.shaken : (u.basePersonality || u.personality);
     if (isRouted(u)) { u.swing = null; u.blocking = false; u.blockT = null; releaseAttackToken(u); }
-    // 崩潰本身也扣陣營士氣＝連鎖（只在「變成崩潰」那一刻算一次）
-    if (prev === 'steady' && isShaken(u)) {
-      const share = unitWeight(u) / Math.max(1, forceOf(u.faction).weight);
-      addFactionMorale(u.faction, -M.breakFrac * share * M.max);
-      for (const f of Object.keys(FACTIONS)) if (hostile(f, u.faction)) addFactionMorale(f, M.breakGainFrac * share * M.max);
-    }
+    // 崩潰本身給該陣營一發負震盪＝連鎖/雪崩（只在「變成崩潰」那一刻算一次）
+    if (prev === 'steady' && isShaken(u)) grantMomentum(u.faction, -M.breakShock, M.shockDur);
     Hooks.fire('morale', { u, state: u.moraleState, prev });
   }
 }
@@ -5039,38 +5021,23 @@ function tickMorale(u, dt) {
   }
   if (u.moraleFxT > 0) u.moraleFxT -= dt;
 }
-/* 每幀（陣營）：恢復。**打鬥中不會自己回神**（掉士氣後 regenDelay 內不回）。
-   我方額外：**聚在騎士光環內的單位越多，回得越快**——門檻改成純兵種之後，
-   「將領光環」改以聚攏度影響陣營士氣，仍然是玩家把部隊拉回來的手段。 */
+// 每幀（陣營）：衰退舊震盪（＝恢復）+ 偵測敵對陣營全潰（質量占比跌破 routAllLine ＝我方勝、進掃蕩）。
+// 「恢復」在質量模型裡＝負震盪自然衰退 + 錨點/聚攏度（都在 effMass 內），這裡不再手動回士氣。
 function tickFactionMorale(dt) {
-  const M = CONFIG.morale;
-  for (const fid of Object.keys(FACTIONS)) {
-    if (moraleOf(fid) >= M.max) continue;
-    if (simTime - (factionMoraleT[fid] != null ? factionMoraleT[fid] : -99) < M.regenDelay) continue;
-    let rg = M.baseRegen;
-    if (fid === 'player') {
-      const k = knight();
-      if (k && k.state === 'CONTROLLED') {
-        let rallied = 0;
-        for (const p of activePlayers()) if (p.id !== KNIGHT_ID && dist(p.pos, k.pos) <= M.knightAura) rallied++;
-        rg += rallied * M.regenPerRallied;
-      }
-    }
-    factionMorale[fid] = Math.min(M.max, moraleOf(fid) + rg * dt);
+  pruneMomentum();
+  if (fieldBrokenFor) return;
+  for (const fid of presentFactions()) {
+    if (fid === 'player' || !hostile('player', fid)) continue;   // 只偵測敵對陣營全潰
+    const engaged = enemies.some(e => !e.dead && !e.dummy && e.faction === fid && e.state === 'ENGAGED');
+    if (engaged && moraleLine(fid) < CONFIG.morale.routAllLine) { onFactionBroken(fid); break; }
   }
 }
-/* 觸發全部掛在既有 Hooks 上（引擎不必為士氣開新洞）。雙向：一方掉的同時另一方漲。 */
-Hooks.on('hurt', 'morale', (c) => {
-  const M = CONFIG.morale;
-  const share = c.dealt / Math.max(1, forceOf(c.u.faction).hp);            // 這一擊佔「全軍血量」的比重
-  addFactionMorale(c.u.faction, -M.damageFrac * share * M.max);
-  if (c.from && hostile(c.from.faction, c.u.faction)) addFactionMorale(c.from.faction, M.damageGainFrac * share * M.max);
-});
+/* 士氣事件掛在既有 Hooks 上。傷害→士氣壓力已由「品質吃 HP」自動處理（不需 hurt hook）；
+   陣亡＝結構質量少一份 + 給該陣營一發負震盪（雪崩），擊殺方得一發正震盪。 */
 Hooks.on('death', 'morale', (c) => {
   const M = CONFIG.morale;
-  const share = unitWeight(c.u) / Math.max(1, forceOf(c.u.faction).weight);   // 這個人佔他那支軍隊的比重
-  addFactionMorale(c.u.faction, -M.deathFrac * share * M.max);
-  if (c.killer && hostile(c.killer.faction, c.u.faction)) addFactionMorale(c.killer.faction, M.killGainFrac * share * M.max);
+  grantMomentum(c.u.faction, -M.deathShock, M.shockDur);
+  if (c.killer && hostile(c.killer.faction, c.u.faction)) grantMomentum(c.killer.faction, M.killMomentum, M.shockDur);
 });
 /* 氣勢的戰鬥中來源：讓「被伏擊 → 殺出一條路 → 把氣勢奪回來」是可操作的，
    而不是只能等它自然消退。 */
@@ -5094,7 +5061,7 @@ Hooks.on('parry', 'momentum', (c) => { if (c.u) grantMomentum(c.u.faction, CONFI
      2. 任何我方單位**造成或承受傷害**（見血）——見於 damageUnit 的 Hooks
    「集中攻擊」指令永遠無視靜默（你明確指了目標＝當然打）。 */
 let squadRevealed = false;
-function revealSquad() { squadRevealed = true; }
+function revealSquad() { if (!squadRevealed) playerEngagedT = simTime; squadRevealed = true; }   // 曝光那刻起算騎士錨點衰退
 let lastEncounter = null;   // 本場抽到的遭遇 id（HUD 可顯示「攔路賊」等；null＝烤死的 spawn 或王）
 function anchorOf(u) {
   if (!u || u.faction !== 'player' || !u.cmd) return null;   // 目前只有扈從吃指令；敵人維持原本的自由行動
@@ -7019,8 +6986,10 @@ function drawFactionMorale() {
   if (scene !== 'COMBAT') return;
   const M = CONFIG.morale;
   const W = 620, h = 14, x = cv.width / 2 - W / 2, y = 16;
-  const linePos = moraleLine('player');            // 0..100（含氣勢）
-  const absPos = clamp(50 + (moraleOf('player') - moraleOf(topFoeFaction('player') || 'enemy')) / 2, 0, 100);   // 不含氣勢
+  const foe0 = topFoeFaction('player') || 'enemy';
+  const linePos = moraleLine('player');            // 0..100 質量占比（含震盪/錨點）
+  const sp = structMass('player'), sf = structMass(foe0);   // 純結構質量占比（不含震盪/錨點）＝虛線位置
+  const absPos = (sp + sf) <= 0 ? 50 : clamp(100 * sp / (sp + sf), 0, 100);
   const px = (v) => x + W * (v / 100);
 
   ctx.fillStyle = 'rgba(120,40,40,0.55)'; ctx.fillRect(x, y, W, h);                    // 敵方底
@@ -7043,10 +7012,11 @@ function drawFactionMorale() {
   ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, W - 1, h - 1);
 
   ctx.font = '10px Consolas'; ctx.textAlign = 'left';
-  ctx.fillStyle = '#9fc4ff'; ctx.fillText('我方 ' + Math.round(moraleOf('player')) + (momentumOf('player') > 0.5 ? '  氣勢+' + Math.round(momentumOf('player')) : ''), x, y + h + 12);
+  const delta = (fid) => { const d = moraleOf(fid) - structMass(fid); return Math.abs(d) > 0.5 ? (d > 0 ? '  氣勢+' : '  挫−') + Math.round(Math.abs(d)) : ''; };
+  ctx.fillStyle = '#9fc4ff'; ctx.fillText('我方質量 ' + Math.round(structMass('player')) + delta('player'), x, y + h + 12);
   ctx.textAlign = 'right';
-  const foe = topFoeFaction('player') || 'enemy';
-  ctx.fillStyle = '#ffb0a8'; ctx.fillText((momentumOf(foe) > 0.5 ? '氣勢+' + Math.round(momentumOf(foe)) + '  ' : '') + '敵方 ' + Math.round(moraleOf(foe)), x + W, y + h + 12);
+  const foe = foe0;
+  ctx.fillStyle = '#ffb0a8'; ctx.fillText('敵方質量 ' + Math.round(structMass(foe)) + delta(foe), x + W, y + h + 12);
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(215,228,240,0.6)'; ctx.fillText('戰局 ' + Math.round(linePos) + ' / 100', cv.width / 2, y + h + 12);
   if (fieldBrokenFor) {   // 掃蕩時間：已勝，但場景還沒結束
