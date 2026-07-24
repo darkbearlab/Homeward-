@@ -5116,54 +5116,41 @@ function issueCommand(mode, opts) {
   cmdFlashT = 1.2; cmdFlashMode = mode;
   return true;
 }
-/* 扈從的移動：共用敵人的 scoreNode（含繩長懲罰），所以性格照舊有效。
-   注意：原版扈從 `moveOnIdle:false` 是個從未被讀取的死旗標＝扈從根本不會移動。 */
+/* 扈從節點導航：直線可達＝直接走（開闊地）；否則走 waypoint 圖 BFS 最短路徑（比照敵人接近方式，
+   避免直線卡牆）。使用者定案：取代舊的「跟隨直線 + 交戰 scoreNode 選點」。
+   重算路徑時機：目標節點改變（騎士/敵在動）、還沒有路徑、或被推離導致下一節點連不到（漂移）。 */
+function navMoveTo(u, goalPos, step) {
+  if (clearLine(u.pos, goalPos)) { moveToward(u, goalPos, step); u.currentNode = nearestNode(u.pos, false); u.navPath = null; return; }
+  const goalNode = nearestNode(goalPos, false);
+  let wpNode = (u.navPath && u.navPath.length) ? u.navPath[0] : null;
+  const needRepath = u.navGoalNode !== goalNode || !u.navPath || wpNode == null || !clearLine(u.pos, wp(wpNode).pos);
+  if (needRepath) { u.currentNode = nearestNode(u.pos, false); u.navPath = bfsPath(u.currentNode, goalNode); u.navGoalNode = goalNode; wpNode = (u.navPath && u.navPath.length) ? u.navPath[0] : goalNode; }
+  const waypoint = wp(wpNode).pos;
+  moveToward(u, waypoint, step);
+  if (dist(u.pos, waypoint) < CONFIG.nodeReach && u.navPath && u.navPath.length) u.currentNode = u.navPath.shift();
+}
 function allyMoveTick(u, dt, target) {
   const anc = anchorOf(u);
   if (!anc) return;
   if (u.currentNode == null) u.currentNode = nearestNode(u.pos, false);
-  if (u.targetNode == null) u.targetNode = u.currentNode;
   const C = CONFIG.command;
-  // 離錨點太遠＝先歸隊（跟隨時最明顯：你跑了他們會追上來）
   const dAnc = dist(u.pos, anc.pos);
-  const regroup = (u.cmd.mode === 'follow') && dAnc > C.followRegroup;
+  const regroup = (u.cmd.mode === 'follow') && dAnc > C.followRegroup;   // 離錨點太遠＝先歸隊
   const foe = regroup ? null : target;
-  if (foe) {
-    let cands = [u.currentNode, ...adj[u.currentNode]];
-    cands = [...new Set(cands)];
-    let best = u.currentNode, bestScore = -Infinity;
-    for (const n of cands) {
-      let s = scoreNode(u, n, { pos: foe.pos, facing: foe.facing }, true);
-      if (n === u.targetNode && hysteresisOn) s += CONFIG.hysteresisBonus;
-      if (s > bestScore) { bestScore = s; best = n; }
+  const step = spdOf(u) * (u.moveMul || 1) * swingMoveMul(u) * CONFIG.ai.allySpeedMul * dt;
+  // 近接貼身：看得到、直線可達、在繩長內＝進到自己打得到的距離（性格決定貼多近；被牆擋則落到節點導航）
+  const meleeEngage = foe && u.weapon.melee && canSee(u, foe.pos) && clearLine(u.pos, foe.pos) && dist(foe.pos, anc.pos) <= anc.leash * 1.2;
+  if (meleeEngage) {
+    let goal = foe.pos;
+    if ((u.personality.wRush || 0) < CONFIG.ai.closeInMinRush) {   // 固守型：停在武器長度上；進取型：貼到接觸
+      const stand = (u.weapon.reach || u.weapon.range || 60) * CONFIG.ai.holderStandoffFrac, d = dist(u.pos, foe.pos);
+      goal = d > Math.max(stand, 1) ? { x: foe.pos.x + (u.pos.x - foe.pos.x) / d * stand, y: foe.pos.y + (u.pos.y - foe.pos.y) / d * stand } : u.pos;
     }
-    u.targetNode = best;
-    const tn = wp(u.targetNode);
-    /* 近接貼身：**性格決定「站多近」，不決定「要不要打」**。
-       舊寫法拿 wRush 當開關（只有進取型才衝完最後一段），本意是保住選點性格——
-       實測確實修好了「磐石站得比先鋒還前面」的倒錯，但代價是 holder 近戰扈從
-       **永遠不進入攻擊距離**：同兵種同武器單挑實測 0 勝 24 敗，站著被砍死。
-       敵人那邊沒這個問題，因為 enemyTick 的近戰一律衝完最後一段——這就是敵我不對稱的來源。
-       改法：近戰一律進到自己打得到的距離，只是進取型貼到接觸、固守型停在武器長度上。
-       磐石仍然站得比先鋒後面，但它終於打得到人。 */
-    const meleeEngage = u.weapon.melee && canSee(u, foe.pos) && dist(foe.pos, anc.pos) <= anc.leash * 1.2;
-    let goal = tn.pos;
-    if (meleeEngage) {
-      if ((u.personality.wRush || 0) >= CONFIG.ai.closeInMinRush) goal = foe.pos;   // 進取型：貼到接觸
-      else {
-        const stand = (u.weapon.reach || u.weapon.range || 60) * CONFIG.ai.holderStandoffFrac;
-        const d = dist(u.pos, foe.pos);
-        goal = d > Math.max(stand, 1)
-          ? { x: foe.pos.x + (u.pos.x - foe.pos.x) / d * stand, y: foe.pos.y + (u.pos.y - foe.pos.y) / d * stand }
-          : u.pos;   // 已在武器長度內＝守住，不再往前擠
-      }
-    }
-    moveToward(u, goal, spdOf(u) * (u.moveMul || 1) * swingMoveMul(u) * CONFIG.ai.allySpeedMul * dt);
-    if (dist(u.pos, tn.pos) < CONFIG.nodeReach) u.currentNode = u.targetNode;
-  } else if (dAnc > anc.leash * 0.6) {
-    moveToward(u, anc.pos, spdOf(u) * (u.moveMul || 1) * CONFIG.ai.allySpeedMul * dt);   // 沒有交戰對象＝回到錨點附近
-    u.currentNode = nearestNode(u.pos, false); u.targetNode = u.currentNode;
+    moveToward(u, goal, step); u.currentNode = nearestNode(u.pos, false); u.navPath = null; return;
   }
+  // 遠端：朝敵人或錨點（騎士）走 BFS 最短路徑。跟隨時在繩長內就不動（避免貼著騎士抖）
+  if (!foe && dAnc <= anc.leash * 0.6) { u.navPath = null; return; }
+  navMoveTo(u, foe ? foe.pos : anc.pos, step);
 }
 function idleTick(u, dt, lockFacing) {
   if (u.staggerT > 0) return;   // 硬直中不動作（扈從也吃）
