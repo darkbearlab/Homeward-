@@ -293,6 +293,10 @@ CONFIG.morale = {
         雙方消耗到 20/20  → 50×0.20 = 10   都快撐不住了，弱的先崩 ✓
         你打順了 80 vs 20 → 80×0.80 = 64   穩如老狗 ✓ */
   absExp: 1.0,             // 剩餘實力的指數：0＝純拉鋸（不看自己剩多少）、越大＝絕對值越重要
+  // 數量差進拉鋸線（使用者回報：孤騎砍一兩刀就把整群嚇潰）。設計註解本來就寫 line 要吃「戰力(A+T)」，
+  // 但舊碼只用士氣/氣勢＝孤身免疫的騎士把我方士氣鎖在 100、敵方一死人就掉，於是被寡擊眾也秒潰。
+  // 這一項把「開場的人數比」加回 line：被大幅包圍＝門檻線上抬（撐得住）、人數均等＝此項為 0（不動既有平衡）。
+  forceWeight: 0.5,        // 人數差對 line 的最大影響（±此×50）；0＝關閉、回到純士氣拉鋸
   // ── 氣勢（momentum）：暫時的、會衰退的額度，**只推相對線、不動絕對士氣** ──
   // 「開戰的氣勢」本來就該會消退，而不是永久債務：被伏擊 → 你的人發抖 →
   // 撐過去、砍倒幾個 → 氣勢消退、線推回來 → 他們重新站到你旁邊。
@@ -4979,7 +4983,12 @@ function topFoeFaction(fid) {
 function moraleLine(fid) {
   const foe = topFoeFaction(fid);
   if (!foe) return CONFIG.morale.max;
-  return clamp(50 + (effMoraleOf(fid) - effMoraleOf(foe)) / 2, 0, CONFIG.morale.max);
+  const M = CONFIG.morale;
+  // 人數差項：(我戰力−敵戰力)/max ∈ −1..1，× forceWeight × 50。被包圍＝負→門檻線壓低者是「人少的那方」，
+  // 反過來人多的那方 line 上抬＝撐得住。人數均等時為 0（不動既有純士氣平衡）。用開場快照戰力（forceOf）。
+  const wf = forceOf(fid).weight, we = forceOf(foe).weight;
+  const forceTerm = M.forceWeight * clamp((wf - we) / Math.max(1, wf, we), -1, 1) * 50;
+  return clamp(50 + (effMoraleOf(fid) - effMoraleOf(foe)) / 2 + forceTerm, 0, CONFIG.morale.max);
 }
 // **有效戰意 = 戰局位置 × 剩餘實力**。單位拿它跟自己的門檻比。
 function resolveOf(fid) {
