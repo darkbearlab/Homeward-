@@ -137,8 +137,9 @@ const CONFIG = {
   },
   // 低矮牆＝掩體：玩家穿越減速、敵人視為實體繞行、不擋視線、子彈「遠距機率擋／貼牆可越射」
   lowWall: { slow: 0.3, touchR: 12, closeRange: 90, blockChance: 0.55 },
-  // 草叢：踏在真草叢(非煙幕)內＝隨負重減速。減速率 = 負重 × slowPerWeight，上限 slowMax（重甲在叢間更難行）。步行聲之後也掛在同一個減速率上。
-  bush: { slowPerWeight: 0.05, slowMax: 0.4 },
+  // 草叢：踏在真草叢(非煙幕)內＝隨負重減速。減速率 = 負重 × slowPerWeight，上限 slowMax（重甲在叢間更難行）。
+  // 步行聲掛在同一個減速率上：叢內步行聲 ×(1 + 減速率×rustleFromSlow + rustleBonus)＝重甲更吵、踏進草叢本身也加一點成數。
+  bush: { slowPerWeight: 0.05, slowMax: 0.4, rustleFromSlow: 1.0, rustleBonus: 0.2 },
   // 牆體厚度（px，全域固定）：渲染描邊寬＝此值；子彈/視線阻擋以「離中心線 ≤ 半厚」判定（撞渲染牆面而非中心線）。
   // 40px=1公尺，故 8px≈20cm（室內牆）。承重牆在編輯器平行畫兩條即可，不在資料上分型。移動退避仍走單位半徑（已比牆厚）。
   wallThick: 8,
@@ -5590,6 +5591,8 @@ const lowWallSpeedMult = (pos) => onLowWall(pos, CONFIG.unitRadius + CONFIG.lowW
 // 草叢減速率（0~slowMax）＝負重×slowPerWeight，只在踏進真草叢(非煙幕)時 >0。bushSlowFrac 同時是「步行聲」要掛的量。
 const bushSlowFrac = (u) => inBush(u.pos) ? Math.min(CONFIG.bush.slowPerWeight * carriedWeight(u), CONFIG.bush.slowMax) : 0;
 const bushSpeedMult = (u) => 1 - bushSlowFrac(u);
+// 草叢步行聲倍率：叢內＝1 + 減速率×rustleFromSlow + 固定 rustleBonus（重甲更吵、踏進草叢本身也加成）；叢外＝1。
+const bushRustleMult = (u) => inBush(u.pos) ? (1 + bushSlowFrac(u) * CONFIG.bush.rustleFromSlow + CONFIG.bush.rustleBonus) : 1;
 function separate(units) {
   for (let i = 0; i < units.length; i++) for (let j = i + 1; j < units.length; j++) {
     const a = units[i], b = units[j];
@@ -6006,7 +6009,7 @@ function update(dt) {
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
           // 步行聲：每 stepInterval 秒發一次，半徑隨速度、衝刺更響更頻繁 → 驚動附近 IDLE 敵（走路可潛近、衝刺會被聽見）。
           u.stepT = (u.stepT || 0) - dt;
-          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1); alertEnemiesNear(u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta 升級「潛蹤」：腳步更輕
+          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1) * bushRustleMult(u); alertEnemiesNear(u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta 升級「潛蹤」：腳步更輕；草叢內移動＝沙沙作響（隨負重）
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
       }
