@@ -175,7 +175,7 @@ const CONFIG = {
   // 視覺化聲音：控制角色「視線外」方向有聲音時，畫面邊框朝該方向發光（無音效的替代提示；arcade 亦沿用）。
   soundEdge: { alpha: 0.6, frame: 0.07 },   // alpha＝發光最大不透明度；frame＝常駐外框淡度
   // 世界空間「聲音漣漪」：每次發聲在原地擴散的淡環（和 soundEdge 併行，用同一份 soundPings）。enabled 可關做 A/B 比較。
-  soundRipple: { enabled: true, alpha: 0.22, width: 2, strideDist: 60 },   // alpha＝峰值淡度（很淡）；width＝環線寬；strideDist＝走多遠發一次視覺腳步（越大越稀疏）
+  soundRipple: { enabled: true, alpha: 0.34, width: 3, strideDist: 60 },   // alpha＝峰值淡度；width＝環線寬；strideDist＝走多遠發一次視覺腳步（越大越稀疏）
 
   // --- 額外佔位 ---
   unitRadius: 12,
@@ -5671,7 +5671,7 @@ function spawnBlood(pos, ang) { for (let i = 0; i < 7; i++) { const a = ang + (M
 function pushDecal(x, y, r, col) { decals.push({ x, y, r, col }); if (decals.length > 160) decals.shift(); }   // 地上血漬（上限淘汰）
 // 視覺化聲音：依音效 id 給「邊框發光」提示（控制角色看不到的方向才提示）。SLEEPER/arcade 共用。
 const SOUND_PINGS = {
-  step:    { r: 26,  life: 0.26, col: '170,205,225' },   // 腳步：淡冷色、短命（快淡＝不拖在身後）；r 由實際步行聲半徑覆寫（草叢/衝刺＝更大的漣漪）
+  step:    { r: 26,  life: 0.45, col: '170,205,225' },   // 腳步：淡冷色；r 由實際步行聲半徑覆寫（草叢/衝刺＝更大的漣漪）
   // 遠程：弓弩本就相對輕聲（使用者定案調小）；消音更小。
   shot:    { r: 70,  life: 0.45, col: '255,180,90' },
   shotgun: { r: 100, life: 0.55, col: '255,150,70' },
