@@ -303,6 +303,17 @@ CONFIG.morale = {
   breakHysteresis: 8,      // line 回到「門檻 + 此值」才脫離崩潰
   routSpeedMul: 1.25,      // 潰逃移動倍率
   fleeAwayDist: 560,       // 潰逃敵人跑這麼遠＝脫離戰場
+  // 崩潰反應（panicType，出生擲、依兵種加權）：flee＝潰逃(現況)、berserk＝捨身死戰(背水 buff＋更長連段＋不逃)、freeze＝呆立不動
+  panic: {
+    default:   { flee: 55, berserk: 30, freeze: 15 },
+    levy:      { flee: 60, berserk: 10, freeze: 30 },   // 雜兵：多逃或愣
+    wolf:      { flee: 45, berserk: 55, freeze: 0  },   // 動物：戰或逃、不會愣
+    archer:    { flee: 60, berserk: 15, freeze: 25 },   // 遠程：多逃/愣
+    arbalest:  { flee: 60, berserk: 15, freeze: 25 },
+    manatarms: { flee: 20, berserk: 70, freeze: 10 },   // 菁英：多半死戰
+    serjeant:  { flee: 20, berserk: 70, freeze: 10 },
+  },
+  berserkMoveMul: 1.15, berserkDmgMul: 1.15, berserkKeepBase: 0.8,   // 捨身：背水移速/傷害加成 + 更高的攻擊權保留(連段)機率
   // ── 跨關（質量是活的，這些現在多半 moot；保留欄位）──
   restRestore: 1.0, interMissionRestore: 0.5,
 };
@@ -2465,6 +2476,7 @@ function makeEnemy(nodeId, personalityName, isReinforce = false, facing = Math.P
     coneHalfDeg: TYPE.coneHalfDeg || CONFIG.vision.coneHalfDeg,   // 逐單位視錐（警犬更寬）
     moveSpeed: TYPE.moveSpeed, armor: TYPE.armor || 0, attack: TYPE.attack || 'ranged', dummy: !!TYPE.dummy,
     moraleState: 'steady', moraleFxT: 0,   // 士氣在陣營層級；門檻見 BREAK_AT[typeId]
+    panicType: pickPanic(typeId),          // 崩潰反應（出生擲、依兵種）：flee / berserk(捨身) / freeze(呆立)
     basePersonality: CONFIG.ai[personalityName],   // 士氣恢復時換回來的那一組
     burstLeft: (W.burst ? W.burst.size : 0), burstCd: 0,   // 重機槍點放節奏
     currentNode: nodeId, targetNode: nodeId, reservedNode: null,
@@ -4170,7 +4182,8 @@ function tickMelee(u, dt) {
     u.swing = null;
     // 敵人揮完一刀：有機率保留攻擊權續攻（機率隨連刀數衰減），否則交還攻擊權並退開休息換別隻上
     if (u.faction !== 'player') {
-      const keepP = CONFIG.melee.tokenKeepBase - (u.tokenChain || 0) * CONFIG.melee.tokenKeepDecay;
+      const keepBase = isBerserk(u) ? CONFIG.morale.berserkKeepBase : CONFIG.melee.tokenKeepBase;   // 捨身＝更高續攻機率＝更長連段
+      const keepP = keepBase - (u.tokenChain || 0) * CONFIG.melee.tokenKeepDecay;
       if (Math.random() < keepP) u.tokenChain = (u.tokenChain || 0) + 1;         // 續攻：留權、不休息 → 直接接下一刀
       else { u.atkRestT = CONFIG.melee.tokenRest; releaseAttackToken(u); }        // 收手：releaseAttackToken 內會歸零 tokenChain
     }
@@ -4178,7 +4191,7 @@ function tickMelee(u, dt) {
   return true;
 }
 // 輸出傷害倍率＝meta 升級「鋒銳」(dmgMul) × 誓約「無畏」(低血背水)；近接與遠程同一把尺。
-const outDmgMul = (u) => (u.dmgMul || 1) * ((u.berserk && u.hp < u.maxHp * u.berserk.frac) ? u.berserk.mul : 1);
+const outDmgMul = (u) => (u.dmgMul || 1) * ((u.berserk && u.hp < u.maxHp * u.berserk.frac) ? u.berserk.mul : 1) * (isBerserk(u) ? CONFIG.morale.berserkDmgMul : 1);   // 末項＝崩潰後的捨身背水傷害（與誓約「無畏」u.berserk 不同物）
 // 刀刃掃過的角度帶判定：只有「上一幀→本幀」之間掃過的角度算命中（再各放寬 bladeHalfDeg＝刀刃厚度）。
 // 距離吃 reach × 當下刀尖伸出比例；視線被牆擋則打不到。同一目標每次揮擊只吃一下。
 function meleeHitTest(u, s) {
@@ -5010,6 +5023,14 @@ const resolveOf = (fid) => moraleLine(fid);
 const hasMorale = (u) => !u.dummy && !u.moraleImmune && !(u.faction === 'player' && u.id === KNIGHT_ID);   // moraleImmune＝測量靶/腳本單位免疫士氣
 const isShaken = (u) => u.moraleState === 'shaken' || u.moraleState === 'routed';
 const isRouted = (u) => u.moraleState === 'routed';
+// 崩潰反應：出生擲一個 panicType（依兵種加權），崩潰(shaken/routed)時才顯現行為。berserk＝捨身、freeze＝呆立。
+function pickPanic(typeId) {
+  const P = CONFIG.morale.panic, w = P[typeId] || P.default, keys = ['flee', 'berserk', 'freeze'];
+  let tot = 0; for (const k of keys) tot += w[k] || 0;
+  let r = srand() * tot; for (const k of keys) { r -= w[k] || 0; if (r <= 0) return k; } return 'flee';
+}
+const isBerserk = (u) => u.panicType === 'berserk' && isShaken(u);   // 崩潰後的捨身死戰
+const isFrozen  = (u) => u.panicType === 'freeze'  && isShaken(u);   // 崩潰後的呆立不動
 // 依「陣營士氣 vs 自己的門檻」決定狀態；換性格與潰逃都在這裡收斂
 /* 單位是否已進入戰鬥＝崩潰判定的前提（使用者定案）。**未必要見血**，看到對方進入交戰即算。
    否則在「不是剛開場就交戰」的地圖上，敵人什麼都還沒看到就因別處的士氣下滑而潰散。
@@ -5027,7 +5048,7 @@ function refreshMoraleState(u) {
   else if (u.moraleState !== 'steady' && res >= th + M.breakHysteresis) u.moraleState = 'steady';
   if (u.moraleState !== prev) {
     u.moraleFxT = 1.0;
-    u.personality = isShaken(u) ? CONFIG.ai.shaken : (u.basePersonality || u.personality);
+    u.personality = isShaken(u) ? (u.panicType === 'berserk' ? CONFIG.ai.rusher : CONFIG.ai.shaken) : (u.basePersonality || u.personality);   // 捨身＝切 rusher 猛衝；潰逃/呆立＝shaken(躲/拉開)，呆立另在 enemyTick 站定
     if (isRouted(u)) { u.swing = null; u.blocking = false; u.blockT = null; releaseAttackToken(u); }
     // 崩潰本身給該陣營一發負震盪＝連鎖/雪崩（只在「變成崩潰」那一刻算一次）
     if (prev === 'steady' && isShaken(u)) grantMomentum(u.faction, -M.breakShock, M.shockDur);
@@ -5038,7 +5059,7 @@ function refreshMoraleState(u) {
 function tickMorale(u, dt) {
   if (!hasMorale(u)) return;
   refreshMoraleState(u);
-  if (isRouted(u) && u.faction !== 'player' && !u.dead) {   // 潰逃的敵人跑夠遠＝脫離戰場
+  if (isRouted(u) && u.faction !== 'player' && !u.dead && (u.panicType || 'flee') === 'flee') {   // 只有潰逃(flee)型跑夠遠＝脫離戰場；捨身/呆立不離場
     let nearest = Infinity;
     for (const o of activePlayers()) nearest = Math.min(nearest, dist(o.pos, u.pos));
     if (nearest > CONFIG.morale.fleeAwayDist) fleeUnit(u);
@@ -5432,9 +5453,10 @@ function enemyTick(e, dt) {
   if (e.state === 'ENGAGED' && !e.calledHelp && !e.dead) { e.calledHelp = true; alertEnemiesNear(e.pos, CONFIG.hearing.callHelp); }
   if (e.staggerT > 0) return;   // 硬直（被戰鎚打中/招架失敗）：完全不行動
   if (e.dummy) return;          // 訓練假人（近戰試作場）：只挨打，不思考
-  // 士氣潰逃：丟下戰鬥往入口方向跑（不還手）。**這是「孤騎對軍團」的解**——
-  // 你殺不完十個人，但砍倒兩個雜兵、再殺掉他們的菁英，剩下的就散了。
-  if (isRouted(e)) {
+  if (isFrozen(e)) { e.swing = null; e.aimT = 0; releaseAttackToken(e); return; }   // 呆立：崩潰後當場愣住＝不動不打（白送擊殺，但擋路占數）；士氣回穩會解除
+  // 士氣潰逃（flee 型）：丟下戰鬥往入口方向跑（不還手）。**這是「孤騎對軍團」的解**——你殺不完十個人，
+  // 但砍倒兩個雜兵、再殺掉他們的菁英，剩下的就散了。berserk 型即使 routed 也不逃＝往下走正常交戰（捨身衝殺）。
+  if (isRouted(e) && (e.panicType || 'flee') === 'flee') {
     releaseAttackToken(e);
     const away = ENTRY || { x: e.pos.x, y: e.pos.y };
     const f0 = nearestFriendly(e.pos);
@@ -5507,7 +5529,7 @@ function enemyTick(e, dt) {
     if (!token) releaseAttackToken(e);
   } else if (melee) { releaseAttackToken(e); }
   let goalPos = (seen && (melee || e.weapon.range <= CONFIG.enemy.meleeApproach)) ? aimPos : tn.pos;
-  let spd = e.moveSpeed / CONFIG.tempo * flashMoveMul(e) * rangedActionMoveMul(e);   // 遠程：瞄準預告中放慢/定身、裝填中放慢（弩＝定身）
+  let spd = e.moveSpeed / CONFIG.tempo * flashMoveMul(e) * rangedActionMoveMul(e) * (isBerserk(e) ? CONFIG.morale.berserkMoveMul : 1);   // 遠程：瞄準預告中放慢/定身、裝填中放慢（弩＝定身）；捨身＝背水加速
   if (melee && seen && !token) {
     // 繞行：保持 ringDist，並沿切線橫移（以自己的 id 決定繞哪一邊＝不會全部擠同一側）
     const R = CONFIG.melee.ringDist, d = dist(e.pos, aimPos), a = angTo(aimPos, e.pos);
