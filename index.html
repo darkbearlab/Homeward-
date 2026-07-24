@@ -174,6 +174,8 @@ const CONFIG = {
     deathHitstop: 0.06 },   // 我方陣亡：只保留短頓幀「頓一下」（已取消死亡鏡頭＝相機不轉去死亡點，激戰中不干擾操作）
   // 視覺化聲音：控制角色「視線外」方向有聲音時，畫面邊框朝該方向發光（無音效的替代提示；arcade 亦沿用）。
   soundEdge: { alpha: 0.6, frame: 0.07 },   // alpha＝發光最大不透明度；frame＝常駐外框淡度
+  // 世界空間「聲音漣漪」：每次發聲在原地擴散的淡環（和 soundEdge 併行，用同一份 soundPings）。enabled 可關做 A/B 比較。
+  soundRipple: { enabled: true, alpha: 0.22, width: 2 },   // alpha＝峰值淡度（很淡）；width＝環線寬
 
   // --- 額外佔位 ---
   unitRadius: 12,
@@ -5668,6 +5670,7 @@ function spawnBlood(pos, ang) { for (let i = 0; i < 7; i++) { const a = ang + (M
 function pushDecal(x, y, r, col) { decals.push({ x, y, r, col }); if (decals.length > 160) decals.shift(); }   // 地上血漬（上限淘汰）
 // 視覺化聲音：依音效 id 給「邊框發光」提示（控制角色看不到的方向才提示）。SLEEPER/arcade 共用。
 const SOUND_PINGS = {
+  step:    { r: 26,  life: 0.4,  col: '170,205,225' },   // 腳步：淡冷色；r 由實際步行聲半徑覆寫（草叢/衝刺＝更大的漣漪）
   // 遠程：弓弩本就相對輕聲（使用者定案調小）；消音更小。
   shot:    { r: 70,  life: 0.45, col: '255,180,90' },
   shotgun: { r: 100, life: 0.55, col: '255,150,70' },
@@ -6036,7 +6039,7 @@ function update(dt) {
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
           // 步行聲：每 stepInterval 秒發一次，半徑隨速度、衝刺更響更頻繁 → 驚動附近 IDLE 敵（走路可潛近、衝刺會被聽見）。
           u.stepT = (u.stepT || 0) - dt;
-          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1) * bushRustleMult(u); alertEnemiesNear(u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta 升級「潛蹤」：腳步更輕；草叢內移動＝沙沙作響（隨負重）
+          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1) * bushRustleMult(u); alertEnemiesNear(u.pos, r); Sfx.play('step', u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta 升級「潛蹤」：腳步更輕；草叢內移動＝沙沙作響（隨負重）；發聲＝視覺化漣漪半徑吃真實步行聲
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
       }
@@ -6150,7 +6153,7 @@ function draw() {
   // ---- 世界（鏡頭變換）----
   ctx.save(); applyCam();
   drawGrid(); drawBushes(); drawSmoke(); drawAreas(); drawLowWalls(); drawDestructibles(); drawWalls(); drawDoors(); drawButtons(); drawWaypoints(); drawZonesWorld();
-  drawDecals(); drawCorpses(); drawDrops(); drawPrisoners(); drawIntroActors(); drawParticles(); drawBullets(); drawGrenades();
+  drawDecals(); drawCorpses(); drawDrops(); drawPrisoners(); drawIntroActors(); drawParticles(); drawSoundRipples(); drawBullets(); drawGrenades();
   drawMeleeFx([...enemies.filter(e => !e.dead && isRevealed(e)), ...players]);   // 近接弧畫在單位之下（不遮血條/身體）；敵人比照 drawEnemies 只畫已感知者
   drawEnemies(); drawPlayers(); drawFlashFx();
   drawStaggerMarks([...enemies.filter(e => !e.dead && isRevealed(e)), ...players]);
@@ -6594,6 +6597,21 @@ function drawBullets() {
 function drawParticles() {
   for (const q of particles) { ctx.globalAlpha = Math.max(0, q.life / q.max); ctx.fillStyle = q.col; ctx.fillRect(q.x - 1.5, q.y - 1.5, 3, 3); }
   ctx.globalAlpha = 1;
+}
+// 聲音漣漪（世界空間）：把既有 soundPings 畫成「原地擴散、邊擴邊淡」的淡環＝每次發聲都看得到、且環的大小＝聲音傳多遠。
+// 和 soundEdge（畫面外框指向）併行；CONFIG.soundRipple.enabled 可關做 A/B 比較。近接/腳步/開火/陣亡各自帶自己的 ping 顏色。
+function drawSoundRipples() {
+  const C = CONFIG.soundRipple; if (!C || !C.enabled || !soundPings.length || !cam) return;
+  ctx.lineWidth = C.width;
+  for (const s of soundPings) {
+    const frac = clamp(1 - s.life / s.max, 0, 1);           // 0→1 隨壽命向外擴散
+    const rad = s.r * (0.15 + 0.85 * frac) * cam.scale;     // 由小擴到滿半徑（＝聽覺傳播距離）
+    const a = C.alpha * (1 - frac);                          // 邊擴邊淡
+    if (a <= 0.004) continue;
+    const p = w2s(s);
+    ctx.strokeStyle = `rgba(${s.col},${a.toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1, rad), 0, Math.PI * 2); ctx.stroke();
+  }
 }
 /* ---- 近接可讀性：揮斬扇形 / 盾格弧 / 硬直標記（世界座標，draw() 已套 applyCam）----
    前搖＝暗色細弧「預告」揮擊範圍；判定窗＝亮色實心扇形（就是實際判定的形狀）；後搖＝淡出。 */
