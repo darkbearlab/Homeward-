@@ -249,6 +249,8 @@ CONFIG.command = {
   focusLeash: 340,      // 專注：追殺指定目標時放寬的半徑
   followRegroup: 260,   // 跟隨時離騎士超過這個距離＝優先歸隊（先不打）
   engageRangeMul: 1.15, // 交戰判定：目標要在「繩長 × 此值」內才理會（專注指令不受限）
+  allySpacing: 46,      // 隨從彼此/與騎士的期望間距（＞碰撞半徑＝散開站，減少友軍誤傷 + 不被單次揮擊掃到多人）
+  allySpacePush: 70,    // 散開推力速度 px/s（軟分離，只推隨從、不推騎士）
 };
 /* =====================================================================
    士氣（HOMEWARD，使用者提案）— **雙向**：扈從與敵人都有。
@@ -5622,6 +5624,24 @@ function separate(units) {
     if (d > 0 && d < min) { const push = (min - d) / 2, nx = dx / d, ny = dy / d; a.pos.x -= nx * push; a.pos.y -= ny * push; b.pos.x += nx * push; b.pos.y += ny * push; }
   }
 }
+/* 隨從軟間距（使用者要求）：讓隨從彼此、與騎士保持一個「個人空間」＝散開站，
+   減少友軍誤傷、也不會被一次揮擊（斧的 cleave）掃走一整排。只推隨從、不推騎士（免得干擾操作）。 */
+function spaceOutAllies(dt) {
+  const C = CONFIG.command, sp = C.allySpacing;
+  const allies = activePlayers().filter(p => p.state !== 'DEAD' && p.state !== 'EXTRACTED');
+  for (const a of allies) {
+    if (a.id === KNIGHT_ID) continue;                 // 騎士不被推
+    if (isRouted(a)) continue;                         // 潰逃中不管間距（他只想跑）
+    let px = 0, py = 0;
+    for (const b of allies) {
+      if (b === a) continue;
+      let dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y, d = Math.hypot(dx, dy);
+      if (d < 1e-3) { const ang = a.id * 2.399; dx = Math.cos(ang); dy = Math.sin(ang); d = 1; }   // 完全重疊：依 id 給固定方向散開（免死鎖）
+      if (d < sp) { const w = (sp - d) / sp; px += (dx / d) * w; py += (dy / d) * w; }
+    }
+    if (px || py) { a.pos.x += px * C.allySpacePush * dt; a.pos.y += py * C.allySpacePush * dt; }
+  }
+}
 
 /* =====================================================================
    Particles
@@ -6052,6 +6072,7 @@ function update(dt) {
   const movers = [...activePlayers(), ...enemies.filter(e => !e.dead)];
   for (const u of movers) tickKnock(u, dt);
   separate(movers);
+  spaceOutAllies(dt);   // 隨從軟間距（散開站，減少誤傷/被 cleave 掃走）；在 collideWalls 前＝散開後仍不會穿牆
   for (const u of movers) collideWalls(u);
   updateDrops(); updateFile(); updateCaches();
 
