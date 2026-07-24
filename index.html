@@ -202,9 +202,10 @@ const CONFIG = {
   // 望遠/偵察（右鍵按住）：鏡頭往前帶(anchorY↓ 看更前)+微縮(scale)、降發散穩定、禁奔跑、移速降(moveMul)。
   // toggle＝改成切換模式(留給未來 option)；sensMul＝望遠時滑鼠靈敏度倍率(留給未來 option)。moveMul＝穩住細瞄的機動代價(meta「沉著」可減輕)。
   scope: { anchorY: 0.82, scale: 0.86, spreadMul: 0.5, moveMul: 0.6, toggle: false, sensMul: 1.0 },
-  // 遠程「動作中」的移動倍率（個別武器可用 WEAPONS[id].aimMoveMul / reloadMoveMul 覆寫）：
-  //   aimMoveMul＝瞄準預告中（AI 蓄力放箭那段；騎士手動射擊無此窗）；reloadMoveMul＝裝填中（全體含騎士，0＝定身）。
-  ranged: { aimMoveMul: 0.4, reloadMoveMul: 0.7 },
+  // 遠程「動作中」的倍率（個別武器可用 WEAPONS[id].aimMoveMul / reloadMoveMul / aimTurnMul 覆寫）：
+  //   aimMoveMul＝瞄準預告中移動（AI 蓄力放箭那段；騎士手動射擊無此窗）；reloadMoveMul＝裝填中移動（全體含騎士，0＝定身）。
+  //   aimTurnMul＝AI 瞄準預告中的「轉向」倍率（1＝硬追瞄如舊；<1＝預告一出朝向就鎖住、可被 strafe 閃開）。AI 遠程一律沿「實際朝向」放箭＝預告不騙人。
+  ranged: { aimMoveMul: 0.4, reloadMoveMul: 0.7, aimTurnMul: 1.0 },
 
   enemy: {
     moveSpeed: 85,
@@ -378,7 +379,7 @@ const WEAPONS = {
   // magazine 1 + reloadTime＝每發搭箭/絞弦；特定魔法（火矢等）之後進 Phase 2 一樣走此管線。
   // aimTime＝AI 射這把武器前的瞄準時間（＝預告長方形填滿所需秒數）；玩家不受此限
   longbow: { name: '長弓',   rarity: 'common',   weight: 1.2, damage: 26, fireRate: 1.4, range: 1200, projSpeed: 640, spreadBase: 1.6, spreadPerShot: 0.8, spreadMax: 6, spreadRecover: 9, magazine: 1, reloadTime: 1.5, turnSpeed: 520, pierce: 0.15, aimTime: 0.9, reloadMoveMul: 0.65, hands: 2 },
-  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85, aimTime: 1.0, aimMoveMul: 0.15, reloadMoveMul: 0, hands: 2 },   // 重弩＝瞄得久、絞弦裝填 2.6s 完全定身、但一發很痛且高穿甲
+  crossbow:{ name: '十字弓', rarity: 'uncommon', weight: 2.6, damage: 42, fireRate: 1.0, range: 1300, projSpeed: 920, spreadBase: 1.0, spreadPerShot: 0.6, spreadMax: 4, spreadRecover: 9, magazine: 1, reloadTime: 2.6, turnSpeed: 420, pierce: 0.85, aimTime: 1.0, aimMoveMul: 0.15, reloadMoveMul: 0, aimTurnMul: 0.2, hands: 2 },   // 重弩＝瞄得久、絞弦裝填 2.6s 完全定身、預告一出轉向鎖死(可被 strafe 閃)、但一發很痛且高穿甲
   // 投槍＝**單手**遠程：唯一能搭盾的投射武器（射程短、彈數少），劍盾流的補牌
   javelin: { name: '投槍',  rarity: 'common',   weight: 1.0, damage: 34, fireRate: 1.2, range: 620,  projSpeed: 560, spreadBase: 2.2, spreadPerShot: 1.0, spreadMax: 8, spreadRecover: 9, magazine: 1, reloadTime: 1.3, turnSpeed: 540, pierce: 0.45, aimTime: 0.75, hands: 1 },
   // 局外解鎖武器（榮譽；解鎖後才進招募/loot 池，仍 RNG 取得）
@@ -5510,8 +5511,11 @@ function enemyTick(e, dt) {
   const turn = e.weapon.turnSpeed * Math.PI / 180 * dt;
   if (seen) {
     const ang = angTo(e.pos, aimPos);
-    e.facing = rotToward(e.facing, ang, turn * 2);
-    if (inRange && !threatOnly && token) { e.engageTimer += dt; if (e.engageTimer >= CONFIG.enemy.reactionDelay) enemyAttack(e, ang, dt); }   // 只憑來向記憶＝先朝來向推進/回頭，不對空地開火；親眼看到真目標才射；近接還需攻擊權
+    // 遠程瞄準預告中（aimT>0）＝轉向大幅下降＝朝向鎖住、可被 strafe 閃開（aimTurnMul；近接不受此限）
+    const aimTMul = (!e.weapon.melee && (e.aimT || 0) > 0) ? (e.weapon.aimTurnMul != null ? e.weapon.aimTurnMul : CONFIG.ranged.aimTurnMul) : 1;
+    e.facing = rotToward(e.facing, ang, turn * 2 * aimTMul);
+    // 遠程沿「實際朝向」放箭＝預告長方形就是真彈道（轉向被鎖時才閃得掉）；近接仍朝目標本人
+    if (inRange && !threatOnly && token) { e.engageTimer += dt; if (e.engageTimer >= CONFIG.enemy.reactionDelay) enemyAttack(e, e.weapon.melee ? ang : e.facing, dt); }   // 只憑來向記憶＝先朝來向推進/回頭，不對空地開火；親眼看到真目標才射；近接還需攻擊權
     else { e.engageTimer = 0; e.aimT = 0; }   // 沒得射＝瞄準歸零（預告不能留在畫面上）
   } else {
     e.engageTimer = 0; e.aimT = 0;
