@@ -5701,8 +5701,9 @@ function visStep(u, moved) {
   u._stride = (u._stride || 0) + moved;
   if (u._stride < C.strideDist) return;
   u._stride = 0;
-  const soft = !(u.faction === 'player' && u.id === KNIGHT_ID);   // 只有騎士腳步會驚動敵人＝實線；扈從/敵人＝「只是移動」虛線淡環（含迷霧中，故聽得到牆後行動）
-  pingSound('step', u.pos, u._stepR || CONFIG.hearing.stepBase, soft);
+  const soft = !(u.faction === 'player' && u.id === KNIGHT_ID);   // soft＝只是移動、不進邊框提示（腳步交給世界漣漪）；含迷霧中，故聽得到牆後行動
+  const r = u._stepR || (CONFIG.hearing.stepBase + (u.moveSpeed || CONFIG.moveSpeed) / CONFIG.tempo * CONFIG.hearing.stepPerSpeed);   // 敵/扈從無 _stepR＝依自身移速估，讓漣漪大小與騎士相當（敵我一致）
+  pingSound('step', u.pos, r, soft);
 }
 function updateParticles(dt) { for (let i = particles.length - 1; i >= 0; i--) { const q = particles[i]; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) particles.splice(i, 1); } }
 
@@ -6623,14 +6624,12 @@ function drawSoundRipples() {
   for (const s of soundPings) {
     const frac = clamp(1 - s.life / s.max, 0, 1);           // 0→1 隨壽命向外擴散
     const rad = (s.hearR || s.r) * (0.15 + 0.85 * frac);    // 擴散到「真實傳播半徑」＝聲音能吵醒多遠的敵人
-    let a = C.alpha * (1 - frac) * (s.soft ? C.softMul : 1); // 邊擴邊淡；「只是移動」的軟腳步更淡
+    let a = C.alpha * (1 - frac);                            // 邊擴邊淡（敵我同一種樣式：實線、同淡度）
     if (kn && C.hearRange) { const dd = dist(kn.pos, s); a *= clamp(1 - (dd - C.hearRange) / (C.hearRange * 0.6), 0, 1); }   // 聽覺範圍：近＝清楚（含牆後）、遠＝淡出（非全知）
     if (a <= 0.004) continue;
-    ctx.setLineDash(s.soft ? [6, 6] : []);                  // 軟腳步＝虛線（只是移動）；會驚動的聲音＝實線
     ctx.strokeStyle = `rgba(${s.col},${a.toFixed(3)})`;
     ctx.beginPath(); ctx.arc(s.x, s.y, Math.max(1, rad), 0, Math.PI * 2); ctx.stroke();
   }
-  ctx.setLineDash([]);
 }
 /* ---- 近接可讀性：揮斬扇形 / 盾格弧 / 硬直標記（世界座標，draw() 已套 applyCam）----
    前搖＝暗色細弧「預告」揮擊範圍；判定窗＝亮色實心扇形（就是實際判定的形狀）；後搖＝淡出。 */
