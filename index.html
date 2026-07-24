@@ -175,7 +175,7 @@ const CONFIG = {
   // 視覺化聲音：控制角色「視線外」方向有聲音時，畫面邊框朝該方向發光（無音效的替代提示；arcade 亦沿用）。
   soundEdge: { alpha: 0.6, frame: 0.07 },   // alpha＝發光最大不透明度；frame＝常駐外框淡度
   // 世界空間「聲音漣漪」：每次發聲在原地擴散的淡環（和 soundEdge 併行，用同一份 soundPings）。enabled 可關做 A/B 比較。
-  soundRipple: { enabled: true, alpha: 0.22, width: 2 },   // alpha＝峰值淡度（很淡）；width＝環線寬
+  soundRipple: { enabled: true, alpha: 0.22, width: 2, strideDist: 60 },   // alpha＝峰值淡度（很淡）；width＝環線寬；strideDist＝走多遠發一次視覺腳步（越大越稀疏）
 
   // --- 額外佔位 ---
   unitRadius: 12,
@@ -5572,8 +5572,9 @@ const sprintMult = (u) => clamp(CONFIG.sprint.base - (carriedWeight(u) - 1) * CO
 function moveToward(u, goal, step) {
   const d = dist(u.pos, goal); if (d < 1e-3) return;
   if (u.faction === 'player') step *= bushSpeedMult(u) * rangedActionMoveMul(u);   // 草叢減速 + 遠程裝填/瞄準減速（我方 AI 扈從；騎士在 WASD 位移分支自行套用）
-  const k = Math.min(step, d) / d;
+  const moved = Math.min(step, d), k = moved / d;
   u.pos.x += (goal.x - u.pos.x) * k; u.pos.y += (goal.y - u.pos.y) * k;
+  visStep(u, moved);   // 視覺腳步漣漪（扈從/敵人走這條；騎士走 WASD 位移分支）
 }
 function pushOutSeg(u, x1, y1, x2, y2) {
   const cp = closestOnSeg(u.pos, { x: x1, y: y1 }, { x: x2, y: y2 });
@@ -5670,7 +5671,7 @@ function spawnBlood(pos, ang) { for (let i = 0; i < 7; i++) { const a = ang + (M
 function pushDecal(x, y, r, col) { decals.push({ x, y, r, col }); if (decals.length > 160) decals.shift(); }   // 地上血漬（上限淘汰）
 // 視覺化聲音：依音效 id 給「邊框發光」提示（控制角色看不到的方向才提示）。SLEEPER/arcade 共用。
 const SOUND_PINGS = {
-  step:    { r: 26,  life: 0.4,  col: '170,205,225' },   // 腳步：淡冷色；r 由實際步行聲半徑覆寫（草叢/衝刺＝更大的漣漪）
+  step:    { r: 26,  life: 0.26, col: '170,205,225' },   // 腳步：淡冷色、短命（快淡＝不拖在身後）；r 由實際步行聲半徑覆寫（草叢/衝刺＝更大的漣漪）
   // 遠程：弓弩本就相對輕聲（使用者定案調小）；消音更小。
   shot:    { r: 70,  life: 0.45, col: '255,180,90' },
   shotgun: { r: 100, life: 0.55, col: '255,150,70' },
@@ -5690,6 +5691,16 @@ function pingSound(id, pos, rOverride) {
   const s = SOUND_PINGS[id]; if (!s || !pos) return;
   soundPings.push({ x: pos.x, y: pos.y, life: s.life, max: s.life, r: rOverride || s.r, col: s.col });
   if (soundPings.length > 40) soundPings.shift();
+}
+// 視覺腳步：距離累積制（走過 strideDist 才發一次漣漪）＝比時間制稀疏、也不隨當下位置漂移。只發漣漪、不驚動 AI。
+// 騎士用真實步行聲半徑（u._stepR，含草叢/衝刺）；扈從/敵人用基礎半徑。敵人只在被我方感知時才發（不從迷霧洩漏巡邏位置）。
+function visStep(u, moved) {
+  const C = CONFIG.soundRipple; if (!C || !C.enabled || !u || u.dummy) return;
+  u._stride = (u._stride || 0) + moved;
+  if (u._stride < C.strideDist) return;
+  u._stride = 0;
+  if (u.faction !== 'player' && !isRevealed(u)) return;
+  pingSound('step', u.pos, u._stepR || CONFIG.hearing.stepBase);
 }
 function updateParticles(dt) { for (let i = particles.length - 1; i >= 0; i--) { const q = particles[i]; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) particles.splice(i, 1); } }
 
@@ -6037,9 +6048,10 @@ function update(dt) {
           const l = Math.hypot(mx, my) || 1;
           const spd = spdOf(u) * (u.sprinting ? sprintMult(u) : 1) * lowWallSpeedMult(u.pos) * bushSpeedMult(u) * rangedActionMoveMul(u) * (isScoping() ? scopeMoveMul(u) : 1) * (u.moveMul || 1) * (u.buffMove || 1) * swingMoveMul(u);  // 低矮牆/草叢減速 + 裝填/望遠 + 裝備/道具 + 被動 + 揮擊/舉盾
           u.pos.x += mx / l * spd * dt; u.pos.y += my / l * spd * dt;
-          // 步行聲：每 stepInterval 秒發一次，半徑隨速度、衝刺更響更頻繁 → 驚動附近 IDLE 敵（走路可潛近、衝刺會被聽見）。
+          // 步行聲（遊戲性驚動，時間制不變）：每 stepInterval 秒一次，半徑隨速度/衝刺/草叢 → 驚動附近 IDLE 敵（走路可潛近、衝刺會被聽見）。
           u.stepT = (u.stepT || 0) - dt;
-          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1) * bushRustleMult(u); alertEnemiesNear(u.pos, r); Sfx.play('step', u.pos, r); u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta 升級「潛蹤」：腳步更輕；草叢內移動＝沙沙作響（隨負重）；發聲＝視覺化漣漪半徑吃真實步行聲
+          if (u.stepT <= 0) { const H = CONFIG.hearing, r = (H.stepBase + spd * H.stepPerSpeed) * (u.sprinting ? H.sprintMul : 1) * (u.stealthMul || 1) * bushRustleMult(u); alertEnemiesNear(u.pos, r); u._stepR = r; u.stepT = H.stepInterval / (u.sprinting ? 1.4 : 1); }   // meta「潛蹤」腳步更輕；草叢/衝刺更響；r 存起來給視覺腳步用
+          visStep(u, spd * dt);   // 視覺腳步漣漪（距離制＝較稀疏、短命不拖在身後；吃 u._stepR 反映草叢/衝刺）
         }
         if (Input.fire && !u.blocking) manualFire(u, u.facing);   // 舉盾時不出招（放開右鍵才能揮）
       }
