@@ -7055,21 +7055,28 @@ function drawCommandWheel() {
 function drawMoraleFlag(u, s) {
   if (!hasMorale(u) || u.moraleState === 'steady') return;
   if (u.dead || u.state === 'DEAD' || u.state === 'EXTRACTED') return;
-  const routed = isRouted(u);
+  const routed = isRouted(u), berserk = isBerserk(u), frozen = isFrozen(u);
+  // 依崩潰反應決定旗色/文字：捨身＝亮紅、呆立＝灰、潰逃＝紅、動搖(flee)＝琥珀
+  let label = null, rgb, flashCol;
+  if (berserk)     { label = '捨身'; rgb = '255,70,50';   flashCol = '#ff6b4a'; }
+  else if (frozen) { label = '呆立'; rgb = '150,162,174'; flashCol = '#aeb6c0'; }
+  else if (routed) { label = '潰逃'; rgb = '255,80,80';   flashCol = '#ff8080'; }
+  else             {                 rgb = '255,190,80';  flashCol = '#ffd27a'; }   // 動搖(flee)：只有旗、無常駐字（同現況）
+  const big = routed || berserk;
   const y = s.y - u.radius * cam.scale - 16;
-  const wob = Math.sin(simTime * (routed ? 16 : 9)) * (routed ? 3 : 1.6);   // 旗在抖
+  const wob = Math.sin(simTime * (big ? 16 : 9)) * (frozen ? 0 : big ? 3 : 1.6);   // 呆立＝不抖（愣住）
   ctx.textAlign = 'center';
-  ctx.font = `bold ${routed ? 15 : 13}px Consolas`;
-  const a = 0.6 + 0.4 * Math.sin(simTime * (routed ? 14 : 7));
-  ctx.fillStyle = routed ? `rgba(255,80,80,${a})` : `rgba(255,190,80,${a})`;
-  ctx.fillText('⚑', s.x + wob, y);
-  if (routed) { ctx.font = 'bold 10px Consolas'; ctx.fillText('潰逃', s.x, y - 12); }
+  ctx.font = `bold ${big ? 15 : 13}px Consolas`;
+  const a = 0.6 + 0.4 * Math.sin(simTime * (frozen ? 3 : big ? 14 : 7));
+  ctx.fillStyle = `rgba(${rgb},${a})`;
+  ctx.fillText(frozen ? '❆' : '⚑', s.x + wob, y);   // 呆立＝雪花(凍住)、其餘＝旗
+  if (label) { ctx.font = 'bold 10px Consolas'; ctx.fillStyle = `rgba(${rgb},${a})`; ctx.fillText(label, s.x, y - 12); }
   // 剛切換狀態時的強調（短暫放大提示）
   if (u.moraleFxT > 0) {
     ctx.font = 'bold 12px Consolas';
     ctx.globalAlpha = Math.min(1, u.moraleFxT);
-    ctx.fillStyle = routed ? '#ff8080' : '#ffd27a';
-    ctx.fillText(MORALE_STATE[u.moraleState], s.x, y - (routed ? 26 : 14));
+    ctx.fillStyle = flashCol;
+    ctx.fillText(label || MORALE_STATE[u.moraleState], s.x, y - (label ? 26 : 14));
     ctx.globalAlpha = 1;
   }
   ctx.textAlign = 'left';
