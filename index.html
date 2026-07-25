@@ -304,7 +304,7 @@ CONFIG.morale = {
   routSpeedMul: 1.25,      // 潰逃移動倍率
   fleeAwayDist: 560,       // 潰逃敵人跑這麼遠＝脫離戰場
   // 崩潰反應（panicType，出生擲、依兵種加權）：flee＝潰逃(現況)、berserk＝捨身死戰(背水 buff＋更長連段＋不逃)、freeze＝呆立不動
-  // retreat＝後撤：品質較高的兵種才有的「有章法撤退」——不背向玩家亂跑，而是沿路網退向撤離點
+  // retreat＝後撤(轉進)：品質較高的兵種才有——不背向玩家亂跑，而是沿路網退向撤離點集結、恢復士氣、守點擋路（不離場）
   panic: {
     default:   { flee: 40, berserk: 30, freeze: 15, retreat: 15 },   // 徒步兵等：少數會有序後撤
     levy:      { flee: 60, berserk: 10, freeze: 30, retreat: 0  },   // 雜兵：不會有章法
@@ -317,7 +317,9 @@ CONFIG.morale = {
     serjeant:  { flee: 15, berserk: 55, freeze: 5,  retreat: 25 },
   },
   berserkMoveMul: 1.15, berserkDmgMul: 1.15, berserkKeepBase: 0.8,   // 捨身：背水移速/傷害加成 + 更高的攻擊權保留(連段)機率
-  retreatSpeedMul: 1.0,    // 後撤＝有序(不像潰逃加速)；沿 waypoint 退向撤離點，退到即離場
+  retreatSpeedMul: 1.0,    // 後撤＝有序(不像潰逃加速)；沿 waypoint 退向撤離點集結
+  rallyRadius: 80,         // 退到撤離點這麼近＝轉進完成、就地整隊
+  rallyDuration: 6,        // 轉進後守點免疫再潰的秒數（穩住阻擋玩家）；之後再崩就真的潰逃
   // ── 跨關（質量是活的，這些現在多半 moot；保留欄位）──
   restRestore: 1.0, interMissionRestore: 0.5,
 };
@@ -4661,6 +4663,18 @@ function fleeUnit(e) {
   releaseReservation(e); releasePatrol(e); releaseAttackToken(e);
   Hooks.fire('flee', { u: e });
 }
+// 轉進：後撤退到集結點(撤離點)＝「大幅恢復自己的士氣、守住阻擋玩家」，不離場。rallyT 內免疫再潰＝穩得住；
+// 之後 panicType 轉 flee＝再崩就真的逃(不會無限轉進)。＝打崩精兵不等於清掉，他們會退去堵你的出口再戰。
+function rallyUnit(e) {
+  if (e.dead) return;
+  e.moraleState = 'steady';
+  e.rallyT = CONFIG.morale.rallyDuration;   // 這段時間免疫再潰＝守住集結點
+  e.panicType = 'flee';                     // 轉進只用一次：再崩就真的潰逃
+  e.personality = CONFIG.ai.holder;         // 守點性格＝集結阻擋、不追出去
+  e.moraleFxT = 1.0;
+  releaseAttackToken(e);
+  Hooks.fire('morale', { u: e, state: 'rallied', prev: 'routed' });
+}
 function killUnit(u, killer) {
   // beforeDeath＝可攔截的死亡（roguelite 復活通道）：handler 設 prevented=true → 以 reviveHp 保命
   const bd = Hooks.fire('beforeDeath', { u, killer: killer || null, prevented: false, reviveHp: 1 });
@@ -5045,6 +5059,7 @@ function moraleEligible(u) {
 }
 function refreshMoraleState(u) {
   if (!hasMorale(u)) return;
+  if (u.rallyT > 0) return;         // 轉進後守點免疫：一段時間內不再判崩潰＝穩得住、擋你的路
   if (!moraleEligible(u)) return;   // 還沒交戰＝不判崩潰（維持 steady）
   const M = CONFIG.morale, prev = u.moraleState;
   const res = resolveOf(u.faction), th = breakAtOf(u);
@@ -5070,11 +5085,12 @@ function tickMorale(u, dt) {
       let nearest = Infinity;
       for (const o of activePlayers()) nearest = Math.min(nearest, dist(o.pos, u.pos));
       if (nearest > CONFIG.morale.fleeAwayDist) fleeUnit(u);
-    } else if (pt === 'retreat') {   // 後撤：退到撤離點＝有序離場
+    } else if (pt === 'retreat') {   // 後撤：退到集結點＝轉進完成＝原地恢復士氣、守點擋路（不離場）
       const g = EXTRACT || ENTRY;
-      if (g && dist(u.pos, g) < CONFIG.nodeReach * 2) fleeUnit(u);
+      if (g && dist(u.pos, g) < CONFIG.morale.rallyRadius) rallyUnit(u);
     }
   }
+  if (u.rallyT > 0) u.rallyT -= dt;
   if (u.moraleFxT > 0) u.moraleFxT -= dt;
 }
 // 每幀（陣營）：衰退舊震盪（＝恢復）+ 偵測敵對陣營全潰（質量占比跌破 routAllLine ＝我方勝、進掃蕩）。
