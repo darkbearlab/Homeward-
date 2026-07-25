@@ -4668,9 +4668,9 @@ function fleeUnit(e) {
 function rallyUnit(e) {
   if (e.dead) return;
   e.moraleState = 'steady';
-  e.rallyT = CONFIG.morale.rallyDuration;   // 這段時間免疫再潰＝守住集結點
-  e.panicType = 'flee';                     // 轉進只用一次：再崩就真的潰逃
-  e.personality = CONFIG.ai.holder;         // 守點性格＝集結阻擋、不追出去
+  e.rallyT = CONFIG.morale.rallyDuration;         // 這段時間免疫再潰＝穩得住
+  e.panicType = 'flee';                           // 轉進只用一次：再崩就真的潰逃
+  e.personality = e.basePersonality || e.personality;   // 回復原本戰鬥性格＝重整後「重新出擊」（不是龜守）
   e.moraleFxT = 1.0;
   releaseAttackToken(e);
   Hooks.fire('morale', { u: e, state: 'rallied', prev: 'routed' });
