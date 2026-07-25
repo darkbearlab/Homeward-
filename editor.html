@@ -318,7 +318,7 @@ function crossRoads(b) {                                    // 四邊各留中�
    ===================================================================== */
 function blankMap() {
   return { label: '新地圖', category: 'open', tier: 1, roles: ['normal'], width: WORLD.w, height: WORLD.h, walls: [], doors: [], lowWalls: [], bushes: [], destructibles: [], areas: [],
-    buttons: [], waypoints: [], edges: [], entryPoints: [], extractionPoints: [], enemySpawns: [], prisoners: [] };
+    buttons: [], waypoints: [], edges: [], entryPoints: [], extractionPoints: [], accessPoints: [], enemySpawns: [], prisoners: [] };
 }
 let map = blankMap();
 
@@ -328,11 +328,11 @@ function contentExtent(m) {                               // 內容最大座標�
   for (const b of m.bushes) ck(b.x + b.w, b.y + b.h);
   for (const z of (m.areas || [])) ck(z.x + z.w, z.y + z.h);
   for (const w of m.waypoints) if (w.pos) ck(w.pos.x, w.pos.y);
-  for (const arr of [m.entryPoints, m.extractionPoints, m.buttons, m.prisoners]) for (const p of arr) ck(p.x, p.y);
+  for (const arr of [m.entryPoints, m.extractionPoints, m.accessPoints || [], m.buttons, m.prisoners]) for (const p of arr) ck(p.x, p.y);
   return { mx, my };
 }
 function normalize(m) {                                   // 確保所有陣列存在 + id 連續 + 清掉壞邊/壞 spawn
-  const A = ['walls', 'doors', 'lowWalls', 'bushes', 'destructibles', 'areas', 'buttons', 'waypoints', 'edges', 'entryPoints', 'extractionPoints', 'enemySpawns', 'prisoners'];
+  const A = ['walls', 'doors', 'lowWalls', 'bushes', 'destructibles', 'areas', 'buttons', 'waypoints', 'edges', 'entryPoints', 'extractionPoints', 'accessPoints', 'enemySpawns', 'prisoners'];
   for (const k of A) if (!Array.isArray(m[k])) m[k] = [];
   m.areas.forEach(z => { if (!MATERIALS[z.mat]) z.mat = 'solid'; });
   if (typeof m.label !== 'string') m.label = '新地圖';
@@ -386,7 +386,7 @@ function addSegment(layerKey, x1, y1, x2, y2) {
 function addBush(x, y, w, h) { pushUndo(); const r = { x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h) }; map.bushes.push(r); return r; }
 function addArea(x, y, w, h) { pushUndo(); const r = { x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h), mat: areaMat }; map.areas.push(r); return r; }
 function addButton(x, y) { pushUndo(); const b = { id: nextId(map.buttons, 'b'), x, y, doorId: (map.doors[0] && map.doors[0].id) || null }; map.buttons.push(b); return b; }
-function addPoint(layerKey, x, y) { pushUndo(); const p = { x, y }; map[layerKey === 'entry' ? 'entryPoints' : 'extractionPoints'].push(p); return p; }
+function addPoint(layerKey, x, y) { pushUndo(); const p = { x, y }; map[ARR_OF[layerKey]].push(p); return p; }
 function addPrisoner(x, y) { pushUndo(); const p = { x, y }; map.prisoners.push(p); return p; }
 
 function addWaypoint(x, y) { pushUndo(); const w = { id: map.waypoints.length, pos: { x, y }, tags: [] }; map.waypoints.push(w); return w; }
@@ -499,7 +499,7 @@ function removeSelected() {
   const arrName = ARR_OF[k];
   if (arrName) { pushUndo(); const arr = map[arrName]; const idx = arr.indexOf(sel.ref); if (idx >= 0) arr.splice(idx, 1); sel = null; }
 }
-const ARR_OF = { wall: 'walls', door: 'doors', lowwall: 'lowWalls', destruct: 'destructibles', bush: 'bushes', area: 'areas', button: 'buttons', entry: 'entryPoints', extract: 'extractionPoints', prisoner: 'prisoners' };
+const ARR_OF = { wall: 'walls', door: 'doors', lowwall: 'lowWalls', destruct: 'destructibles', bush: 'bushes', area: 'areas', button: 'buttons', entry: 'entryPoints', extract: 'extractionPoints', access: 'accessPoints', prisoner: 'prisoners' };
 function removeRefs(refs) {                                  // 刪除一批物件（群組刪除）
   if (!refs.length) return; pushUndo();
   for (const r of refs) { const arr = map[ARR_OF[r.kind]]; if (!arr) continue; const i = arr.indexOf(r.ref); if (i >= 0) arr.splice(i, 1); }
@@ -759,8 +759,9 @@ function edgeBlocked(A, B) {                                // 邊是否穿越�
 }
 function validate() {
   const out = [];
-  if (map.entryPoints.length < 1) out.push('缺少進場點');
-  if (map.extractionPoints.length < 1) out.push('缺少撤離點');
+  const hasAccessPool = (map.accessPoints || []).length >= 2;   // 候選池≥2＝遊戲每局抽 ENTRY/EXTRACT，就不需要固定進撤點
+  if (!hasAccessPool && map.entryPoints.length < 1) out.push('缺少進場點（或放 ≥2 個候選進出點）');
+  if (!hasAccessPool && map.extractionPoints.length < 1) out.push('缺少撤離點（或放 ≥2 個候選進出點）');
   if (map.waypoints.length < 1) out.push('缺少 waypoint');
   // 孤立節點
   if (map.waypoints.length > 1) {
@@ -827,7 +828,7 @@ const wr = (px) => px / view.scale;   // 螢幕 px → 世界距離
 
 /* 工具配置（依分頁） */
 const TOOLSETS = {
-  objects: [['select', '選取/移動'], ['feature', '★特徵'], ['wall', '牆'], ['door', '門'], ['lowwall', '低矮牆'], ['destruct', '破壞物'], ['bush', '草叢'], ['area', '區域'], ['button', '按鈕'], ['entry', '進場點'], ['extract', '撤離點'], ['erase', '刪除']],
+  objects: [['select', '選取/移動'], ['feature', '★特徵'], ['wall', '牆'], ['door', '門'], ['lowwall', '低矮牆'], ['destruct', '破壞物'], ['bush', '草叢'], ['area', '區域'], ['button', '按鈕'], ['access', '進出點·候選'], ['entry', '固定進場'], ['extract', '固定撤離'], ['erase', '刪除']],
   waypoints: [['move', '選取/移動'], ['add', '加點'], ['link', '連線'], ['erase', '刪除']],
   enemies: [['assign', '指派敵人'], ['prisoner', '俘虜'], ['erase', '刪除']],
   underlay: [['umove', '移動/縮放底圖']],
@@ -858,6 +859,7 @@ function hitObjects(p) {
   for (const b of map.buttons) if (dist(p, b) < wr(10)) return { kind: 'button', ref: b };
   for (const e of map.entryPoints) if (dist(p, e) < wr(12)) return { kind: 'entry', ref: e };
   for (const e of map.extractionPoints) if (dist(p, e) < wr(12)) return { kind: 'extract', ref: e };
+  for (const e of (map.accessPoints || [])) if (dist(p, e) < wr(12)) return { kind: 'access', ref: e };
   for (const pr of map.prisoners) if (dist(p, pr) < wr(12)) return { kind: 'prisoner', ref: pr };
   // 草叢 / 區域
   for (const bu of map.bushes) if (ptInRect(p, bu)) return { kind: 'bush', ref: bu };
@@ -876,6 +878,7 @@ function hitObjectsAll(p) {
   for (const b of map.buttons) if (dist(p, b) < wr(10)) out.push({ kind: 'button', ref: b });
   for (const e of map.entryPoints) if (dist(p, e) < wr(12)) out.push({ kind: 'entry', ref: e });
   for (const e of map.extractionPoints) if (dist(p, e) < wr(12)) out.push({ kind: 'extract', ref: e });
+  for (const e of (map.accessPoints || [])) if (dist(p, e) < wr(12)) out.push({ kind: 'access', ref: e });
   for (const pr of map.prisoners) if (dist(p, pr) < wr(12)) out.push({ kind: 'prisoner', ref: pr });
   for (const bu of map.bushes) if (ptInRect(p, bu)) out.push({ kind: 'bush', ref: bu });
   for (const z of (map.areas || [])) if (ptInRect(p, z)) out.push({ kind: 'area', ref: z });
@@ -953,6 +956,7 @@ function downObjects(w) {
   } else if (tool === 'button') { sel = { kind: 'button', ref: addButton(snapV(w.x), snapV(w.y)) }; selRefs = [sel]; }
   else if (tool === 'entry') { sel = { kind: 'entry', ref: addPoint('entry', snapV(w.x), snapV(w.y)) }; selRefs = [sel]; }
   else if (tool === 'extract') { sel = { kind: 'extract', ref: addPoint('extract', snapV(w.x), snapV(w.y)) }; selRefs = [sel]; }
+  else if (tool === 'access') { sel = { kind: 'access', ref: addPoint('access', snapV(w.x), snapV(w.y)) }; selRefs = [sel]; }
   else if (tool === 'erase') { sel = hitObjectsCycle(w); removeSelected(); }
 }
 function downWaypoints(w) {
@@ -1204,8 +1208,8 @@ function rebuildInspector() {
     inspectorEl.appendChild(field('寬', numInput(s.w, v => { s.w = Math.max(4, v); }))); inspectorEl.appendChild(field('高', numInput(s.h, v => { s.h = Math.max(4, v); })));
     const tip = document.createElement('div'); tip.className = 'muted'; tip.textContent = matDesc(s.mat); inspectorEl.appendChild(tip);
     addDeleteBtn('刪除區域');
-  } else if (k === 'entry' || k === 'extract' || k === 'prisoner') {
-    const s = sel.ref; h.textContent = k === 'entry' ? '進場點' : k === 'extract' ? '撤離點' : '俘虜';
+  } else if (k === 'entry' || k === 'extract' || k === 'access' || k === 'prisoner') {
+    const s = sel.ref; h.textContent = k === 'entry' ? '進場點(固定)' : k === 'extract' ? '撤離點(固定)' : k === 'access' ? '進出點(候選池)' : '俘虜';
     inspectorEl.appendChild(field('x', numInput(s.x, v => { s.x = v; }))); inspectorEl.appendChild(field('y', numInput(s.y, v => { s.y = v; })));
     addDeleteBtn('刪除');
   }
@@ -1216,7 +1220,7 @@ function rebuildInspector() {
   function addDeleteBtn(label) { const r = document.createElement('div'); r.className = 'row'; r.style.marginTop = '8px'; const b = document.createElement('button'); b.textContent = label; b.style.flex = '1'; b.addEventListener('click', () => { removeSelected(); rebuildInspector(); }); r.appendChild(b); inspectorEl.appendChild(r); }
 }
 function hintFor() {
-  if (tab === 'objects') return '工具放置物件（可重疊）；★特徵＝拖框放整組地圖特徵；選取工具：點選單一(重疊處重複點循環)、空白拖曳框選多個成群組整體縮放/位移；門/窗(破壞物)畫在牆上會自動切牆缺口(嵌進牆)。右鍵刪除。';
+  if (tab === 'objects') return '工具放置物件（可重疊）；★特徵＝拖框放整組地圖特徵；進出點·候選(琥珀)＝放 ≥2 個，遊戲每局抽一進一撤(剩下當增援/潰逃點)＝開放圖用；固定進場/撤離＝事件圖用；門/窗(破壞物)畫在牆上會自動切牆缺口。右鍵刪除。';
   if (tab === 'waypoints') return '加點：點空白（開「自動連線」則自動連到所有中間無阻隔的點）；連線：點兩點建/斷邊、點線上刪邊；移動：拖點。';
   return '指派：點 waypoint 放敵人，選後改類型/個性/朝向；俘虜：點放置。';
 }
@@ -1272,6 +1276,7 @@ function render() {
   // 按鈕 + 連動線
   for (const b of map.buttons) { ctx.globalAlpha = dim(); dot(b, 6 / view.scale, '#7fe3ff'); const d = map.doors.find(x => x.id === b.doorId); if (d) { ctx.strokeStyle = 'rgba(127,227,255,0.4)'; ctx.lineWidth = 1 / view.scale; line(b, { x: (d.x1 + d.x2) / 2, y: (d.y1 + d.y2) / 2 }); } ctx.globalAlpha = 1; }
   // 進/撤點
+  for (const e of (map.accessPoints || [])) { dot(e, 10 / view.scale, 'rgba(255,200,90,0.9)'); }   // 候選進出點＝琥珀（每局抽 ENTRY/EXTRACT，剩下當增援/潰逃點）
   for (const e of map.entryPoints) { dot(e, 9 / view.scale, 'rgba(95,208,107,0.85)'); }
   for (const e of map.extractionPoints) { dot(e, 9 / view.scale, 'rgba(90,169,255,0.9)'); }
 
