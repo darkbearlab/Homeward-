@@ -105,6 +105,8 @@ const CONFIG = {
   // 追兵：**軟取消**（使用者定案）——敵人沒理由特別派人追一個落敗的騎士。
   // enabled:false ＝計時上限拉到超長（追兵幾乎不會來）且隱藏 UI 計時條；機制與數值都留著，將來要用改回 true 即可。
   reinforce: { enabled: false, startInterval: 2.0, rampEvery: 10, rampDelta: -0.3, minInterval: 0.4 },
+  // 多通用進出點：地圖若給 accessPoints 池，每局抽 ENTRY/EXTRACT 並約束「直線距離 ≥ 對角線×minSepFrac」＝確保穿越夠遠、不抽到旁邊的點；剩餘存 spawnPoints（增援/第三方/潰逃日後接）。
+  access: { minSepFrac: 0.55 },
   hysteresisBonus: 25,
   squadSize: 3,
   // 跨關回復：每場戰鬥開始時，存活成員「缺血」回復的比例。
@@ -2133,7 +2135,7 @@ const MAPS = {
 
 let MAP = MAPS.alpha;        // 目前作用中的戰鬥地圖（startMission 依節點切換）
 const MAXD = Math.hypot(WORLD.w, WORLD.h);
-let EXTRACT, ENTRY, N, adj, nodeVis, extractNodeId, nextHop;
+let EXTRACT, ENTRY, spawnPoints = [], N, adj, nodeVis, extractNodeId, nextHop;   // spawnPoints＝多進出點抽完剩下的閒置點（增援/第三方/潰逃日後用）
 const wp = (id) => MAP.waypoints[id];
 
 /* =====================================================================
@@ -2202,9 +2204,25 @@ function buildNextHop() {
   return arr;
 }
 // 切換作用中地圖並重建衍生表（N/adj/nodeVis/nextHop/EXTRACT/ENTRY/extractNodeId）
+function pickAccessPoints(P, w, h) {
+  const minSep = Math.hypot(w || 1280, h || 720) * CONFIG.access.minSepFrac;
+  const ei = Math.floor(srand() * P.length);                                     // 抽 ENTRY（吃 srand＝每局不同、可重現）
+  const far = []; for (let i = 0; i < P.length; i++) if (i !== ei && dist(P[ei], P[i]) >= minSep) far.push(i);
+  let xi;
+  if (far.length) xi = far[Math.floor(srand() * far.length)];                    // 夠遠的裡面抽 EXTRACT
+  else { let bd = -1; xi = (ei + 1) % P.length; for (let i = 0; i < P.length; i++) if (i !== ei && dist(P[ei], P[i]) > bd) { bd = dist(P[ei], P[i]); xi = i; } }   // 都不夠遠→取最遠一對（保底）
+  return { entry: P[ei], extract: P[xi], spawn: P.filter((_, i) => i !== ei && i !== xi) };
+}
+// 切換作用中地圖並重建衍生表（N/adj/nodeVis/nextHop/EXTRACT/ENTRY/extractNodeId）
 function buildMapDerived(key) {
   MAP = MAPS[key] || MAPS.alpha;
-  EXTRACT = MAP.extractionPoints[0]; ENTRY = MAP.entryPoints[0];
+  // 多通用進出點：有 accessPoints 池(≥2) → 抽 ENTRY/EXTRACT(距離約束、可重現)、剩餘存 spawnPoints；否則沿用固定 entry/extract（舊圖/事件圖）
+  if (MAP.accessPoints && MAP.accessPoints.length >= 2) {
+    const r = pickAccessPoints(MAP.accessPoints, MAP.width, MAP.height);
+    ENTRY = r.entry; EXTRACT = r.extract; spawnPoints = r.spawn;
+  } else {
+    EXTRACT = MAP.extractionPoints[0]; ENTRY = MAP.entryPoints[0]; spawnPoints = [];
+  }
   N = MAP.waypoints.length;
   adj = Array.from({ length: N }, () => []);
   for (const [a, b] of MAP.edges) { adj[a].push(b); adj[b].push(a); }
