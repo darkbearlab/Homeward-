@@ -3225,7 +3225,7 @@ const EVENTS = [
       { label: '你自認還不夠格，離開', outcome: { type: 'nothing' } },
     ] },
   // 場景化事件（kind:'scene'）：在戰鬥地圖上用 cutscene 對話演出。男孩＝meet/ambush 地圖的 civ。
-  { id: 'boy', kind: 'scene', map: 'meet',
+  { id: 'boy', kind: 'scene', map: 'meet', retired: true,   // 【退役】「男孩的父親說你們會經過」＝舊敘事，過期不再抽用（保留碼供日後改寫）
     onEnter: f => { f.boyMet = true; f.boyHostile = srand() < 0.5; },   // 隱藏身分(吃種子)：友善(父親是隨軍老兵) / 敵意(已被收買報信)
     scene: f => {
       const boy = () => { const b = enemies.find(e => !e.dead); return b ? b.pos : { x: 700, y: 260 }; };
@@ -3242,7 +3242,7 @@ const EVENTS = [
         ] },
       ];
     } },
-  { id: 'boyAmbush', kind: 'scene', map: 'ambush', scripted: true,   // 只由 boy「敵意+拒絕」佇列觸發；節點仍顯 ?（被報位）
+  { id: 'boyAmbush', kind: 'scene', map: 'ambush', scripted: true, retired: true,   // 【退役】只由已退役的 boy 佇列觸發＝連帶退役
     scene: f => {
       const boy = () => { const b = enemies.find(e => !e.dead); return b ? b.pos : { x: 600, y: 420 }; };
       return [
@@ -3308,10 +3308,10 @@ function enterEvent() {
   while (pendingEvents.length && !ev) { const id = pendingEvents.shift(); ev = EVENTS.find(e => e.id === id); }   // 被預定的後續(報位/伏擊…)優先；格子仍顯示 ?（shift 須先取出再 find，勿放進 predicate）
   if (!ev) {   // 否則隨機抽：濾掉已見/不符 cond/scripted(只能被佇列觸發)/不屬於本幕
     const actOk = e => e.act == null || e.act === runAct;   // A/B 分流：無 act＝兩幕共用；act:1＝敵境限定、act:2＝故土限定（「先複製一份、慢慢充實」的接縫）
-    const avail = e => eventSeen.indexOf(e.id) < 0 && !e.scripted && actOk(e) && (!e.cond || e.cond(runFlags));
+    const avail = e => eventSeen.indexOf(e.id) < 0 && !e.scripted && !e.retired && actOk(e) && (!e.cond || e.cond(runFlags));
     let pool = EVENTS.filter(avail);
-    if (!pool.length) { eventSeen = []; pool = EVENTS.filter(e => !e.scripted && actOk(e) && (!e.cond || e.cond(runFlags))); }
-    ev = pool.length ? rngPick(pool) : (EVENTS.filter(e => !e.scripted && actOk(e))[0] || EVENTS[0]);
+    if (!pool.length) { eventSeen = []; pool = EVENTS.filter(e => !e.scripted && !e.retired && actOk(e) && (!e.cond || e.cond(runFlags))); }
+    ev = pool.length ? rngPick(pool) : (EVENTS.filter(e => !e.scripted && !e.retired && actOk(e))[0] || EVENTS[0]);
   }
   if (ev) eventSeen.push(ev.id);
   if (ev && ev.kind === 'scene') { startSceneEvent(ev); return; }   // 場景化事件：在戰鬥地圖上用 cutscene 演（含對話選項）
@@ -8684,6 +8684,7 @@ function goMenu() {
   if (typeof cutscene !== 'undefined') cutscene = null; introActive = false; finaleActive = false;
   if (sandboxEl) sandboxEl.classList.remove('open');
   releasePointer();
+  menuPage = 'main';   // 回選單一律回主頁（開始畫面與結局回來一致）
   /* 【停用】舊「真決局」橋段——通關達門檻回選單先播「真相揭示」（「醒醒…」洗腦養成）純文字。
      整組停用，等 A/B 面（往邊境的 A 面 → 敵國入侵、奪回莊園的 B 面多結局）新結局改寫（見 PLAN）。
      機器（startFinale/resolveFinale/FINALE·ENDING 場景/FINALE_REVEAL·TRUE_END 文字/喪鐘解鎖）保留為死碼，改寫時再接。
@@ -8694,6 +8695,7 @@ function goMenu() {
   } */
   scene = 'MENU';
 }
+let menuPage = 'main';   // 主選單分頁：main（玩家面）/ dev（試作場等測試功能收在子選單）
 function menuClick(x, y) { for (const r of menuRects) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { r.fn(); return; } }
 function drawMenu() {
   menuRects = [];
@@ -8701,12 +8703,15 @@ function drawMenu() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#7fe3ff'; ctx.font = 'bold 54px Consolas'; ctx.fillText('HOMEWARD', cv.width / 2, 116);
   ctx.fillStyle = 'rgba(205,214,224,0.6)'; ctx.font = '15px Consolas'; ctx.fillText('戰敗騎士的歸鄉之路 — 單一英雄動作 roguelite', cv.width / 2, 148);
-  const items = [
-    { label: '⚔ 試作場', desc: 'Phase 1 手感開發（近戰 / 射擊；開機預設）', fn: () => enterArenaSelect() },
+  const items = menuPage === 'dev' ? [
+    { label: '⚔ 試作場（近戰 / 射擊）', desc: 'Phase 1 手感開發用的隔離場地', fn: () => enterArenaSelect() },
+    { label: '◂ 返回主選單', desc: '', fn: () => { menuPage = 'main'; } },
+  ] : [
     { label: '戰役', desc: '序章 → 路線圖 run', fn: () => initRun() },
     { label: '自由戰鬥', desc: '自選小隊 + 地圖，打一場', fn: () => enterSandbox() },
     { label: '升級', desc: '花榮譽強化騎士 · 解鎖內容 · 看戰況進度', fn: () => enterHQ() },
     { label: '地圖編輯器', desc: '開啟 editor.html（可測試戰鬥）', fn: () => { try { location.href = 'editor.html'; } catch (e) {} } },
+    { label: '🛠 開發／測試 ▸', desc: '試作場（手感開發用）', fn: () => { menuPage = 'dev'; } },
   ];
   // 【停用】舊「真決局」的「最終潛入」入口——等 A/B 面新結局改寫（見 goMenu 的說明）。
   // if (meta.revealSeen) items.splice(1, 0, { label: '最終潛入 ▸', desc: meta.finaleWon ? '真相挑戰（已通過 · 可再戰）' : '真相挑戰（鐵人 · 一整輪 run）', fn: () => enterFinaleSetup(), hot: true });   // 揭示後出現
@@ -9036,12 +9041,10 @@ function bootPlaytest() {
 }
 loadMeta();   // 載入局外進度（解鎖/榮譽）
 let __q = ''; try { __q = (typeof location !== 'undefined' && location.search) || ''; } catch (e) {}
-// HOMEWARD Phase 1：開機預設進「近戰試作場」（手感開發中）。原本的主選單/戰役走 `?campaign`，
-// 或在試作場按 M。`?arena=ranged` 直接進射擊試作場。等手感定案、戰役中世紀化之後，再把預設改回 goMenu()。
+// 開機預設進主選單（MVP）。試作場收在主選單的「開發／測試」子選單，或用 `?arena=melee|ranged` 直達。
 if (/[?&]playtest\b/.test(__q)) bootPlaytest();
 else if (/[?&]sandbox\b/.test(__q) && sandboxEl) enterSandbox();
-else if (/[?&]campaign\b/.test(__q) || /[?&]menu\b/.test(__q)) goMenu();
-else { const am = /[?&]arena=(\w+)/.exec(__q); if (am && ARENA_MODES[am[1]]) enterArena(am[1]); else enterArenaSelect(); }
+else { const am = /[?&]arena=(\w+)/.exec(__q); if (am && ARENA_MODES[am[1]]) enterArena(am[1]); else goMenu(); }
 requestAnimationFrame(frame);
 </script>
 </body>
