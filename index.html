@@ -301,6 +301,7 @@ CONFIG.morale = {
   // ── 崩潰 + 潰逃（沿用）──
   breakJitterPct: 6,       // 每單位出生的門檻浮動（±pct）＝崩得有先後
   breakHysteresis: 8,      // line 回到「門檻 + 此值」才脫離崩潰
+  breakDelayMin: 0.15, breakDelayMax: 0.6,   // 崩潰猶豫：line 跌破門檻後 steady→崩(shaken/routed) 之間的浮動延遲(秒)＝被嚇到到真的改行為有一點時間差；期間回穩則取消。每隻不同＝崩潰是波浪而非齊崩
   routSpeedMul: 1.25,      // 潰逃移動倍率
   fleeAwayDist: 560,       // 潰逃敵人跑這麼遠＝脫離戰場
   // 崩潰反應（panicType，出生擲、依兵種加權）：flee＝潰逃(現況)、berserk＝捨身死戰(背水 buff＋更長連段＋不逃)、freeze＝呆立不動
@@ -5063,9 +5064,17 @@ function refreshMoraleState(u) {
   if (!moraleEligible(u)) return;   // 還沒交戰＝不判崩潰（維持 steady）
   const M = CONFIG.morale, prev = u.moraleState;
   const res = resolveOf(u.faction), th = breakAtOf(u);
-  if (res < M.routAllLine) u.moraleState = 'routed';                       // 質量占比極低＝全軍潰逃（比崩潰更慘）
-  else if (res < th) u.moraleState = 'shaken';                             // 質量占比低於門檻＝崩潰
-  else if (u.moraleState !== 'steady' && res >= th + M.breakHysteresis) u.moraleState = 'steady';
+  let target = u.moraleState;
+  if (res < M.routAllLine) target = 'routed';                             // 質量占比極低＝全軍潰逃（比崩潰更慘）
+  else if (res < th) target = 'shaken';                                   // 質量占比低於門檻＝崩潰
+  else if (u.moraleState !== 'steady' && res >= th + M.breakHysteresis) target = 'steady';
+  // 崩潰猶豫：被嚇到(steady→崩)到真的改行為之間有一段浮動延遲（每隻不同＝波浪式崩），期間回穩則取消。
+  if (prev === 'steady' && (target === 'shaken' || target === 'routed')) {
+    if (u.breakPendingT == null) u.breakPendingT = simTime + M.breakDelayMin + Math.random() * Math.max(0, M.breakDelayMax - M.breakDelayMin);
+    if (simTime < u.breakPendingT) return;   // 還在愣＝維持 steady
+  }
+  u.breakPendingT = null;
+  u.moraleState = target;
   if (u.moraleState !== prev) {
     u.moraleFxT = 1.0;
     u.personality = isShaken(u) ? (u.panicType === 'berserk' ? CONFIG.ai.rusher : CONFIG.ai.shaken) : (u.basePersonality || u.personality);   // 捨身＝切 rusher 猛衝；潰逃/呆立＝shaken(躲/拉開)，呆立另在 enemyTick 站定
