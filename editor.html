@@ -423,6 +423,24 @@ function autoLinkWaypoint(i) {                              // 連到所有「�
   }
   return added;
 }
+const MESH_K = 5;   // 自動整理：每點保留的最近無阻隔鄰居數（局部網格密度；連通性另外保證）
+// 一鍵整理連線：清掉舊邊，依「無阻隔候選邊」重建一張乾淨的網格——K 最近鄰局部連線 + 保證全圖連通。
+function autoMeshEdges() {
+  pushUndo();
+  const W = map.waypoints, N = W.length;
+  if (N < 2) { map.edges = []; return 0; }
+  const cand = [];   // 所有中間無阻隔的候選邊，依長度排序（短優先）
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) if (!edgeBlocked(W[i].pos, W[j].pos)) cand.push([i, j, dist(W[i].pos, W[j].pos)]);
+  cand.sort((a, b) => a[2] - b[2]);
+  const es = new Set(), deg = new Array(N).fill(0), key = (i, j) => Math.min(i, j) + '-' + Math.max(i, j);
+  for (const [i, j] of cand) if (deg[i] < MESH_K && deg[j] < MESH_K) { const k = key(i, j); if (!es.has(k)) { es.add(k); deg[i]++; deg[j]++; } }   // ① K 最近鄰局部網格
+  const uf = W.map((_, i) => i), find = x => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+  for (const k of es) { const [a, b] = k.split('-').map(Number); uf[find(a)] = find(b); }
+  for (const [i, j] of cand) if (find(i) !== find(j)) { es.add(key(i, j)); uf[find(i)] = find(j); }   // ② 保證連通：最短無阻隔邊接起各連通塊（隔著牆完全不通的區域接不了＝設計問題）
+  map.edges = [...es].map(k => k.split('-').map(Number));
+  return map.edges.length;
+}
+function clearAllEdges() { if (!map.edges.length) return; pushUndo(); map.edges = []; }
 function findBoundaryWalls() {                              // 貼著外框、且夠長的牆＝邊界外牆
   if (!map.walls.length) return [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
@@ -1055,8 +1073,13 @@ function rebuildToolsUI() {
   }
   if (tab === 'waypoints') {
     const hd2 = document.createElement('div'); hd2.className = 'hd'; hd2.textContent = '選項'; toolsEl.appendChild(hd2);
-    const b = document.createElement('div'); b.className = 'tool' + (autoLink ? ' on' : ''); b.textContent = '自動連線:' + (autoLink ? '開' : '關'); b.title = '新增點時自動連到所有中間無阻隔的點';
+    const b = document.createElement('div'); b.className = 'tool' + (autoLink ? ' on' : ''); b.textContent = '放點時自動連:' + (autoLink ? '開' : '關'); b.title = '新增點時自動連到所有中間無阻隔的點（維護繁瑣，建議關；改用下面的「自動整理連線」）';
     b.addEventListener('click', () => { autoLink = !autoLink; rebuildToolsUI(); }); toolsEl.appendChild(b);
+    const hd3 = document.createElement('div'); hd3.className = 'hd'; hd3.textContent = '連線整理'; toolsEl.appendChild(hd3);
+    const bm = document.createElement('div'); bm.className = 'tool'; bm.textContent = '🕸 自動整理連線'; bm.title = '清掉現有連線、依「中間無阻隔」重建一張乾淨網格：K 最近鄰局部連線 + 保證全圖連通。放完點後按這個即可';
+    bm.addEventListener('click', () => { autoMeshEdges(); updateStatus(); rebuildInspector(); }); toolsEl.appendChild(bm);
+    const bc = document.createElement('div'); bc.className = 'tool'; bc.textContent = '✕ 清除所有連線'; bc.title = '刪掉全部連線（可 undo）；配合上面的「自動整理連線」重抓';
+    bc.addEventListener('click', () => { clearAllEdges(); updateStatus(); rebuildInspector(); }); toolsEl.appendChild(bc);
   }
   if (tab === 'enemies' && tool === 'assign') {
     const hd2 = document.createElement('div'); hd2.className = 'hd'; hd2.textContent = '敵人類型（點 waypoint 放置）'; toolsEl.appendChild(hd2);
