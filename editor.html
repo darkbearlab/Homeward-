@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SLEEPER — 地圖編輯器</title>
+<title>HOMEWARD — 地圖編輯器</title>
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:#06080d;color:#cdd6e0;font:12px Consolas,"Courier New",monospace;overflow:hidden}
@@ -119,7 +119,7 @@
 <script>
 "use strict";
 /* =====================================================================
-   SLEEPER 地圖編輯器（獨立工具）— 與遊戲 index.html 的 MAPS 結構完全一致，
+   HOMEWARD 地圖編輯器（獨立工具）— 與遊戲 index.html 的 MAPS 結構完全一致，
    可雙向匯出/匯入 JSON。三分頁：① 地圖物件 ② waypoint+連線 ③ 敵人配置。
    重點：waypoint 在遊戲中以「陣列索引」當 id（wp=id=>MAP.waypoints[id]），
    故刪點必須重編號並同步 edges / enemySpawns。
@@ -423,10 +423,9 @@ function autoLinkWaypoint(i) {                              // 連到所有「�
   }
   return added;
 }
-const MESH_K = 5;   // 自動整理：每點保留的最近無阻隔鄰居數（局部網格密度；連通性另外保證）
-// 一鍵整理連線：清掉舊邊，依「無阻隔候選邊」重建一張乾淨的網格——K 最近鄰局部連線 + 保證全圖連通。
-function autoMeshEdges() {
-  pushUndo();
+const MESH_K = 5, GRID_STEP = 150, GRID_WP_PAD = 32;   // 整理鄰居數 / 鋪點網格間距 / 鋪點離障礙的最小淨空
+// 核心（不 pushUndo）：清掉舊邊，依「中間無阻隔候選邊」重建一張乾淨網格——K 最近鄰局部連線 + 保證全圖連通。
+function buildMesh() {
   const W = map.waypoints, N = W.length;
   if (N < 2) { map.edges = []; return 0; }
   const cand = [];   // 所有中間無阻隔的候選邊，依長度排序（短優先）
@@ -440,7 +439,25 @@ function autoMeshEdges() {
   map.edges = [...es].map(k => k.split('-').map(Number));
   return map.edges.length;
 }
+function autoMeshEdges() { pushUndo(); return buildMesh(); }               // 一鍵整理連線
 function clearAllEdges() { if (!map.edges.length) return; pushUndo(); map.edges = []; }
+function pointBlocked(p, pad) {                                            // 點是否落在障礙上/太靠近（不宜放 waypoint）
+  for (const s of moveBlockers()) if (distToSeg(p, { x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }) < pad) return true;
+  for (const z of moveBlockAreas()) if (p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) return true;
+  return false;
+}
+// 一鍵鋪滿：清掉現有 waypoint/連線，每隔 GRID_STEP 鋪一個點（避開障礙），再自動連成網格。
+// 用法：拉完牆/障礙後按這個＝整張圖一鍵鋪好、保證連通的路網（開放大圖用）。
+function fillGridWaypoints() {
+  pushUndo();
+  map.waypoints = []; map.edges = [];
+  const step = GRID_STEP, pad = GRID_WP_PAD;
+  for (let y = step / 2; y < map.height; y += step)
+    for (let x = step / 2; x < map.width; x += step)
+      if (!pointBlocked({ x, y }, pad)) map.waypoints.push({ id: map.waypoints.length, pos: { x, y }, tags: [] });
+  buildMesh();
+  return map.waypoints.length;
+}
 function findBoundaryWalls() {                              // 貼著外框、且夠長的牆＝邊界外牆
   if (!map.walls.length) return [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
@@ -552,7 +569,7 @@ function scaleRefFrom(r, base, ax, ay, sx, sy) {
 /* =====================================================================
    參考底圖（editor-only；不在 map、不匯出；自己的 localStorage 鍵）
    ===================================================================== */
-const UNDERLAY_KEY = 'sleeper_editor_underlay';
+const UNDERLAY_KEY = 'homeward_editor_underlay';
 function loadUnderlaySrc(src) {
   if (typeof Image === 'undefined') return;               // headless：無 Image，略過
   const img = new Image();
@@ -709,7 +726,7 @@ function mirrorToNew(axis) {   // 鏡像成庫裡新的一張（保留原圖，�
 }
 
 /* ---- 測試戰鬥（跨頁往返）：把目前地圖丟給 index 的自由戰鬥；整個庫存進 session 以便回來還原 ---- */
-const PLAYTEST_KEY = 'sleeper_playtest', SESSION_KEY = 'sleeper_editor_session';
+const PLAYTEST_KEY = 'homeward_playtest', SESSION_KEY = 'homeward_editor_session';
 function playtestCurrent() {
   syncCurrentToLib();
   try {
@@ -1075,8 +1092,10 @@ function rebuildToolsUI() {
     const hd2 = document.createElement('div'); hd2.className = 'hd'; hd2.textContent = '選項'; toolsEl.appendChild(hd2);
     const b = document.createElement('div'); b.className = 'tool' + (autoLink ? ' on' : ''); b.textContent = '放點時自動連:' + (autoLink ? '開' : '關'); b.title = '新增點時自動連到所有中間無阻隔的點（維護繁瑣，建議關；改用下面的「自動整理連線」）';
     b.addEventListener('click', () => { autoLink = !autoLink; rebuildToolsUI(); }); toolsEl.appendChild(b);
-    const hd3 = document.createElement('div'); hd3.className = 'hd'; hd3.textContent = '連線整理'; toolsEl.appendChild(hd3);
-    const bm = document.createElement('div'); bm.className = 'tool'; bm.textContent = '🕸 自動整理連線'; bm.title = '清掉現有連線、依「中間無阻隔」重建一張乾淨網格：K 最近鄰局部連線 + 保證全圖連通。放完點後按這個即可';
+    const hd3 = document.createElement('div'); hd3.className = 'hd'; hd3.textContent = '自動生成'; toolsEl.appendChild(hd3);
+    const bg = document.createElement('div'); bg.className = 'tool'; bg.textContent = '🔲 鋪滿網格點'; bg.title = '清掉現有 waypoint/連線，每隔一段距離鋪一個點(自動避開障礙)再連成網格。拉完牆/障礙後按這個＝整張圖一鍵鋪好、保證連通';
+    bg.addEventListener('click', () => { fillGridWaypoints(); updateStatus(); rebuildInspector(); }); toolsEl.appendChild(bg);
+    const bm = document.createElement('div'); bm.className = 'tool'; bm.textContent = '🕸 自動整理連線'; bm.title = '只重連現有的點：清掉連線、依「中間無阻隔」重建乾淨網格(K 最近鄰 + 保證連通)。手放點時用這個';
     bm.addEventListener('click', () => { autoMeshEdges(); updateStatus(); rebuildInspector(); }); toolsEl.appendChild(bm);
     const bc = document.createElement('div'); bc.className = 'tool'; bc.textContent = '✕ 清除所有連線'; bc.title = '刪掉全部連線（可 undo）；配合上面的「自動整理連線」重抓';
     bc.addEventListener('click', () => { clearAllEdges(); updateStatus(); rebuildInspector(); }); toolsEl.appendChild(bc);

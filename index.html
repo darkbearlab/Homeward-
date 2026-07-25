@@ -9045,7 +9045,7 @@ function frame(now) {
 
 // 開機：主選單為進入點；?sandbox 直接自由戰鬥；?playtest 由編輯器帶圖進自由戰鬥設定
 function bootPlaytest() {
-  let s = null; try { s = localStorage.getItem('sleeper_playtest'); } catch (e) {}
+  let s = null; try { s = localStorage.getItem('homeward_playtest'); } catch (e) {}
   if (s) { pendingPlaytestMap = s; playtestMode = true; enterSandbox(); } else goMenu();
 }
 loadMeta();   // 載入局外進度（解鎖/榮譽）
